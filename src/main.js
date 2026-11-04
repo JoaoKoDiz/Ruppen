@@ -10,8 +10,6 @@ import { createSky } from './world/sky.js';
 import { createOcean } from './world/ocean.js';
 import { createClouds } from './world/clouds.js';
 import { createIslands } from './world/islands.js';
-import { createElephant } from './elephant/elephant.js';
-import { createDove } from './player/dove.js';
 import { createInput } from './input.js';
 import { createFlightController } from './player/flight.js';
 import { createChaseCamera } from './player/camera.js';
@@ -23,6 +21,9 @@ import { createAudio } from './audio.js';
 
 // ------------------------ parâmetros de URL (#a=1&b=2) ------------------
 const params = Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
+// Permite testar candidatos de modelo sem trocar o arquivo oficial: #elephant=candidates/elephant_a.js&dove=candidates/dove_b.js
+const { createElephant } = await import(params.elephant ? `./elephant/${params.elephant}` : './elephant/elephant.js');
+const { createDove } = await import(params.dove ? `./player/${params.dove}` : './player/dove.js');
 const num = (k, d) => (params[k] !== undefined ? Number(params[k]) : d);
 const quality = params.quality || 'high';
 

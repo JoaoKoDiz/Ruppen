@@ -75,7 +75,7 @@ O preview aceita: `kind=elephant|dove|islands|env|all`, `mod=` (caminho sob `src
 (órbita em graus ao redor de `tx,ty,tz`) ou `cx,cy,cz,lx,ly,lz`, `t=` (segundos), `frames=`, `env=1`
 (carrega céu/oceano/nuvens junto), `quality=low|high`, para a pomba: `speed= boost=1 pitch= roll= climb= turn=`.
 O jogo (`index.html`) aceita no hash: `x,y,z,yaw(graus),pitch(graus),speed,t,pause=1,nohud=1,quality=low`,
-`cam=free&cx=&cy=&cz=&lx=&ly=&lz=`. No navegador headless o render é por software (lento): use `--w 1280 --h 720`
+`cam=free&cx=&cy=&cz=&lx=&ly=&lz=`, `elephant=candidates/elephant_a.js`, `dove=candidates/dove_b.js` (testa um candidato no jogo completo). No navegador headless o render é por software (lento): use `--w 1280 --h 720`
 ou menos e poucos `--frames`.
 
 ## 4. Contratos
