@@ -22,8 +22,12 @@ import { createAudio } from './audio.js';
 // ------------------------ parâmetros de URL (#a=1&b=2) ------------------
 const params = Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
 // Permite testar candidatos de modelo sem trocar o arquivo oficial: #elephant=candidates/elephant_a.js&dove=candidates/dove_b.js
-const { createElephant } = await import(params.elephant ? `./elephant/${params.elephant}` : './elephant/elephant.js');
-const { createDove } = await import(params.dove ? `./player/${params.dove}` : './player/dove.js');
+let createElephant, createDove;
+const candidatePath = (dir, file) => './' + dir + '/' + file; // caminho em tempo de execução (não entra no bundle)
+if (params.elephant) ({ createElephant } = await import(candidatePath('elephant', params.elephant)));
+else ({ createElephant } = await import('./elephant/elephant.js'));
+if (params.dove) ({ createDove } = await import(candidatePath('player', params.dove)));
+else ({ createDove } = await import('./player/dove.js'));
 const num = (k, d) => (params[k] !== undefined ? Number(params[k]) : d);
 const quality = params.quality || 'high';
 
