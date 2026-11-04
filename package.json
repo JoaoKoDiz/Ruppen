@@ -1,0 +1,19 @@
+{
+  "name": "ruppen",
+  "version": "0.1.0",
+  "description": "Ruppen — jogo 3D de entregas voando numa pomba entre cidades construídas sobre elefantes gigantes que caminham pelo oceano.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node tools/serve.js 8080",
+    "dev": "node tools/serve.js 8080",
+    "shot": "node tools/shot.js",
+    "build": "node tools/build.js"
+  },
+  "dependencies": {
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.10"
+  }
+}
