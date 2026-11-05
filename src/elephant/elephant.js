@@ -914,7 +914,7 @@ export function createElephant(route, index, opts = {}) {
       const arcR = (k * (B.ry + B.rz)) / 2;      // raio aproximado da seção transversal
       const dphi = spacing / arcR;
       // ângulo máximo a partir do zênite: desce bem pelos flancos no meio, menos nas pontas
-      const phiMax = EM.CITY_FLANK_ANGLE * (0.6 + 0.4 * smooth(0.1, 0.5, k));
+      const phiMax = EM.CITY_FLANK_ANGLE * (0.75 + 0.25 * smooth(0.1, 0.5, k));
       for (let phi = -phiMax + (row % 2 ? dphi / 2 : 0); phi <= phiMax; phi += dphi) {
         const p2 = phi + rngCity.range(-0.12, 0.12) * dphi, xx = x + rngCity.range(-0.12, 0.12) * spacing;
         const nx2 = xx / RX, k2 = Math.sqrt(Math.max(0.03, 1 - nx2 * nx2));
