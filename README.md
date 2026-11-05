@@ -2,8 +2,10 @@
 
 Jogo 3D de entregas, no navegador. Você voa montado numa **pomba branca** sobre um **oceano infinito**, entre
 **civilizações construídas sobre elefantes gigantes** que caminham, lentíssimos, pelo mar. A pomba é do
-tamanho de um carro; os elefantes têm mais de um quilômetro e meio de altura. O jogo é sobre se sentir
-minúsculo.
+tamanho de um carro; os elefantes têm cerca de quatro quilômetros e meio de altura até as costas. O jogo é
+sobre se sentir minúsculo.
+
+Sem instalar nada: baixe `dist/ruppen.html` e abra no navegador (arquivo único, funciona offline).
 
 ## Como jogar
 
@@ -68,6 +70,8 @@ elefantes e rotas a cada partida).
 * `node tools/serve.js 8080` — servidor estático.
 * `node tools/shot.js --url "http://localhost:8080/#x=0&y=200&z=0" --out .shots/a.png` — screenshot headless.
 * `dev/preview.html?kind=elephant` ou `?kind=dove&orbit=1` — olhar um modelo isolado.
+* `node tools/playtest.js 8080` — teste automatizado de jogabilidade (voo, mapa, entrega, colisão).
 * Parâmetros no hash da página do jogo: `x,y,z,yaw,pitch,speed,t,pause=1,nohud=1,quality=low`.
+* Dica de desempenho: em máquinas fracas abra `index.html#quality=low`.
 
 Veja `ARCHITECTURE.md` para os contratos entre os módulos.
