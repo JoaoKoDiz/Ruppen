@@ -5,15 +5,16 @@ import { COLORS, SUN_DIR, WORLD } from '../config.js';
 export const sunDirection = new THREE.Vector3(SUN_DIR.x, SUN_DIR.y, SUN_DIR.z).normalize();
 
 export function createLighting(scene) {
-  const sun = new THREE.DirectionalLight(COLORS.sunLight, 2.7);
+  // Luz suave como nas referências: sol moderado, muita luz de céu/ambiente → sombras cinza-azuladas, nunca pretas.
+  const sun = new THREE.DirectionalLight(COLORS.sunLight, 2.0);
   sun.position.copy(sunDirection).multiplyScalar(10000);
   sun.target.position.set(0, 0, 0);
   scene.add(sun, sun.target);
 
-  const hemi = new THREE.HemisphereLight(0xcfe3ff, 0x35557d, 1.35);
+  const hemi = new THREE.HemisphereLight(0xd9e6f6, 0x5b7392, 1.75);
   scene.add(hemi);
 
-  const ambient = new THREE.AmbientLight(0xaac4e6, 0.45);
+  const ambient = new THREE.AmbientLight(0xb6c9e0, 0.7);
   scene.add(ambient);
 
   scene.fog = new THREE.FogExp2(COLORS.fog, WORLD.FOG_DENSITY);
@@ -32,6 +33,6 @@ export function createLighting(scene) {
 
 export function applyRendererDefaults(renderer) {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  renderer.toneMappingExposure = 0.9; // levemente abaixo de 1: brancos não estouram, contraste menor
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 }

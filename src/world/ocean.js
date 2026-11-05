@@ -170,16 +170,17 @@ void main() {
   vec2 warp = (texture2D(uWaves, p * (1.0 / 760.0) + vec2(t * 0.0004, 0.0)).rg - 0.5) * 48.0;
   vec2 pw = p + warp;
   vec2 s = vec2(0.0);
-  s += rotBi * slopeAt(rotB * pw * (1.0 / 13.0) + t * vec2(0.05, 0.03)) * 0.03 * fadeFine;    // fino ~13 m
-  s += slopeAt(p * (1.0 / 8.3) + t * vec2(-0.03, 0.055)) * 0.018 * fadeFine;                  // fino ~8 m
-  s += rotAi * slopeAt(rotA * pw * (1.0 / 31.0) + t * vec2(-0.011, 0.016)) * 0.08 * fadeMed;  // médio ~31 m
-  s += rotBi * slopeAt(rotB * p * (1.0 / 97.0) + t * vec2(0.004, 0.003)) * 0.06 * fadeMed;    // médio-largo ~97 m
-  s += slopeAt(pw * (1.0 / 290.0) + t * vec2(0.0019, -0.0014)) * 0.045 * fadeBig;             // largo ~290 m
+  // ondulações largas e suaves (refs: mar calmo, sem marola picada)
+  s += rotBi * slopeAt(rotB * pw * (1.0 / 13.0) + t * vec2(0.05, 0.03)) * 0.016 * fadeFine;   // fino ~13 m
+  s += slopeAt(p * (1.0 / 8.3) + t * vec2(-0.03, 0.055)) * 0.008 * fadeFine;                  // fino ~8 m
+  s += rotAi * slopeAt(rotA * pw * (1.0 / 36.0) + t * vec2(-0.010, 0.014)) * 0.07 * fadeMed;  // médio ~36 m
+  s += rotBi * slopeAt(rotB * p * (1.0 / 110.0) + t * vec2(0.004, 0.003)) * 0.08 * fadeMed;   // médio-largo ~110 m
+  s += slopeAt(pw * (1.0 / 320.0) + t * vec2(0.0019, -0.0014)) * 0.065 * fadeBig;             // largo ~320 m
   vec2 d1 = normalize(vec2(0.82, 0.45)), d2 = normalize(vec2(-0.35, 0.92));
-  float k1 = PI2 / 52.0, k2 = PI2 / 19.0;
+  float k1 = PI2 / 70.0, k2 = PI2 / 24.0;
   float w1 = sqrt(9.81 * k1), w2 = sqrt(9.81 * k2);
-  s += d1 * (0.45 * k1 * cos(dot(d1, p) * k1 - w1 * t)) * fadeMed;
-  s += d2 * (0.12 * k2 * cos(dot(d2, p) * k2 - w2 * t + 1.7)) * fadeFine;
+  s += d1 * (0.55 * k1 * cos(dot(d1, p) * k1 - w1 * t)) * fadeMed;
+  s += d2 * (0.10 * k2 * cos(dot(d2, p) * k2 - w2 * t + 1.7)) * fadeFine;
   vec3 N = normalize(vec3(-s.x, 1.0, -s.y));
 
   float ndl = dot(N, uSunDir);
@@ -192,24 +193,28 @@ void main() {
   vec3 water = mix(uDeep, uMid, saturate(big * 0.75 + big2 * 0.35));
   // ondas que olham para a câmera e o sol ficam ligeiramente mais claras (falsa transmissão)
   float facing = saturate(dot(N, normalize(V + uSunDir * 0.6)));
-  water = mix(water, uShallow, pow(facing, 6.0) * 0.18);
-  water *= 0.62 + 0.42 * saturate(ndl * 0.7 + 0.3);
+  water = mix(water, uShallow, pow(facing, 6.0) * 0.14);
+  water *= 0.74 + 0.28 * saturate(ndl * 0.7 + 0.3); // sombreamento suave (luz difusa de céu)
 
   // ---- reflexo do céu com fresnel (horizonte pálido, zênite azul)
   vec3 R = reflect(-V, N);
-  vec3 sky = mix(uHorizon * 0.55, uZenith, pow(saturate(R.y), 0.4));
-  float F = 0.02 + 0.33 * pow(1.0 - ndv, 5.0);
+  vec3 sky = mix(uHorizon * 0.80, uZenith * 1.1, pow(saturate(R.y), 0.5));
+  float F = 0.03 + 0.30 * pow(1.0 - ndv, 5.0);
   vec3 col = mix(water, sky, F);
 
   // ---- especular do sol (Blinn normalizado), lobo mais largo à distância
   vec3 H = normalize(uSunDir + V);
   float ndh = max(dot(N, H), 0.0);
   float farness = saturate(dist / 12000.0);
-  float shin = mix(360.0, 60.0, farness);
+  float shin = mix(240.0, 40.0, farness);
   float fresH = 0.04 + 0.96 * pow(1.0 - max(dot(H, V), 0.0), 5.0);
-  float spec = pow(ndh, shin) * (shin + 8.0) / (8.0 * PI) * fresH * 0.42;
-  float broad = pow(ndh, 12.0) * 0.03 * fresH * 3.0;
-  col += uSunColor * (spec + broad) * mix(1.0, 0.5, farness);
+  // glitter discreto (sem pontos brancos duros) + trilha larga e macia do sol
+  float spec = pow(ndh, shin) * (shin + 8.0) / (8.0 * PI) * fresH * 0.16;
+  float broad = pow(ndh, 10.0) * 0.06 * fresH;
+  col += uSunColor * (spec + broad) * mix(1.0, 0.45, farness);
+  // leve dessaturação: o mar das referências é azul-aço, não azul puro
+  float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  col = mix(col, vec3(lum), 0.10);
 
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
@@ -224,9 +229,9 @@ export function createOcean(scene, opts = {}) {
   const uniforms = THREE.UniformsUtils.merge([
     THREE.UniformsLib.fog,
     {
-      uDeep: { value: new THREE.Color(COLORS.oceanDeep).multiplyScalar(1.15) },
-      uMid: { value: new THREE.Color(COLORS.oceanMid).multiplyScalar(1.2) },
-      uShallow: { value: new THREE.Color(COLORS.oceanShallow).multiplyScalar(1.15) },
+      uDeep: { value: new THREE.Color(COLORS.oceanDeep).multiplyScalar(1.05) },
+      uMid: { value: new THREE.Color(COLORS.oceanMid).multiplyScalar(1.1) },
+      uShallow: { value: new THREE.Color(COLORS.oceanShallow).multiplyScalar(1.05) },
       uHorizon: { value: new THREE.Color(COLORS.skyHorizon) },
       uZenith: { value: new THREE.Color(COLORS.skyZenith) },
       uSunDir: { value: sunDirection.clone() },

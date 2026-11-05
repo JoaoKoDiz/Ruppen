@@ -15,8 +15,8 @@ import { createNoise } from '../util/noise.js';
 import { createRng } from '../util/rng.js';
 
 const NUM_ANCHORS = ELEPHANT.COUNT;
-const FOOT_PUFFS = 130;             // puffs por elefante (quality=high)
-const FOOT_Y_MIN = 15, FOOT_Y_MAX = 420;
+const FOOT_PUFFS = CLOUDS.FOOT_PUFFS; // puffs do banco por elefante (quality=high)
+const LEG_HEIGHT = (ELEPHANT.LEG.topY - ELEPHANT.LEG.bottomY) * (ELEPHANT.SCALE || 1); // m (mundo)
 const WIND = new THREE.Vector3(1.1, 0, 0.45); // deriva das nuvens do mundo (m/s)
 const RING_SPIN = 0.0045;            // rad/s de rotação lenta dos anéis das patas
 const SORT_INTERVAL = 0.5;
@@ -46,7 +46,7 @@ function makePuffAtlas(cell) {
         const n1 = noise.fbm2(dx * 1.25 + sx, dy * 1.25 + sy, 3, 2.0, 0.5);      // lóbulos grandes do contorno
         const n2 = noise.fbm2(dx * 3.1 + sx * 2, dy * 3.1 + sy * 2, 3, 2.1, 0.5); // lóbulos médios
         const edge = 0.70 + 0.17 * n1 + 0.06 * n2;  // raio da borda ∈ ~[0.47, 0.93]
-        let d = smooth(edge, edge * 0.38, r);
+        let d = smooth(edge, edge * 0.30, r); // queda mais larga: bordas macias que se fundem ao sobrepor
         d *= clamp01(0.92 + 0.16 * n2);
         d *= smooth(0.95, 0.80, r); // margem transparente larga (mips grosseiros não "vazam")
         dens[(oy + y) * size + ox + x] = clamp01(d);
@@ -64,7 +64,7 @@ function makePuffAtlas(cell) {
       const nx = -gx, ny = -gy, nz = 1;
       const len = Math.hypot(nx, ny, nz);
       const lit = clamp01(0.5 + 0.5 * ((nx * L.x + ny * L.y + nz * L.z) / len));
-      const a = Math.pow(dens[i], 0.85);
+      const a = Math.pow(dens[i], 1.0);
       const o = i * 4;
       img.data[o] = Math.round(255 * lit);
       img.data[o + 1] = Math.round(255 * dens[i]);
@@ -192,12 +192,13 @@ void main() {
   vec2 cell = vec2(mod(cellIdx, 2.0), floor(cellIdx / 2.0));
   vec2 uv = (vUv + cell) * 0.5;
   vec4 tx = texture2D(uMap, uv);
-  float alpha = tx.a * vFade * smoothstep(0.5, 0.30, length(vUv - 0.5));
-  if (alpha < 0.02) discard;
+  float alpha = tx.a * vFade * smoothstep(0.5, 0.28, length(vUv - 0.5));
+  if (alpha < 0.006) discard;
   float lit = tx.r;
-  float light = vShade * 0.65 + (lit - 0.5) * 0.55 + 0.30 + (vUv.y - 0.5) * 0.25 + (vUv.x - 0.5) * vSunSide * 0.28;
+  // topo branco iluminado, base azul-cinza: altura dentro da nuvem (vShade) + relevo assado + lado do sol
+  float light = vShade * 0.72 + (lit - 0.5) * 0.45 + 0.22 + (vUv.y - 0.5) * 0.32 + (vUv.x - 0.5) * vSunSide * 0.22;
   // as partes densas do miolo ficam um pouco mais sombreadas (volume)
-  light -= tx.g * 0.10 * (1.0 - vShade);
+  light -= tx.g * 0.12 * (1.0 - vShade);
   vec3 col = mix(uShade, uLit, clamp(light, 0.0, 1.0));
   gl_FragColor = vec4(col, alpha);
   #include <tonemapping_fragment>
@@ -318,25 +319,85 @@ function generatePuffs(worldData, scale, clusters) {
     }
   }
 
-  // --- anéis ao redor das patas (deslocamentos LOCAIS ao elefante)
+  // --- montes de cúmulo GRANDES sobre o mar (refs 2 e 4): base plana, muitos puffs sobrepostos
+  for (let c = 0; c < CLOUDS.BIG_COUNT; c++) {
+    let cx = 0, cz = 0;
+    for (let tries = 0; tries < 60; tries++) {
+      cx = rng.range(-half, half); cz = rng.range(-half, half);
+      if (!nearIsland(cx, cz) && Math.hypot(cx, cz) > 2600) break;
+    }
+    const base = rng.range(CLOUDS.BIG_BASE_MIN, CLOUDS.BIG_BASE_MAX);
+    const width = rng.range(CLOUDS.BIG_WIDTH.min, CLOUDS.BIG_WIDTH.max);
+    const height = rng.range(CLOUDS.BIG_HEIGHT.min, CLOUDS.BIG_HEIGHT.max);
+    const count = Math.max(10, Math.round(rng.int(CLOUDS.BIG_PUFFS_MIN, CLOUDS.BIG_PUFFS_MAX) * scale));
+    const dirA = rng.range(0, Math.PI * 2);
+    const aspect = rng.range(0.5, 1.0);
+    const ca = Math.cos(dirA), sa = Math.sin(dirA);
+    const nLobes = 2 + Math.floor(rng() * 3);
+    const lobes = [];
+    clusters.push({ x: cx, y: base, z: cz, width, height, big: true });
+    for (let l = 0; l < nLobes; l++) {
+      lobes.push({
+        x: rng.range(-0.5, 0.5) * width * 0.55, z: rng.range(-0.5, 0.5) * width * 0.55 * aspect,
+        r: width * rng.range(0.22, 0.42), h: height * rng.range(0.55, 1.0),
+      });
+    }
+    // uma torre mais alta num dos lóbulos (monte "em couve-flor")
+    lobes[0].h = height;
+    for (let i = 0; i < count; i++) {
+      const lobe = lobes[Math.floor(rng() * nLobes)];
+      const ang = rng.range(0, Math.PI * 2), rad = Math.pow(rng(), 0.6) * lobe.r;
+      const edgeT = rad / lobe.r;
+      const lx = lobe.x + Math.cos(ang) * rad, lz = lobe.z + Math.sin(ang) * rad * aspect;
+      const x = cx + lx * ca - lz * sa, z = cz + lx * sa + lz * ca;
+      const hmax = lobe.h * (1 - edgeT * edgeT * 0.8);
+      const yrel = hmax * Math.pow(rng(), 0.7);
+      const size = Math.min(720, (260 + 420 * rng.range(0.4, 1.0)) * (0.75 + 0.5 * (1 - edgeT)) * (1 - 0.25 * yrel / height));
+      const y = base + size * 0.35 + yrel;
+      const shade = clamp01((y - base) / Math.max(1, height));
+      out.push({ x, y, z, size, shade, rot: rng.range(-0.4, 0.4), variant: Math.floor(rng() * 8), group: -1 });
+    }
+  }
+
+  // --- bancos de nuvem ao redor das patas (deslocamentos LOCAIS ao elefante): anel denso de
+  //     puffs sobrepostos subindo até ~o joelho, com alguns montes mais altos (refs 1–3)
   const nFoot = Math.round(FOOT_PUFFS * scale);
-  const FS = ELEPHANT.SCALE || 1; // as nuvens das patas acompanham a escala do elefante
+  const R = ELEPHANT.FOOT_CLOUD_RADIUS;
+  const bankTop = LEG_HEIGHT * CLOUDS.FOOT_TOP_FRACTION;    // ~780 m
+  const heapTop = LEG_HEIGHT * CLOUDS.FOOT_HEAP_FRACTION;   // ~1200 m
   for (let e = 0; e < NUM_ANCHORS; e++) {
-    const nBig = Math.round(12 * scale); // base sólida: puffs grandes em anel regular
+    const nBig = Math.round(14 * scale); // base sólida: puffs grandes em anel regular, nivelados no mar
     for (let i = 0; i < nBig; i++) {
       const ang = (i / nBig) * Math.PI * 2 + rng.range(-0.15, 0.15);
-      const rad = ELEPHANT.FOOT_CLOUD_RADIUS * rng.range(0.8, 1.05);
-      const size = rng.range(360, 440) * FS;
-      out.push({ x: Math.cos(ang) * rad, y: Math.max(FOOT_Y_MIN * FS, size * 0.5), z: Math.sin(ang) * rad, size, shade: 0.5, rot: rng.range(-0.3, 0.3), variant: Math.floor(rng() * 8), group: e });
+      const rad = R * rng.range(0.78, 1.08);
+      const size = rng.range(1050, 1350);
+      out.push({ x: Math.cos(ang) * rad, y: size * 0.40, z: Math.sin(ang) * rad, size, shade: 0.45, rot: rng.range(-0.3, 0.3), variant: Math.floor(rng() * 8), group: e });
     }
     for (let i = 0; i < nFoot; i++) {
       const ang = rng.range(0, Math.PI * 2);
-      const rad = Math.max(230 * FS, Math.min(1.3 * ELEPHANT.FOOT_CLOUD_RADIUS, ELEPHANT.FOOT_CLOUD_RADIUS + rng.gauss() * 260 * FS));
-      const yt = Math.pow(rng(), 1.3);
-      const size = rng.range(170, 400) * FS * (1.0 - 0.3 * yt);
-      const y = Math.max(size * 0.5, (FOOT_Y_MIN + yt * (FOOT_Y_MAX - FOOT_Y_MIN)) * FS);
-      const shade = 0.45 + 0.55 * yt;
+      // mar de nuvens: denso perto das patas (0,6–1,2 R), estendendo-se até ~2,2 R e baixando para fora
+      const rad = Math.min(2.2 * R, Math.max(0.25 * R, R * (0.95 + rng.gauss() * 0.42)));
+      const outer = clamp01((rad / R - 1.2) / 1.0);             // 0 dentro do anel, 1 na borda externa
+      const yt = Math.pow(rng(), 1.1) * (1 - 0.6 * outer);
+      const size = (480 + 760 * rng()) * (1 - 0.3 * yt);
+      const y = Math.max(size * 0.40, yt * bankTop);
+      const shade = 0.30 + 0.70 * clamp01(y / bankTop);
       out.push({ x: Math.cos(ang) * rad, y, z: Math.sin(ang) * rad, size, shade, rot: rng.range(-0.4, 0.4), variant: Math.floor(rng() * 8), group: e });
+    }
+    const nHeaps = Math.round(CLOUDS.FOOT_HEAPS * scale);
+    for (let hI = 0; hI < nHeaps; hI++) {
+      const hAng = rng.range(0, Math.PI * 2), hRad = R * rng.range(0.6, 1.1);
+      const hx = Math.cos(hAng) * hRad, hz = Math.sin(hAng) * hRad;
+      const top = heapTop * rng.range(0.8, 1.15), hr = rng.range(550, 800);
+      for (let i = 0; i < CLOUDS.FOOT_HEAP_PUFFS; i++) {
+        const ang = rng.range(0, Math.PI * 2), rr = Math.pow(rng(), 0.6) * hr;
+        const edgeT = rr / hr;
+        const yrel = top * (1 - edgeT * edgeT * 0.8) * Math.pow(rng(), 0.6);
+        const size = (380 + 420 * rng()) * (1 - 0.3 * yrel / top);
+        const y = Math.max(size * 0.4, yrel);
+        const shade = 0.35 + 0.65 * clamp01(y / top);
+        out.push({ x: hx + Math.cos(ang) * rr, y, z: hz + Math.sin(ang) * rr, size, shade, rot: rng.range(-0.4, 0.4), variant: Math.floor(rng() * 8), group: e });
+      }
     }
   }
   return out;
@@ -388,8 +449,8 @@ export function createClouds(scene, worldData, opts = {}) {
     THREE.UniformsLib.fog,
     {
       uMap: { value: null },
-      uLit: { value: new THREE.Color(COLORS.cloudLit).multiplyScalar(1.35) },
-      uShade: { value: new THREE.Color(COLORS.cloudShade).multiplyScalar(1.05) },
+      uLit: { value: new THREE.Color(COLORS.cloudLit).multiplyScalar(1.3) },
+      uShade: { value: new THREE.Color(COLORS.cloudShade) },
       uAnchors: { value: anchorVals },
       uWind: { value: WIND.clone() },
       uTime: { value: 0 },

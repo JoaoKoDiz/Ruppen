@@ -10,23 +10,23 @@ export const WORLD = {
   SEA_LEVEL: 0,
   CAMERA_NEAR: 0.5,
   CAMERA_FAR: 160000,     // distância de renderização enorme (usa logarithmicDepthBuffer)
-  FOG_DENSITY: 0.000042,  // FogExp2 — névoa atmosférica suave; elefantes continuam visíveis a 30+ km
+  FOG_DENSITY: 0.000085,  // FogExp2 — perspectiva aérea forte: ~45% de névoa a 8–10 km, ~90% a 20 km (como nas referências)
 };
 
 // Direção DO sol (de onde a luz vem), normalizada em lighting.js
-export const SUN_DIR = { x: -0.55, y: 0.62, z: -0.30 };
+export const SUN_DIR = { x: -0.55, y: 0.70, z: -0.30 };  // sol um pouco mais alto: sombras curtas e suaves, glitter mais baixo
 
 export const COLORS = {
-  skyZenith: 0x1d4d93,
-  skyHorizon: 0xa9c6e6,
-  fog: 0xbed5ec,
+  skyZenith: 0x2c5189,    // azul profundo mas dessaturado (sRGB na tela: o céu não passa pelo tone mapping)
+  skyHorizon: 0xb9cadb,   // faixa leitosa do horizonte = MESMA cor da névoa (sem emenda céu/oceano)
+  fog: 0xb9cadb,          // azul-cinza pálido e opaco (sRGB; o renderer mistura a névoa depois do tone mapping)
   sunLight: 0xfff1d6,
-  oceanDeep: 0x16407a,
-  oceanMid: 0x1f5a9e,
-  oceanShallow: 0x2f7fc4,
+  oceanDeep: 0x1c4470,    // mar azul-aço/marinho, pouco saturado
+  oceanMid: 0x2b5c8a,
+  oceanShallow: 0x5187b1,
   foam: 0xf4f8fb,
   cloudLit: 0xffffff,
-  cloudShade: 0xb9c7d9,
+  cloudShade: 0x98adc8,   // base das nuvens azul-cinza (nunca cinza-marrom)
   sand: 0xe2d6a6,
   grass: 0x7aa44f,
   forest: 0x3e6d38,
@@ -73,7 +73,7 @@ export const ELEPHANT = {
   TRUNK: { length: 1050, baseRadius: 125, tipRadius: 45 },
   TUSK: { length: 860, baseRadius: 64, tipRadius: 22 },
   STRIDE: 2200,              // comprimento do passo (m): cadência das pernas = SPEED / STRIDE
-  CITY_MAX_HEIGHT: 340,     // altura máxima das construções acima da pele
+  CITY_MAX_HEIGHT: 500,     // altura máxima das construções acima da pele (topo da cúpula do palácio)
   DELIVERY_ABOVE_MAX: 900,  // o drop só conta se o jogador estiver até esta altura acima do topo da cidade
   FOOT_CLOUD_RADIUS: 2100,   // raio das nuvens/espuma ao redor das patas
 };
@@ -97,11 +97,26 @@ export const DOVE = {
 };
 
 export const CLOUDS = {
-  COUNT: 170,               // nuvens-cúmulo espalhadas pelo mundo (fixas, semente)
+  COUNT: 170,               // nuvens-cúmulo pequenas/médias espalhadas pelo mundo (fixas, semente)
   BASE_MIN: 170,
   BASE_MAX: 720,
   PUFFS_MIN: 18,
   PUFFS_MAX: 46,
+  // montes de cúmulo GRANDES sobre o mar (refs 2 e 4): poucos, densos, base plana e topo em couve-flor
+  BIG_COUNT: 22,
+  BIG_BASE_MIN: 150,
+  BIG_BASE_MAX: 600,
+  BIG_WIDTH: { min: 1600, max: 3400 },   // m — largura do monte
+  BIG_HEIGHT: { min: 520, max: 1000 },   // m — altura do monte
+  BIG_PUFFS_MIN: 80,
+  BIG_PUFFS_MAX: 130,
+  // bancos de nuvem ao redor das patas (src/world/clouds.js), por elefante
+  FOOT_PUFFS: 220,          // puffs do banco (quality=high)
+  FOOT_HEAPS: 5,            // montes mais altos dentro do banco
+  FOOT_HEAP_PUFFS: 18,
+  FOOT_TOP_FRACTION: 0.30,  // altura do banco como fração da altura da pata (joelho ≈ 0,3)
+  FOOT_HEAP_FRACTION: 0.46, // altura dos montes como fração da altura da pata
+  // orçamento: COUNT×~34 + BIG_COUNT×~105 + 7×(14+FOOT_PUFFS+FOOT_HEAPS×FOOT_HEAP_PUFFS) ≈ 10,4 k instâncias (≤ 12 k)
 };
 
 export const CITY_NAMES = ['Zamurra', 'Kethari', 'Oronde', 'Vashtu', 'Mirapol', 'Sulaymi', 'Tendravel'];
@@ -157,6 +172,15 @@ export const DOVE_MODEL = {
     leather: 0x5b3a21, leatherDark: 0x3d2614, metal: 0xcfd3d8,
     jacket: 0x23262e, trousers: 0x2b2826, boots: 0x261a12, skin: 0xc9977b, hair: 0x2a1c12, pack: 0x4d3b26,
   },
+  // --- src/player/dove.js (modelo principal, asa em gaivota com primárias separadas) ---
+  TAIL_LENGTH_FAN: 0.66,    // cauda curta em leque arredondado (m)
+  PRIMARIES: 7,             // "dedos" de penas primárias por asa
+  PRIMARY_DARK_FRACTION: 0.4, // fração externa de cada primária que escurece (pontas escuras)
+  FLAP_WINDOW: 2.6,         // s de batidas no início de cada GLIDE_PERIOD (o resto é planado)
+  GLIDE_DIHEDRAL: 0.17,     // rad — braço levemente erguido (V raso) ao planar
+  GLIDE_WRIST_DROOP: 0.3,   // rad — mão cai em relação ao braço (quebra do punho / asa em gaivota)
+  GLIDE_SWEEP: 0.12,        // rad — recuo da mão ao planar (mais no boost/mergulho)
+  FLAP_AMP: 0.5,            // rad — amplitude da batida no ombro em cruzeiro
 };
 
 // ------------------------------- VOO ----------------------------------
@@ -278,24 +302,32 @@ export const UI_COLORS = {
 // Medidas do modelo procedural (src/elephant/elephant.js) além das de ELEPHANT:
 // orelhas gigantes com manto e casas em terraços, cidade densa do dorso, cidades das presas.
 export const ELEPHANT_MODEL = {
-  EAR_SCALE: 1.32,          // fator sobre ELEPHANT.EAR (as orelhas das referências são ~ da altura da cabeça)
+  HEAD_SCALE: 1.15,         // fator sobre ELEPHANT.HEAD.radius (cabeça maior e mais pesada, como nas referências)
+  EAR_SCALE: 1.6,           // fator sobre ELEPHANT.EAR (orelhas tão altas quanto a cabeça, pendendo abaixo dela)
   EAR_YAW: 0.5,             // rad — abertura das orelhas para fora (0 = coladas ao corpo)
-  EAR_HOUSE_H: { min: 16, max: 48 },    // m — profundidade dos blocos de casas que saem do manto da orelha
-  CITY_SPACING_HIGH: 17,    // m — passo da malha de casas do dorso (quality=high)
-  CITY_SPACING_LOW: 36,
-  CITY_FLANK_ANGLE: 1.65,    // rad — até que ângulo (a partir do zênite) as casas descem pelos flancos
-  HOUSE_H: { min: 12, max: 42 },        // m — alturas das casas do dorso
-  HOUSE_FOOT: { min: 10, max: 20 },     // m — lado das casas do dorso
+  EAR_HOUSE_H: { min: 18, max: 58 },    // m — profundidade dos blocos de casas que saem do manto da orelha
+  EAR_HOUSE_GRID: { rows: 11, cols: 14 },   // bloco retangular de casas em terraços no manto da orelha
+  TRUNK_ROOT_RADIUS: 235,   // m — raio da tromba na raiz (afunila até TRUNK.baseRadius a ~25% do comprimento)
+  CITY_SPACING_HIGH: 10.5,  // m — passo da malha de casas do dorso (quality=high): tapete fino
+  CITY_SPACING_LOW: 20,
+  CITY_FLANK_ANGLE: 1.75,    // rad — até que ângulo (a partir do zênite) as casas descem pelos flancos
+  HOUSE_H: { min: 6, max: 20 },         // m — alturas das casas do dorso
+  HOUSE_FOOT: { min: 5, max: 10 },      // m — lado das casas do dorso
   TALL_BLOCK_CHANCE: 0.05,  // fração de prédios mais altos (até ~1,6× HOUSE_H.max)
-  PALACE_X: -270,           // x local do centro do palácio (atrás do centro)
+  ROOF_TILE_CHANCE: 0.35,   // fração de casas do dorso com telhado rosa/terracota (o resto é laje pálida)
+  PALACE_X: -290,           // x local do centro do palácio (atrás do centro)
+  PALACE_SIZE: { hx: 270, hz: 190 },    // meio-lados do bloco arcado principal do palácio
   PLAZA: { x0: -60, x1: 120, hz: 75 },  // praça de mercado (no centro do dorso: ponto da entrega)
-  TUSK_HOUSE_STEP: 0.0085,  // passo (fração da presa) entre fileiras de casas
+  TUSK_HOUSE_STEP: 0.0095,  // passo (fração da presa) entre fileiras de casas
+  TUSK_HOUSE_SPAN: 1.5,     // rad — meio-ângulo coberto pelas casas (±: toda a metade de cima da presa)
 };
-
-// Polimento do elefante (src/elephant/elephant.js): olho, patas.
 export const ELEPHANT_POLISH = {
   EYE_RADIUS: 34,           // raio do globo ocular
   EYE_SINK: 5,              // quanto o globo afunda na pele (pequeno: olho pouco "furado")
   LEG_HIP_RADIUS: 210,      // raio de referência do perfil da pata (quadril = 1.0; joelho ≈ 0.88; pé ≈ 1.12)
   LEG_HIP_LEAN: 40,         // m — a coxa inclina para dentro no topo (entra na barriga, não sai pelo flanco)
+  SKIN_BUMP: 9,             // bumpScale da pele (dobras grandes e esculpidas)
+  STUD_SIZES: { big: 34, mid: 21, small: 12 },   // raios das tachas da placa (coluna central, médias, pequenas)
+  POMPOM_RADIUS: 44,        // raio dos pompons da guirlanda
+  POMPOM_SPACING: 114,       // passo entre pompons ao longo da borda da placa
 };

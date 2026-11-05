@@ -59,6 +59,7 @@ uniform vec3 uFogSRGB;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform float uTime;
+uniform float uCamHeight;
 uniform float uCirrusAmount;
 uniform sampler2D uCirrus;
 varying vec3 vDir;
@@ -69,20 +70,27 @@ void main() {
   float h = d.y;
   float hh = max(h, 0.0);
 
-  // ---- gradiente feito em espaço sRGB (perceptual): pálido no horizonte →
-  //      azul profundo saturado no zênite; depois volta para linear
+  // ---- gradiente feito em espaço sRGB (perceptual): faixa leitosa larga no horizonte →
+  //      azul profundo e pouco saturado no zênite; depois volta para linear
   vec3 hz = pow(uHorizon, vec3(1.0 / 2.2));
   vec3 zn = pow(uZenith, vec3(1.0 / 2.2));
-  float t = pow(hh, 0.35);
+  // a névoa fica um pouco mais rala quando a câmera voa alto (acima de ~2 km)
+  float thin = 1.0 - 0.35 * smoothstep(1500.0, 6000.0, uCamHeight);
+  float t = pow(hh, mix(0.42, 0.55, thin));
   vec3 col = mix(hz, zn, t);
-  col = mix(col, hz * 1.03, exp(-hh * 40.0) * 0.35); // faixa de haze junto ao horizonte
+  // haze leitoso: forte até ~10° acima do horizonte, decaindo devagar (perspectiva aérea do céu)
+  float haze = exp(-hh * mix(6.0, 9.0, thin)) * 0.70 * thin + exp(-hh * 40.0) * 0.30;
+  col = mix(col, hz, clamp(haze, 0.0, 1.0));
+  // leve clareamento do lado do sol, perto do horizonte (espalhamento para a frente)
+  float sunAz = max(dot(normalize(vec3(d.x, 0.0, d.z)), normalize(vec3(uSunDir.x, 0.0, uSunDir.z))), 0.0);
+  col = mix(col, hz * 1.04, pow(sunAz, 3.0) * exp(-hh * 7.0) * 0.18);
   col = pow(col, vec3(2.2));
 
-  // ---- sol: disco nítido + halo quente largo (mistura "screen" para saturar em branco)
+  // ---- sol: disco pequeno + halo largo e discreto (mistura "screen" para saturar em branco)
   float s = max(dot(d, uSunDir), 0.0);
   float disc = smoothstep(0.99930, 0.99972, s);
-  float halo = pow(s, 18.0) * 0.10 + pow(s, 150.0) * 0.45 + pow(s, 900.0) * 0.9;
-  vec3 sun = clamp(uSunColor * (halo * (0.8 + 0.5 * (1.0 - t)) + disc * 4.0), 0.0, 1.0);
+  float halo = pow(s, 10.0) * 0.07 + pow(s, 120.0) * 0.22 + pow(s, 900.0) * 0.55;
+  vec3 sun = clamp(uSunColor * (halo * (0.7 + 0.5 * (1.0 - t)) + disc * 3.0), 0.0, 1.0);
   col = 1.0 - (1.0 - col) * (1.0 - sun);
 
   // ---- cirros finos (ruído projetado num plano alto, esticado em filamentos)
@@ -93,9 +101,9 @@ void main() {
     float n1 = texture2D(uCirrus, uv * vec2(0.55, 0.11) + vec2(uTime * 0.0006, 0.0)).r;
     float n2 = texture2D(uCirrus, uv * vec2(1.7, 0.33) + vec2(-uTime * 0.0011, 0.17)).r;
     float n = n1 * 0.7 + n2 * 0.3;
-    float band = smoothstep(0.03, 0.16, h) * (1.0 - smoothstep(0.42, 0.85, h));
-    float cirrus = smoothstep(0.60, 0.84, n) * band * 0.30 * uCirrusAmount;
-    col = mix(col, vec3(0.85) + col * 0.2, cirrus);
+    float band = smoothstep(0.05, 0.18, h) * (1.0 - smoothstep(0.42, 0.85, h));
+    float cirrus = smoothstep(0.62, 0.86, n) * band * 0.22 * uCirrusAmount;
+    col = mix(col, vec3(0.80) + col * 0.25, cirrus);
   }
 
   gl_FragColor = vec4(col, 1.0);
@@ -103,7 +111,7 @@ void main() {
   #include <colorspace_fragment>
   // Névoa do horizonte: a mesma cor da FogExp2 (já em sRGB), para que o oceano
   // totalmente enevoado e o céu se encontrem sem emenda. Abaixo do horizonte = névoa.
-  float horizonMix = 1.0 - smoothstep(0.0, 0.045, h);
+  float horizonMix = 1.0 - smoothstep(0.0, 0.03, h);
   gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogSRGB, horizonMix);
 }`;
 
@@ -123,6 +131,7 @@ export function createSky(scene, opts = {}) {
     uSunDir: { value: sunDirection.clone() },
     uSunColor: { value: new THREE.Color(COLORS.sunLight) },
     uTime: { value: 0 },
+    uCamHeight: { value: 0 },
     uCirrusAmount: { value: quality === 'low' ? 0 : 1 },
     uCirrus: { value: quality === 'low' ? null : makeCirrusTexture(256) },
   };
@@ -146,6 +155,7 @@ export function createSky(scene, opts = {}) {
     update(camera, time) {
       mesh.position.copy(camera.position);
       uniforms.uTime.value = time;
+      uniforms.uCamHeight.value = camera.position.y;
     },
   };
 }
