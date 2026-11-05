@@ -1,8 +1,15 @@
 // =====================================================================
-//  RUPPEN — candidato B do elefante colossal.
-//  Foco: anatomia inconfundível (barriga caída, cabeça abaulada, orelhas
-//  enroladas, tromba e presas afiladas, joelhos, unhas) + pele enrugada
-//  procedural (mapa de cor + bump), e os adornos/cidade das referências.
+//  RUPPEN — o elefante colossal (modelo final, derivado do candidato B).
+//  Foco: anatomia inconfundível (barriga caída, cabeça abaulada, tromba e
+//  presas afiladas, joelhos, unhas) + pele enrugada procedural (mapa de cor
+//  + bump) + os adornos e a civilização das referências: orelhas GIGANTES
+//  (≈ altura da cabeça) com manto laranja de borda listrada e um bloco de
+//  casas em terraços; tapete denso de casas pastel (20–70 m) cobrindo o dorso
+//  e descendo pelos flancos; palácio com cúpula dourada, minaretes e soco de
+//  tijolos; prédio alto de tijolos com arcos; praça de mercado no centro
+//  (ponto da entrega); cidades e torres nas presas; placa dourada com tachas,
+//  guirlanda de pompons, borla rosa, anéis de ouro, faixas nos tornozelos.
+//  Medidas extras em config.js → ELEPHANT_MODEL.
 //
 //  Estrutura: UM SkinnedMesh com 9 ossos (raiz, 4 patas, 2 orelhas,
 //  tromba, cauda) e grupos de material (pele, tecido da tromba, panos,
