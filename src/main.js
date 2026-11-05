@@ -97,7 +97,7 @@ if (params.nohud === '1') document.getElementById('ui').style.display = 'none';
 
 function tick(dt) {
   time += dt;
-  for (const e of elephants) e.update(dt, time);
+  for (const e of elephants) { e.setViewerPosition?.(camera.position); e.update(dt, time); }
   flight.update(dt);
   dove.group.position.copy(flight.state.position);
   dove.group.quaternion.copy(flight.state.quaternion);
