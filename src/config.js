@@ -10,15 +10,15 @@ export const WORLD = {
   SEA_LEVEL: 0,
   CAMERA_NEAR: 0.5,
   CAMERA_FAR: 160000,     // distância de renderização enorme (usa logarithmicDepthBuffer)
-  FOG_DENSITY: 0.000021,  // FogExp2 — névoa atmosférica suave; elefantes continuam visíveis a 30+ km
+  FOG_DENSITY: 0.000042,  // FogExp2 — névoa atmosférica suave; elefantes continuam visíveis a 30+ km
 };
 
 // Direção DO sol (de onde a luz vem), normalizada em lighting.js
-export const SUN_DIR = { x: -0.55, y: 0.95, z: -0.30 };
+export const SUN_DIR = { x: -0.55, y: 0.62, z: -0.30 };
 
 export const COLORS = {
   skyZenith: 0x1d4d93,
-  skyHorizon: 0xc6dcf0,
+  skyHorizon: 0xa9c6e6,
   fog: 0xbed5ec,
   sunLight: 0xfff1d6,
   oceanDeep: 0x16407a,
@@ -34,16 +34,16 @@ export const COLORS = {
   rockDark: 0x5d5850,
   elephantSkin: 0x75737a,
   elephantSkinDark: 0x4f4d55,
-  ivory: 0xefe6cf,
-  gold: 0xd8a63a,
-  goldDark: 0x9c6f1e,
-  cloth: 0xd98a3c,
-  clothDark: 0xb0552e,
+  ivory: 0xf1e2c0,
+  gold: 0xbf8c30,
+  goldDark: 0x7a5316,
+  cloth: 0xc98a4a,
+  clothDark: 0xa05a38,
   cream: 0xf3e3c3,
   houses: [0xf4efe5, 0xeadbc6, 0xf1c9b1, 0xe7b39f, 0xd9c7ab, 0xf8f3ea, 0xd3bca7, 0xf0d8c8],
-  roofs: [0xb0563d, 0xc46a4a, 0x9c4b3a, 0xd98e5a, 0xb86a4e],
+  roofs: [0xc98b7a, 0xd9a593, 0xb97b6a, 0xc46a4a, 0xd4a08a],
   pompoms: [0xe8413d, 0xf2a7c9, 0xf5d54a, 0xf8f4ea, 0x3fa05a, 0x3a63c9, 0xf08a2c, 0x8e44ad],
-  domeGold: 0xcfa040,
+  domeGold: 0xb88e38,
   wood: 0x8a5a2b,
   rope: 0xb89a6a,
   cage: 0x6b6b70,
@@ -86,7 +86,7 @@ export const DOVE = {
   MAX_BANK: 1.05,           // inclinação visual máxima (rad)
   MAX_PITCH: 0.85,
   SPAWN: { x: -6000, y: 220, z: 2200, heading: 0 }, // ~9 km de Zamurra: o elefante inteiro cabe na vista inicial
-  ROPE_LENGTH: 11,          // comprimento da corda até a cesta da encomenda
+  ROPE_LENGTH: 6,          // comprimento da corda até a cesta da encomenda
 };
 
 export const CLOUDS = {
@@ -162,9 +162,9 @@ export const FLIGHT = {
 // ---------------------------- CÂMERA ---------------------------------
 // Câmera de perseguição (src/player/camera.js), no referencial da pomba.
 export const CHASE_CAM = {
-  OFFSET: { x: 0, y: 3.0, z: 9.5 },   // posição atrás/acima da pomba (frente = −Z)
+  OFFSET: { x: 0, y: 4.4, z: 9.5 },   // posição atrás/acima da pomba (frente = −Z)
   LOOK_AHEAD: 14,         // m — ponto à frente da pomba para onde a câmera olha
-  LOOK_UP: 2.4,           // m — elevação do ponto olhado (pomba fica no centro-baixo da tela)
+  LOOK_UP: 1.2,           // m — elevação do ponto olhado (pomba fica no centro-baixo da tela)
   FOV: 62, FOV_BOOST: 72, FOV_SMOOTH: 3,
   YAW_SMOOTH: 5,          // 1/s — lag da guinada
   PITCH_FOLLOW: 0.5, PITCH_SMOOTH: 4,
@@ -221,14 +221,14 @@ export const HUD = {
 
 // --------------------------------- MAPA --------------------------------
 export const MAP_UI = {
-  AHEAD_METERS: 2500,       // m — comprimento do tracejado à frente de cada elefante
+  AHEAD_METERS: 6000,       // m — comprimento do tracejado à frente de cada elefante
   AHEAD_POINTS: 12,
   GRID_STEP: 10000,         // m — linhas de grade
   SCALE_BAR: 5000,          // m — barra de escala
   OUTLINE_POINTS: 96,       // pontos do contorno de cada ilha
   FOREST_SCALE: 0.55,       // miolo de floresta (polígono escalado ao centro)
   ROCK_SCALE: 0.3,          // núcleo rochoso
-  PADDING: 28,              // px — folga ao redor do mundo no canvas
+  PADDING: 20,              // px — folga ao redor do mundo no canvas
 };
 
 // --------------------------------- ÁUDIO -------------------------------
@@ -262,11 +262,11 @@ export const ELEPHANT_MODEL = {
   EAR_SCALE: 1.32,          // fator sobre ELEPHANT.EAR (as orelhas das referências são ~ da altura da cabeça)
   EAR_YAW: 0.5,             // rad — abertura das orelhas para fora (0 = coladas ao corpo)
   EAR_HOUSE_H: { min: 16, max: 48 },    // m — profundidade dos blocos de casas que saem do manto da orelha
-  CITY_SPACING_HIGH: 27,    // m — passo da malha de casas do dorso (quality=high)
+  CITY_SPACING_HIGH: 17,    // m — passo da malha de casas do dorso (quality=high)
   CITY_SPACING_LOW: 36,
-  CITY_FLANK_ANGLE: 1.5,    // rad — até que ângulo (a partir do zênite) as casas descem pelos flancos
-  HOUSE_H: { min: 20, max: 70 },        // m — alturas das casas do dorso
-  HOUSE_FOOT: { min: 18, max: 34 },     // m — lado das casas do dorso
+  CITY_FLANK_ANGLE: 1.65,    // rad — até que ângulo (a partir do zênite) as casas descem pelos flancos
+  HOUSE_H: { min: 12, max: 42 },        // m — alturas das casas do dorso
+  HOUSE_FOOT: { min: 10, max: 20 },     // m — lado das casas do dorso
   TALL_BLOCK_CHANCE: 0.05,  // fração de prédios mais altos (até ~1,6× HOUSE_H.max)
   PALACE_X: -270,           // x local do centro do palácio (atrás do centro)
   PLAZA: { x0: -60, x1: 120, hz: 75 },  // praça de mercado (no centro do dorso: ponto da entrega)

@@ -73,9 +73,9 @@ void main() {
   //      azul profundo saturado no zênite; depois volta para linear
   vec3 hz = pow(uHorizon, vec3(1.0 / 2.2));
   vec3 zn = pow(uZenith, vec3(1.0 / 2.2));
-  float t = pow(hh, 0.5);
+  float t = pow(hh, 0.35);
   vec3 col = mix(hz, zn, t);
-  col = mix(col, hz * 1.03, exp(-hh * 26.0) * 0.5); // faixa de haze junto ao horizonte
+  col = mix(col, hz * 1.03, exp(-hh * 40.0) * 0.35); // faixa de haze junto ao horizonte
   col = pow(col, vec3(2.2));
 
   // ---- sol: disco nítido + halo quente largo (mistura "screen" para saturar em branco)

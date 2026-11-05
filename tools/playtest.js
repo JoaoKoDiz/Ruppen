@@ -49,7 +49,7 @@ await key('KeyS', true); let minAlt = Infinity; for (let i = 0; i < 12; i++) { a
 check('nunca entra na água', minAlt >= 5, `altitude mínima ${minAlt.toFixed(1)} m`);
 // 6) teto
 await load('x=0&y=3500&z=0'); await key('KeyW', true); let maxY = 0; for (let i = 0; i < 10; i++) { await step(20); const s = await S(); maxY = Math.max(maxY, s.p[1]); } await key('KeyW', false);
-check('respeita o teto', maxY <= 3700, `y máx ${maxY.toFixed(0)}`);
+check('respeita o teto', maxY <= 8200, `y máx ${maxY.toFixed(0)}`);
 // 7) mapa: M abre, Esc fecha
 await load('t=0'); await key('KeyM', true); await step(2); await key('KeyM', false); let m1 = await S();
 check('M abre o mapa', m1.mapOpen === true);

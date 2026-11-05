@@ -170,8 +170,8 @@ void main() {
   vec2 warp = (texture2D(uWaves, p * (1.0 / 760.0) + vec2(t * 0.0004, 0.0)).rg - 0.5) * 48.0;
   vec2 pw = p + warp;
   vec2 s = vec2(0.0);
-  s += rotBi * slopeAt(rotB * pw * (1.0 / 13.0) + t * vec2(0.05, 0.03)) * 0.06 * fadeFine;    // fino ~13 m
-  s += slopeAt(p * (1.0 / 8.3) + t * vec2(-0.03, 0.055)) * 0.035 * fadeFine;                  // fino ~8 m
+  s += rotBi * slopeAt(rotB * pw * (1.0 / 13.0) + t * vec2(0.05, 0.03)) * 0.03 * fadeFine;    // fino ~13 m
+  s += slopeAt(p * (1.0 / 8.3) + t * vec2(-0.03, 0.055)) * 0.018 * fadeFine;                  // fino ~8 m
   s += rotAi * slopeAt(rotA * pw * (1.0 / 31.0) + t * vec2(-0.011, 0.016)) * 0.08 * fadeMed;  // médio ~31 m
   s += rotBi * slopeAt(rotB * p * (1.0 / 97.0) + t * vec2(0.004, 0.003)) * 0.06 * fadeMed;    // médio-largo ~97 m
   s += slopeAt(pw * (1.0 / 290.0) + t * vec2(0.0019, -0.0014)) * 0.045 * fadeBig;             // largo ~290 m
@@ -197,8 +197,8 @@ void main() {
 
   // ---- reflexo do céu com fresnel (horizonte pálido, zênite azul)
   vec3 R = reflect(-V, N);
-  vec3 sky = mix(uHorizon * 0.9, uZenith, pow(saturate(R.y), 0.4));
-  float F = 0.02 + 0.70 * pow(1.0 - ndv, 5.0);
+  vec3 sky = mix(uHorizon * 0.55, uZenith, pow(saturate(R.y), 0.4));
+  float F = 0.02 + 0.33 * pow(1.0 - ndv, 5.0);
   vec3 col = mix(water, sky, F);
 
   // ---- especular do sol (Blinn normalizado), lobo mais largo à distância
@@ -207,8 +207,8 @@ void main() {
   float farness = saturate(dist / 12000.0);
   float shin = mix(360.0, 60.0, farness);
   float fresH = 0.04 + 0.96 * pow(1.0 - max(dot(H, V), 0.0), 5.0);
-  float spec = pow(ndh, shin) * (shin + 8.0) / (8.0 * PI) * fresH * 0.14;
-  float broad = pow(ndh, 40.0) * 0.012 * fresH * 3.0;
+  float spec = pow(ndh, shin) * (shin + 8.0) / (8.0 * PI) * fresH * 0.42;
+  float broad = pow(ndh, 12.0) * 0.03 * fresH * 3.0;
   col += uSunColor * (spec + broad) * mix(1.0, 0.5, farness);
 
   gl_FragColor = vec4(col, 1.0);

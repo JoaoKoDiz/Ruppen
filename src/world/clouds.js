@@ -15,8 +15,8 @@ import { createNoise } from '../util/noise.js';
 import { createRng } from '../util/rng.js';
 
 const NUM_ANCHORS = ELEPHANT.COUNT;
-const FOOT_PUFFS = 96;              // puffs por elefante (quality=high)
-const FOOT_Y_MIN = 15, FOOT_Y_MAX = 250;
+const FOOT_PUFFS = 130;             // puffs por elefante (quality=high)
+const FOOT_Y_MIN = 15, FOOT_Y_MAX = 420;
 const WIND = new THREE.Vector3(1.1, 0, 0.45); // deriva das nuvens do mundo (m/s)
 const RING_SPIN = 0.0045;            // rad/s de rotação lenta dos anéis das patas
 const SORT_INTERVAL = 0.5;
@@ -165,6 +165,8 @@ void main() {
 
   float depth = -(viewMatrix * vec4(center, 1.0)).z;
   vFade = smoothstep(max(size * 0.22, 18.0), max(size * 0.75, 60.0), depth);
+  // some suavemente perto do nível do mar (evita o corte reto do quad na água)
+  vFade *= smoothstep(0.0, size * 0.3, world.y);
   vUv = uv;
   vShade = aParams.y;
   vSunSide = dot(uSunDir, right) * mirror;
@@ -325,14 +327,14 @@ function generatePuffs(worldData, scale, clusters) {
       const ang = (i / nBig) * Math.PI * 2 + rng.range(-0.15, 0.15);
       const rad = ELEPHANT.FOOT_CLOUD_RADIUS * rng.range(0.8, 1.05);
       const size = rng.range(360, 440) * FS;
-      out.push({ x: Math.cos(ang) * rad, y: FOOT_Y_MIN * FS + size * 0.22, z: Math.sin(ang) * rad, size, shade: 0.5, rot: rng.range(-0.3, 0.3), variant: Math.floor(rng() * 8), group: e });
+      out.push({ x: Math.cos(ang) * rad, y: Math.max(FOOT_Y_MIN * FS, size * 0.5), z: Math.sin(ang) * rad, size, shade: 0.5, rot: rng.range(-0.3, 0.3), variant: Math.floor(rng() * 8), group: e });
     }
     for (let i = 0; i < nFoot; i++) {
       const ang = rng.range(0, Math.PI * 2);
-      const rad = Math.max(230 * FS, Math.min(1150 * FS, ELEPHANT.FOOT_CLOUD_RADIUS + rng.gauss() * 230 * FS));
+      const rad = Math.max(230 * FS, Math.min(1.3 * ELEPHANT.FOOT_CLOUD_RADIUS, ELEPHANT.FOOT_CLOUD_RADIUS + rng.gauss() * 260 * FS));
       const yt = Math.pow(rng(), 1.3);
-      const y = (FOOT_Y_MIN + yt * (FOOT_Y_MAX - FOOT_Y_MIN)) * FS;
       const size = rng.range(170, 400) * FS * (1.0 - 0.3 * yt);
+      const y = Math.max(size * 0.5, (FOOT_Y_MIN + yt * (FOOT_Y_MAX - FOOT_Y_MIN)) * FS);
       const shade = 0.45 + 0.55 * yt;
       out.push({ x: Math.cos(ang) * rad, y, z: Math.sin(ang) * rad, size, shade, rot: rng.range(-0.4, 0.4), variant: Math.floor(rng() * 8), group: e });
     }
