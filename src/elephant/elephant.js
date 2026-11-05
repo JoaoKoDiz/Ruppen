@@ -97,11 +97,11 @@ function drawWrinkles(ctx, W, H, rng, { count, color, alpha, width, highlight = 
   ctx.lineCap = 'round';
   for (let i = 0; i < count; i++) {
     const yc = y0 + (i + 0.25 + rng() * 0.5) * H / count;
-    // ondas coerentes: a fase e a amplitude derivam devagar de linha para linha (dobras paralelas que
-    // se aproximam e afastam sem se cruzar) + um pouco de aleatório nas frequências altas
-    const k1 = fold ? 2 : rng.int(1, 3), k2 = rng.int(4, 9), k3 = rng.int(10, 22);
-    const p1 = fold ? i * 0.42 + rng() * 0.25 : rng() * TAU, p2 = fold ? i * 0.9 + rng() * 0.4 : rng() * TAU, p3 = rng() * TAU;
-    const a1 = fold ? (9 + 4 * Math.sin(i * 0.8) + rng() * 2) * amp : (5 + rng() * 9) * amp, a2 = (2 + rng() * 3) * amp, a3 = (0.5 + rng() * 1.5) * amp;
+    // fases ALEATÓRIAS por linha (uma deriva regular de fase cria "impressões digitais"); a amplitude
+    // fica abaixo de metade do espaçamento para as dobras vizinhas não se cruzarem
+    const k1 = rng.int(1, 3), k2 = rng.int(4, 9), k3 = rng.int(10, 22);
+    const p1 = rng() * TAU, p2 = rng() * TAU, p3 = rng() * TAU;
+    const a1 = (5 + rng() * 9) * amp, a2 = (2 + rng() * 3) * amp, a3 = (0.5 + rng() * 1.5) * amp;
     const lw = width * (0.6 + rng() * 0.8);
     const al = alpha * (0.7 + rng() * 0.3);
     const yf = (x) => yc + a1 * Math.sin(TAU * k1 * x / W + p1) + a2 * Math.sin(TAU * k2 * x / W + p2) + a3 * Math.sin(TAU * k3 * x / W + p3);
@@ -147,8 +147,8 @@ function makeSkinTextures() {
   // dobras GRANDES esculpidas (poucas, grossas, onduladas, com sombreado suave) + camada fina discreta;
   // o MESMO gerador para a cor e o bump
   const r1 = createRng(SEED + 5), r2 = createRng(SEED + 5);
-  drawWrinkles(ctx, W, H, r1, { count: 24, color: 0x2c272c, alpha: 0.62, width: 7.5, highlight: true, breaks: 0.04, amp: 3.2, fold: true, hiAlpha: 0.1 });
-  drawWrinkles(ctx, W, H, r1, { count: 30, color: 0x3a353a, alpha: 0.26, width: 2.6, breaks: 0.3, amp: 1.6, highlight: true, hiAlpha: 0.05 });
+  drawWrinkles(ctx, W, H, r1, { count: 24, color: 0x2c272c, alpha: 0.46, width: 7.5, highlight: true, breaks: 0.04, amp: 1.25, fold: true, hiAlpha: 0.075 });
+  drawWrinkles(ctx, W, H, r1, { count: 30, color: 0x3a353a, alpha: 0.2, width: 2.6, breaks: 0.3, amp: 1.0, highlight: true, hiAlpha: 0.04 });
   // poros/granulado fino
   ctx.globalAlpha = 0.12; const grain = noiseCanvas(256, 23, 24, 2, 120, 255);
   ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(grain, 0, 0, W, H);
@@ -158,10 +158,19 @@ function makeSkinTextures() {
   bctx.fillStyle = '#8c8c8c'; bctx.fillRect(0, 0, W, H);
   bctx.globalAlpha = 0.35; bctx.drawImage(blot, 0, 0, W, H); bctx.globalAlpha = 1;
   bctx.filter = 'blur(2.5px)';
-  drawWrinkles(bctx, W, H, r2, { count: 24, color: 0x000000, alpha: 0.95, width: 9, breaks: 0.04, amp: 3.2, fold: true, highlight: true, hiAlpha: 0.5 });
+  drawWrinkles(bctx, W, H, r2, { count: 24, color: 0x000000, alpha: 0.9, width: 9, breaks: 0.04, amp: 1.25, fold: true, highlight: true, hiAlpha: 0.45 });
   bctx.filter = 'blur(1px)';
-  drawWrinkles(bctx, W, H, r2, { count: 30, color: 0x101010, alpha: 0.5, width: 2.6, breaks: 0.3, amp: 1.6 });
+  drawWrinkles(bctx, W, H, r2, { count: 30, color: 0x101010, alpha: 0.45, width: 2.6, breaks: 0.3, amp: 1.0 });
   bctx.filter = 'none';
+  // esmaecimento radial nos polos: v→0 e v→1 (topo/fundo das esferas: a convergência das linhas
+  // num polo viraria uma "estrela"); as dobras somem suavemente nos últimos 12 % de v
+  const FADE = Math.round(H * 0.12);
+  for (const [y0, y1] of [[0, FADE], [H, H - FADE]]) {
+    let g = ctx.createLinearGradient(0, y0, 0, y1); g.addColorStop(0, 'rgba(96,91,94,0.92)'); g.addColorStop(1, 'rgba(96,91,94,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, Math.min(y0, y1), W, FADE);
+    g = bctx.createLinearGradient(0, y0, 0, y1); g.addColorStop(0, 'rgba(140,140,140,0.95)'); g.addColorStop(1, 'rgba(140,140,140,0)');
+    bctx.fillStyle = g; bctx.fillRect(0, Math.min(y0, y1), W, FADE);
+  }
   return { map: canvasTexture(c), bump: canvasTexture(b, false) };
 }
 
@@ -180,7 +189,7 @@ function makeTrunkTextures() {
   const r1 = createRng(SEED + 9), r2 = createRng(SEED + 9);
   // dobras horizontais grandes na ponta de pele (anéis da tromba)
   ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, ySplit); ctx.clip();
-  drawWrinkles(ctx, W, ySplit, r1, { count: 9, color: 0x2c272c, alpha: 0.6, width: 6, highlight: true, breaks: 0.06, amp: 0.5, fold: true, hiAlpha: 0.1 });
+  drawWrinkles(ctx, W, ySplit, r1, { count: 9, color: 0x2c272c, alpha: 0.45, width: 6, highlight: true, breaks: 0.06, amp: 0.5, fold: true, hiAlpha: 0.075 });
   ctx.restore();
   bctx.save(); bctx.beginPath(); bctx.rect(0, 0, W, ySplit); bctx.clip(); bctx.filter = 'blur(2px)';
   drawWrinkles(bctx, W, ySplit, r2, { count: 9, color: 0x000000, alpha: 0.95, width: 7, breaks: 0.06, amp: 0.5, fold: true, highlight: true, hiAlpha: 0.5 });
@@ -728,13 +737,14 @@ export function createElephant(route, index, opts = {}) {
 
   // ============================ CORPO ==============================
   {
-    // Esfera com os polos ao longo do eixo da espinha (+X/−X): assim o leque de triângulos do polo
-    // fica escondido no pescoço e na garupa, e a barriga (vista de baixo) não mostra "estrela".
+    // Esfera com os polos em cima (debaixo da cidade) e embaixo (barriga): as linhas de dobra
+    // (v constante) são anéis horizontais ao redor do corpo — horizontais nos flancos, no ombro e na
+    // garupa, sem convergir em "estrela" nos lados; a textura esmaece nos polos (v→0/1). A emenda de
+    // u (u=0) fica à frente (+X), escondida pelo pescoço.
     const g = new THREE.SphereGeometry(1, low ? 56 : 72, low ? 36 : 46);
-    g.rotateZ(-Math.PI / 2); // polo +Y → +X
-    // uv: u ao longo do corpo (latitude da esfera girada), v ao redor do eixo X → as rugas correm
-    // horizontais nos flancos, como nas referências
-    { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) { const u = uv.getX(i), v = uv.getY(i); uv.setXY(i, v * 2.5, u * 2 + v * 0.35 + 0.25); } }   // + inclinação: dobras diagonais nos flancos
+    g.rotateY(Math.PI);
+    // uv: u ao redor do corpo (2,5 ladrilhos), v do polo de baixo ao de cima (1 ladrilho: 24 dobras)
+    { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) { const u = uv.getX(i), v = uv.getY(i); uv.setXY(i, u * 2.5, v); } }   // + inclinação: dobras diagonais nos flancos
     mapVertices(g, (v) => { tmp.copy(v).normalize(); bodyPoint(tmp, v); });
     add('skin', g);
   }
@@ -742,14 +752,14 @@ export function createElephant(route, index, opts = {}) {
   {
     const g = new THREE.SphereGeometry(1, 40, 28);
     mapVertices(g, (v) => { tmp.copy(v); const n = noise.fbm3(tmp.x * 2 + 3, tmp.y * 2, tmp.z * 2, 3) * 8; v.set(tmp.x * 300 + 580, tmp.y * 345 + 1110, tmp.z * 345).addScaledVector(tmp, n); });
-    scaleUV(g, 2, 0.7);
+    scaleUV(g, 2, 0.62, 0, 0.14);
     add('skin', g);
   }
   // ============================ CABEÇA =============================
   {
     const g = new THREE.SphereGeometry(1, low ? 48 : 58, low ? 32 : 40);
     mapVertices(g, (v) => { tmp.copy(v).normalize(); headPoint(tmp, v); });
-    scaleUV(g, 2, 0.8);
+    scaleUV(g, 1.6, 0.74, 0, 0.1);   // dobras horizontais pela bochecha; o polo de baixo (queixo) esmaece
     add('skin', g);
   }
   // olhos: globo castanho-escuro com íris âmbar e brilho (textura + emissivo), pouco afundado;
@@ -808,7 +818,7 @@ export function createElephant(route, index, opts = {}) {
       v.x += cx; v.z += cz;
     };
     mapVertices(g, (v) => legDeform(v));
-    scaleUV(g, 2, 0.45);   // faixas de dobras largas e horizontais na coluna da pata
+    scaleUV(g, 2, 0.45, 0, 0.14);   // faixas de dobras largas e horizontais na coluna da pata (fora da zona esmaecida)
     add('skin', g, bone);
     // unhas: 5 esferas achatadas de marfim meio enterradas na borda do pé, da frente para os lados
     const rNail = legR(-14);
@@ -880,7 +890,7 @@ export function createElephant(route, index, opts = {}) {
   // ao contorno, tecido escuro dentro e um grande bloco retangular de casas em terraços (refs 1–3, 7).
   // Contorno em coordenadas locais da orelha: x<0 para trás, y<0 para baixo, z>0 lado de fora;
   // (0,0) = canto superior dianteiro (pivô na cabeça).
-  const earOutline = [[0, 0], [-120, 62], [-300, 88], [-480, 72], [-590, 22], [-640, -120], [-652, -330], [-646, -560], [-622, -720], [-540, -792], [-380, -806], [-200, -800], [-62, -770], [10, -660], [30, -480], [26, -280], [16, -120]];
+  const earOutline = [[0, 0], [-100, 70], [-300, 96], [-480, 82], [-575, 42], [-628, -60], [-650, -250], [-648, -480], [-630, -660], [-578, -762], [-470, -802], [-300, -810], [-150, -796], [-52, -742], [6, -620], [28, -440], [26, -260], [16, -110]];
   const esx = (EAR.width * EM.EAR_SCALE) / 665, esy = (EAR.height * EM.EAR_SCALE) / 810;
   const EAR_C = { x: -310 * esx, y: -360 * esy };
   const earShape = (scale = 1, cx = EAR_C.x, cy = EAR_C.y) => {
@@ -905,7 +915,7 @@ export function createElephant(route, index, opts = {}) {
   const earScaleOf = (x, y) => { const dx = x - EAR_C.x, dy = y - EAR_C.y; return Math.hypot(dx, dy) / outlineDist(Math.atan2(dy, dx)); };
   // deformação da orelha (ondulação suave: topo enrolando para fora, traseira abrindo, ponta de baixo fechando)
   const earWarp = (p) => {
-    const topCurl = Math.max(0, (p.y + 170 * esy) / (250 * esy)); p.z += 60 * topCurl * topCurl;
+    const topCurl = Math.max(0, (p.y + 190 * esy) / (280 * esy)); p.z += 95 * topCurl * topCurl;   // borda de cima enrola para fora
     const back = Math.min(1, -p.x / EAR_W); p.z += 80 * back * back;
     const low2 = Math.max(0, (-p.y - 380 * esy) / (420 * esy)); p.z += 56 * low2 * low2; // base abre para fora (afasta do ombro)
     p.z += noise.noise2(p.x / 260 + 7, p.y / 260) * 12;
@@ -931,7 +941,7 @@ export function createElephant(route, index, opts = {}) {
   };
   const RING_OUT = 0.985, RING_IN = 0.885;
   const corePoly = earShape(RING_IN - 0.02).extractPoints(8).shape;
-  const HOUSE_RECT = { x0: -580 * esx, x1: -36 * esx, y0: -722 * esy, y1: -30 * esy };
+  const HOUSE_RECT = { x0: -572 * esx, x1: -52 * esx, y0: -716 * esy, y1: -52 * esy };
   for (const side of [-1, 1]) {
     const bone = side < 0 ? BONE.earL : BONE.earR;
     const M = new THREE.Matrix4().compose(new V3(EAR_PIVOT.x, EAR_PIVOT.y, EAR_PIVOT.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.1, EM.EAR_YAW, -0.04, 'YXZ')), new V3(1, 1, 1));
@@ -953,29 +963,32 @@ export function createElephant(route, index, opts = {}) {
     ring.translate(0, 0, Z_BL - 2); ring = tessellate(ring, low ? 80 : 60); ringUV(ring, RING_OUT, RING_IN);
     mapVertices(ring, earWarp); ring = mergeVertices(ring); ring.computeVertexNormals();
     add('cloth', finish(ring), bone);
-    // bloco RETANGULAR de casas em terraços sobre o manto (fileiras × colunas), com um recorte
-    // retangular (como nas refs 2/3) e profundidades variadas (alguns blocos saem mais)
+    // bloco RETANGULAR de casas em terraços sobre o manto: retalho cerrado e regular de casinhas
+    // (fileiras × colunas, profundidades parecidas), com 1–2 recortes pequenos (refs. 2/3); fica uma
+    // margem de tecido escuro + a borda listrada ao redor
     const hrng = createRng(SEED + 500 + index * 13 + side);
     const hg = [];
     const ROWS = EM.EAR_HOUSE_GRID.rows, COLS = EM.EAR_HOUSE_GRID.cols;
     const dy = (HOUSE_RECT.y1 - HOUSE_RECT.y0) / ROWS, dx = (HOUSE_RECT.x1 - HOUSE_RECT.x0) / COLS;
-    const notchFront = hrng() < 0.5;
-    const notch = notchFront ? { x0: HOUSE_RECT.x0 + dx * 7, x1: HOUSE_RECT.x1 - dx * 1, y0: HOUSE_RECT.y0 + dy * 1, y1: HOUSE_RECT.y0 + dy * 5 }
-      : { x0: HOUSE_RECT.x0 + dx * 1, x1: HOUSE_RECT.x0 + dx * 6, y0: HOUSE_RECT.y0 + dy * 1, y1: HOUSE_RECT.y0 + dy * 5 };
-    const inNotch = (x, y) => x > notch.x0 && x < notch.x1 && y > notch.y0 && y < notch.y1;
+    const notches = [];
+    const nN = 1 + (hrng() < 0.5 ? 1 : 0);
+    for (let k = 0; k < nN; k++) {
+      const c0 = hrng.int(1, COLS - 4), r0 = hrng.int(1, ROWS - 5), cw = hrng.int(2, 3), rh = hrng.int(2, 4);
+      notches.push({ c0, c1: c0 + cw, r0, r1: r0 + rh });
+    }
+    const inNotch = (c, r) => notches.some((n) => c >= n.c0 && c < n.c1 && r >= n.r0 && r < n.r1);
     for (let row = 0; row < ROWS; row++) {
       const y = HOUSE_RECT.y0 + (row + 0.5) * dy;
       for (let col = 0; col < COLS; col++) {
         const x = HOUSE_RECT.x0 + (col + 0.5) * dx;
         if (!pointInPolygon(x + dx * 0.5, y + dy * 0.5, corePoly) || !pointInPolygon(x - dx * 0.5, y - dy * 0.5, corePoly) || !pointInPolygon(x + dx * 0.5, y - dy * 0.5, corePoly) || !pointInPolygon(x - dx * 0.5, y + dy * 0.5, corePoly)) continue;
-        if (inNotch(x, y)) continue;
-        if (hrng() < 0.04) continue;
-        // terraços: cada fileira um pouco mais funda que a de cima; alguns prédios saltam
-        const base = EM.EAR_HOUSE_H.min + (EM.EAR_HOUSE_H.max - EM.EAR_HOUSE_H.min) * (0.35 + 0.65 * hrng());
-        const h = base * (hrng() < 0.12 ? 1.5 : 1) * (0.85 + 0.3 * (row / ROWS));
-        const wall = hrng() < 0.8 ? hrng.pick(COLORS.houses) : hrng.pick([0xd9a593, 0xc98b7a, 0xe7b39f]);
-        const b = boxHouse(dx * 0.9, dy * 0.86, h, 'z', wall, wall, true, hrng() < 0.3, true);
-        b.translate(x, y, Z_BL + 5 + h / 2);
+        if (inNotch(col, row)) continue;
+        if (hrng() < 0.01) continue;
+        // profundidades parecidas (12–30 m), um pouco maiores nas fileiras de baixo (terraços)
+        const h = EM.EAR_HOUSE_H.min + (EM.EAR_HOUSE_H.max - EM.EAR_HOUSE_H.min) * (0.3 * hrng() + 0.7 * (1 - row / ROWS) * hrng());
+        const wall = hrng() < 0.85 ? hrng.pick(COLORS.houses) : hrng.pick([0xd9a593, 0xe7b39f, 0xf0d8c8]);
+        const b = boxHouse(dx * 0.9, dy * 0.88, h, 'z', wall, wall, true, false, true);
+        b.translate(x, y, Z_BL + 4 + h / 2);
         mapVertices(b, earWarp);
         hg.push(b);
       }

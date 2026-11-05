@@ -305,8 +305,8 @@ export const ELEPHANT_MODEL = {
   HEAD_SCALE: 1.15,         // fator sobre ELEPHANT.HEAD.radius (cabeça maior e mais pesada, como nas referências)
   EAR_SCALE: 1.6,           // fator sobre ELEPHANT.EAR (orelhas tão altas quanto a cabeça, pendendo abaixo dela)
   EAR_YAW: 0.5,             // rad — abertura das orelhas para fora (0 = coladas ao corpo)
-  EAR_HOUSE_H: { min: 18, max: 58 },    // m — profundidade dos blocos de casas que saem do manto da orelha
-  EAR_HOUSE_GRID: { rows: 11, cols: 14 },   // bloco retangular de casas em terraços no manto da orelha
+  EAR_HOUSE_H: { min: 12, max: 30 },    // m — profundidade dos blocos de casas que saem do manto da orelha
+  EAR_HOUSE_GRID: { rows: 18, cols: 14 },   // bloco retangular de casinhas em terraços no manto da orelha
   TRUNK_ROOT_RADIUS: 235,   // m — raio da tromba na raiz (afunila até TRUNK.baseRadius a ~25% do comprimento)
   CITY_SPACING_HIGH: 10.5,  // m — passo da malha de casas do dorso (quality=high): tapete fino
   CITY_SPACING_LOW: 20,
