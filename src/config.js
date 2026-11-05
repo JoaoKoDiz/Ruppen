@@ -47,6 +47,13 @@ export const COLORS = {
   wood: 0x8a5a2b,
   rope: 0xb89a6a,
   cage: 0x6b6b70,
+  // vegetação/costa das ilhas (src/world/islands.js)
+  grassDry: 0x9aa75a,    // pasto seco (cristas, encostas expostas)
+  meadow: 0x6f9a4a,      // prado verde (vales)
+  forestDark: 0x3b6a37,  // mata fechada
+  scrub: 0x7d8c4b,       // matagal/charneca de altitude
+  sandWet: 0xb9a97c,     // faixa de areia molhada na linha d'água
+  shallows: 0x4fb3c8,    // água rasa turquesa ao redor das ilhas
 };
 
 // -------------------------- ELEFANTES --------------------------------
@@ -110,15 +117,27 @@ export const LAYERS = { DEFAULT: 0, NO_FOG: 1 };
 export const ISLANDS = {
   GRID_HIGH: 170,          // vértices por lado da malha de terreno (quality=high)
   GRID_LOW: 110,           // idem para quality=low
-  TREES_HIGH: 3000,        // árvores instanciadas por ilha
-  TREES_LOW: 1800,
-  ROCKS_HIGH: 400,         // pedras instanciadas por ilha
+  TREES_HIGH: 6000,        // árvores instanciadas por ilha (~12 triângulos cada)
+  TREES_LOW: 3000,
+  ROCKS_HIGH: 400,         // pedras instanciadas por ilha (inclui os matacões)
   ROCKS_LOW: 220,
-  TREE_HEIGHT_MIN: 15,     // árvores propositalmente grandes (m) para serem visíveis do voo
-  TREE_HEIGHT_MAX: 40,
+  BOULDERS_HIGH: 40,       // matacões grandes no sopé das falésias (parte de ROCKS_*)
+  BOULDERS_LOW: 20,
+  TREE_HEIGHT_MIN: 12,     // árvores grandes (m) para serem visíveis do voo
+  TREE_HEIGHT_MAX: 30,
   SKIRT_Y: -300,           // y da "saia" submersa da malha fora do contorno da ilha
   TREE_VIS_DIST: 28000,    // além desta distância da câmera as árvores somem (sub-pixel)
   ROCK_VIS_DIST: 18000,    // idem para as pedras
+  VEG_NOISE_M: 700,        // m — escala das manchas prado/pasto seco
+  FOREST_NOISE_M: 520,     // m — escala das manchas de floresta
+  BEACH_NOISE_M: 900,      // m — escala das costas com/sem praia
+  SAND_MAX_Y: 8,           // m — areia até esta altura (onde a encosta é suave)
+  SAND_WET_Y: 1.5,         // m — faixa de areia molhada/escura junto à água
+  TREELINE: 0.45,          // fração de maxH acima da qual não há floresta
+  SHALLOWS_SEGMENTS: 160,  // ângulos do anel de água rasa
+  SHALLOWS_Y: 0.8,         // m — altura do anel acima do oceano (evita z-fight)
+  SHALLOWS_OUTER: 0.27,    // fração de R além da costa onde o turquesa desaparece
+  SHALLOWS_OPACITY: 0.55,  // opacidade junto à costa
 };
 
 // ------------------------- MODELO DA POMBA ----------------------------
@@ -271,4 +290,12 @@ export const ELEPHANT_MODEL = {
   PALACE_X: -270,           // x local do centro do palácio (atrás do centro)
   PLAZA: { x0: -60, x1: 120, hz: 75 },  // praça de mercado (no centro do dorso: ponto da entrega)
   TUSK_HOUSE_STEP: 0.0085,  // passo (fração da presa) entre fileiras de casas
+};
+
+// Polimento do elefante (src/elephant/elephant.js): olho, patas.
+export const ELEPHANT_POLISH = {
+  EYE_RADIUS: 34,           // raio do globo ocular
+  EYE_SINK: 5,              // quanto o globo afunda na pele (pequeno: olho pouco "furado")
+  LEG_HIP_RADIUS: 210,      // raio de referência do perfil da pata (quadril = 1.0; joelho ≈ 0.88; pé ≈ 1.12)
+  LEG_HIP_LEAN: 40,         // m — a coxa inclina para dentro no topo (entra na barriga, não sai pelo flanco)
 };
