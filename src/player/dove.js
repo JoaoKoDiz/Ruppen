@@ -12,9 +12,9 @@
 // =====================================================================
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { DOVE, SEED } from '../../config.js';
-import { createNoise } from '../../util/noise.js';
-import { createRng } from '../../util/rng.js';
+import { DOVE, SEED } from '../config.js';
+import { createNoise } from '../util/noise.js';
+import { createRng } from '../util/rng.js';
 
 // ----------------------------------------------------------------------
 //  Dimensões derivadas (tudo relativo a DOVE.* do config)
