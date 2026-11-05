@@ -253,3 +253,21 @@ export const UI_COLORS = {
   mapForest: '#3e6d38',
   mapRock: '#8c857a',
 };
+
+// ------------------------ MODELO DO ELEFANTE ----------------------------
+// Medidas do modelo procedural (src/elephant/elephant.js) além das de ELEPHANT:
+// orelhas gigantes com manto e casas em terraços, cidade densa do dorso, cidades das presas.
+export const ELEPHANT_MODEL = {
+  EAR_SCALE: 1.32,          // fator sobre ELEPHANT.EAR (as orelhas das referências são ~ da altura da cabeça)
+  EAR_YAW: 0.5,             // rad — abertura das orelhas para fora (0 = coladas ao corpo)
+  EAR_HOUSE_H: { min: 16, max: 48 },    // m — profundidade dos blocos de casas que saem do manto da orelha
+  CITY_SPACING_HIGH: 27,    // m — passo da malha de casas do dorso (quality=high)
+  CITY_SPACING_LOW: 36,
+  CITY_FLANK_ANGLE: 1.5,    // rad — até que ângulo (a partir do zênite) as casas descem pelos flancos
+  HOUSE_H: { min: 20, max: 70 },        // m — alturas das casas do dorso
+  HOUSE_FOOT: { min: 18, max: 34 },     // m — lado das casas do dorso
+  TALL_BLOCK_CHANCE: 0.05,  // fração de prédios mais altos (até ~1,6× HOUSE_H.max)
+  PALACE_X: -270,           // x local do centro do palácio (atrás do centro)
+  PLAZA: { x0: -60, x1: 120, hz: 75 },  // praça de mercado (no centro do dorso: ponto da entrega)
+  TUSK_HOUSE_STEP: 0.0085,  // passo (fração da presa) entre fileiras de casas
+};

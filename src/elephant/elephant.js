@@ -15,7 +15,7 @@
 // =====================================================================
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { ELEPHANT, COLORS, SEED } from '../config.js';
+import { ELEPHANT, ELEPHANT_MODEL, COLORS, SEED } from '../config.js';
 import { createRng, hashInt } from '../util/rng.js';
 import { createNoise } from '../util/noise.js';
 
@@ -25,10 +25,13 @@ const V3 = THREE.Vector3;
 const noise = createNoise(SEED + 331);
 
 // Alturas da cidade (locais a este modelo)
-const HOUSE_H = 40;              // altura média das casas usada em getSurfaceHeight
-const PALACE_X = -40;            // centro do palácio (x local)
-const PALACE_BASE_TOP = 1620;    // topo do bloco principal
-const DOME_CY = 1720, DOME_R = 92;
+const EM = ELEPHANT_MODEL;
+const HOUSE_AVG = 42;            // altura média das casas usada em getSurfaceHeight
+const PALACE_X = EM.PALACE_X, PZ = EM.PLAZA;
+const PALACE_BASE_TOP = 1650;    // topo do bloco principal do palácio
+const DOME_R = 90, DOME_CY = 1748;   // cúpula dourada (topo ≈ SHOULDER_HEIGHT + CITY_MAX_HEIGHT)
+const BRICK = { x: 60, z: -190, hx: 110, hz: 70 }, BRICK_TOP = 1690; // prédio de tijolos com arcos
+const PLAZA_TOP = 1518;          // piso da praça de mercado (centro do dorso)
 
 // ------------------------------------------------------------------
 //  utilidades
@@ -99,12 +102,12 @@ function makeSkinTextures() {
   const W = 1024, H = 1024;
   const c = makeCanvas(W, H), ctx = c.getContext('2d');
   // base um pouco mais clara que a cor nominal: as rugas e as manchas escurecem a média
-  ctx.fillStyle = '#8a888f'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#908c8e'; ctx.fillRect(0, 0, W, H);
   const blot = noiseCanvas(128, 17, 3, 4, 170, 255);
-  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.45; ctx.drawImage(blot, 0, 0, W, H);
+  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.4; ctx.drawImage(blot, 0, 0, W, H);
   ctx.globalCompositeOperation = 'source-over';
   // leve tom azulado nas sombras das dobras
-  ctx.globalAlpha = 0.08; ctx.fillStyle = '#5c6a92'; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1;
+  ctx.globalAlpha = 0.05; ctx.fillStyle = '#5c6a92'; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1;
   // rugas: duas camadas (principais e finas) com o MESMO gerador para a cor e o bump
   const r1 = createRng(SEED + 5), r2 = createRng(SEED + 5);
   drawWrinkles(ctx, W, H, r1, { count: 110, color: 0x3f3d45, alpha: 0.55, width: 1.9, highlight: true, breaks: 0.12 });
@@ -179,11 +182,19 @@ function makeClothTextures() {
   const b = makeCanvas(S, S), bctx = b.getContext('2d');
   bctx.fillStyle = '#8c8c8c'; bctx.fillRect(0, 0, S, S);
   const rng = createRng(SEED + 44);
-  // --- manto (y 0..512): laranja com listras onduladas creme/rosa/vinho ---
+  // --- manto (y 0..512): miolo (y 0..256, v 0.75..1) laranja com linhas finas onduladas;
+  //     borda (y 256..512, v 0.5..0.75) com listras largas creme/rosa/vinho ---
   ctx.fillStyle = hex(COLORS.cloth); ctx.fillRect(0, 0, S, 512);
+  const thin = [COLORS.cream, COLORS.clothDark, 0xf0b060, 0xe07aa0];
+  for (let i = 0; i < 9; i++) {
+    const y = 14 + i * 27, ph = rng() * TAU, kk = rng.int(2, 4), amp = 3 + rng() * 3;
+    ctx.strokeStyle = rgba(thin[i % thin.length], 0.5); ctx.lineWidth = 2.5 + rng() * 2; ctx.beginPath();
+    for (let x = 0; x <= S; x += 8) { const yy = y + amp * Math.sin(TAU * kk * x / S + ph); if (x === 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy); }
+    ctx.stroke();
+  }
   const stripes = [COLORS.cream, 0xe07aa0, COLORS.clothDark, COLORS.cream, 0xf0b060];
-  for (let i = 0; i < 16; i++) {
-    const y = 10 + i * 31, h = 7 + rng() * 6, ph = rng() * TAU, kk = rng.int(3, 6), amp = 5 + rng() * 5;
+  for (let i = 0; i < 8; i++) {
+    const y = 262 + i * 31, h = 7 + rng() * 6, ph = rng() * TAU, kk = rng.int(3, 6), amp = 5 + rng() * 5;
     ctx.fillStyle = hex(stripes[i % stripes.length]);
     ctx.beginPath();
     for (let x = 0; x <= S; x += 8) { const yy = y + amp * Math.sin(TAU * kk * x / S + ph); if (x === 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy); }
@@ -230,7 +241,8 @@ const REG = {
   BRK: [0.5 + INSET, 1 - INSET, 0.5 + INSET, 1 - INSET],
   PLAIN: [0 + INSET, 0.25 - INSET, 0.25 + INSET, 0.5 - INSET],
   TOWER: [0.25 + INSET, 0.5 - INSET, 0.25 + INSET, 0.5 - INSET],
-  PAVE: [0.5 + INSET, 1 - INSET, 0.25 + INSET, 0.5 - INSET],
+  PAVE: [0.5 + INSET, 0.75 - INSET, 0.25 + INSET, 0.5 - INSET],
+  TALL: [0.75 + INSET, 1 - INSET, 0.25 + INSET, 0.5 - INSET],
   HOUSE: [0 + INSET, 0.5 - INSET, 0 + INSET, 0.25 - INSET],
   ROOF: [0.5 + INSET, 1 - INSET, 0 + INSET, 0.25 - INSET],
 };
@@ -267,9 +279,12 @@ function makeCityAtlas() {
   // TOWER: janelas estreitas
   drawArchWindows(ctx, 256, 512, 256, 256, 3, 6, { wall: '#f3efe7', win: '#2c2e3c', frame: '#d8d2c6', winW: 0.3, winH: 0.62 });
   // PAVE: calçamento
-  ctx.fillStyle = '#d9d0bd'; ctx.fillRect(512, 512, 512, 256);
+  ctx.fillStyle = '#d9d0bd'; ctx.fillRect(512, 512, 256, 256);
   const prng = createRng(SEED + 77);
-  for (let yy = 512; yy < 768; yy += 32) for (let xx = 512; xx < 1024; xx += 32) { ctx.fillStyle = `rgba(120,100,80,${0.08 + prng() * 0.18})`; ctx.fillRect(xx + 1, yy + 1, 30, 30); }
+  for (let yy = 512; yy < 768; yy += 32) for (let xx = 512; xx < 768; xx += 32) { ctx.fillStyle = `rgba(120,100,80,${0.08 + prng() * 0.18})`; ctx.fillRect(xx + 1, yy + 1, 30, 30); }
+  // TALL: prédio de vários andares (3x5 janelas em arco), sem porta
+  drawArchWindows(ctx, 768, 512, 256, 256, 3, 5, { wall: '#ffffff', win: '#33353f', frame: '#e3ddd2', winW: 0.34, winH: 0.56 });
+  ctx.fillStyle = 'rgba(0,0,0,0.07)'; for (let r = 1; r < 5; r++) ctx.fillRect(768, 512 + r * 51.2 - 1, 256, 2);
   // HOUSE: parede branca com 3x2 janelas + porta
   drawArchWindows(ctx, 0, 768, 512, 256, 3, 2, { wall: '#ffffff', win: '#33353f', frame: '#e3ddd2', winW: 0.3, winH: 0.5, door: true });
   // ROOF: telhas (claras: a cor do vértice tinge)
@@ -352,11 +367,12 @@ function prep(g, bone = 0, color = 0xffffff) {
 function scaleUV(g, su, sv, ou = 0, ov = 0) {
   const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, ou + uv.getX(i) * su, ov + uv.getY(i) * sv); return g;
 }
-// Remapeia uv (0..1) para uma região do atlas, numa faixa de vértices.
+// Remapeia uv (0..1) para uma região do atlas, numa faixa de vértices. ru/rv ≤ 1 usam só parte da
+// região (sem repetição: regiões de atlas não podem dar wrap); valores maiores são limitados a 1.
 function remapUV(g, reg, from = 0, to = Infinity, ru = 1, rv = 1) {
   const uv = g.attributes.uv; const end = Math.min(to, uv.count);
   for (let i = from; i < end; i++) {
-    const u = (uv.getX(i) * ru) % 1, v = (uv.getY(i) * rv) % 1;
+    const u = Math.min(1, uv.getX(i) * ru), v = Math.min(1, uv.getY(i) * rv);
     uv.setXY(i, reg[0] + u * (reg[1] - reg[0]), reg[2] + v * (reg[3] - reg[2]));
   }
   return g;
@@ -423,6 +439,30 @@ function tubeGeometry(curve, segs, radial, radiusAt, { capStart = false, capEnd 
 // "Para cima" perpendicular à tangente de uma curva (para apoiar casas no dorso das presas)
 function surfaceUp(tangent, out) { out.set(0, 1, 0).addScaledVector(tangent, -tangent.y); if (out.lengthSq() < 1e-6) out.set(1, 0, 0); return out.normalize(); }
 
+// Subdivide triângulos (não indexados) pela aresta mais longa até maxLen: as tampas da ExtrudeGeometry
+// só têm vértices no contorno, e as deformações não lineares (earWarp) precisam de amostras no interior.
+function tessellate(g, maxLen, maxIter = 12) {
+  if (g.index) g = g.toNonIndexed();
+  let pos = Array.from(g.attributes.position.array), uv = Array.from(g.attributes.uv.array);
+  const mid = (a, b) => a.map((v, i) => (v + b[i]) * 0.5);
+  for (let it = 0; it < maxIter; it++) {
+    const np = [], nu = []; let split = false;
+    for (let t = 0; t < pos.length / 9; t++) {
+      const P = [0, 1, 2].map((k) => pos.slice(t * 9 + k * 3, t * 9 + k * 3 + 3)), U = [0, 1, 2].map((k) => uv.slice(t * 6 + k * 2, t * 6 + k * 2 + 2));
+      const L = [0, 1, 2].map((k) => { const a = P[k], b = P[(k + 1) % 3]; return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]); });
+      let k = 0; if (L[1] > L[k]) k = 1; if (L[2] > L[k]) k = 2;
+      if (L[k] <= maxLen) { np.push(...P[0], ...P[1], ...P[2]); nu.push(...U[0], ...U[1], ...U[2]); continue; }
+      split = true;
+      const a = k, b = (k + 1) % 3, c = (k + 2) % 3, M = mid(P[a], P[b]), MU = mid(U[a], U[b]);
+      np.push(...P[a], ...M, ...P[c], ...M, ...P[b], ...P[c]); nu.push(...U[a], ...MU, ...U[c], ...MU, ...U[b], ...U[c]);
+    }
+    pos = np; uv = nu; if (!split) break;
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); out.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  out.computeVertexNormals(); return out;
+}
+
 function pointInPolygon(x, y, poly) {
   let inside = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -438,17 +478,19 @@ function fuzzySphere(r, ws, hs, amount) {
 
 // Casa em caixa: paredes com janelas (atlas HOUSE), telhado tingido (ROOF), base lisa.
 // upAxis: 'y' (cidade do dorso/presas) ou 'z' (terraços das orelhas: o lado de fora da orelha é +z).
-function boxHouse(w, h, d, upAxis, wallColor, roofColor) {
+// facadeOut: a face de cima recebe a fachada com janelas (blocos das orelhas); tall: fachada de vários andares.
+function boxHouse(w, h, d, upAxis, wallColor, roofColor, facadeOut = false, tall = false) {
   const g = new THREE.BoxGeometry(w, h, d);
+  const sideReg = tall ? REG.TALL : REG.HOUSE;
   // ordem das faces na BoxGeometry: +x, -x, +y, -y, +z, -z (4 vértices cada)
   const faces = { px: [0, 4], nx: [4, 8], py: [8, 12], ny: [12, 16], pz: [16, 20], nz: [20, 24] };
   const roof = upAxis === 'y' ? faces.py : faces.pz, bottom = upAxis === 'y' ? faces.ny : faces.nz;
   setColorRange(g, wallColor);
   for (const k of Object.keys(faces)) {
     const f = faces[k];
-    if (f === roof) { remapUV(g, REG.ROOF, f[0], f[1]); setColorRange(g, roofColor, f[0], f[1]); }
+    if (f === roof) { remapUV(g, facadeOut ? REG.TALL : REG.ROOF, f[0], f[1]); setColorRange(g, roofColor, f[0], f[1]); }
     else if (f === bottom) remapUV(g, REG.PLAIN, f[0], f[1]);
-    else remapUV(g, REG.HOUSE, f[0], f[1]);
+    else remapUV(g, facadeOut ? REG.PLAIN : sideReg, f[0], f[1]);
   }
   return g;
 }
@@ -539,7 +581,7 @@ export function createElephant(route, index, opts = {}) {
 
   // ossos
   const BONE = { root: 0, legFL: 1, legFR: 2, legBL: 3, legBR: 4, earL: 5, earR: 6, trunk: 7, tail: 8 };
-  const EAR_PIVOT = { x: 745, y: 1335, z: 205 };
+  const EAR_PIVOT = { x: 745, y: 1335, z: 228 };
   const TRUNK_ROOT = { x: 1010, y: 950, z: 0 };
   const TAIL_ROOT = { x: -545, y: 1175, z: 0 };
   const bonePos = [
@@ -676,58 +718,80 @@ export function createElephant(route, index, opts = {}) {
     }
   }
   // ============================ ORELHAS =============================
-  const earOutline = [[0, 0], [-70, 45], [-200, 75], [-340, 62], [-450, 10], [-525, -95], [-552, -240], [-535, -390], [-470, -520], [-355, -615], [-215, -660], [-95, -640], [-15, -550], [25, -400], [35, -240], [20, -100]];
-  const esx = EAR.width / 587, esy = EAR.height / 735;
-  const earShape = (scale = 1, cx = -260, cy = -300) => {
+  // Orelhas gigantes (≈ altura da cabeça) penduradas ao lado da cabeça, cobertas por um manto
+  // laranja com borda listrada e um grande bloco de casas em terraços (referências 1, 2, 3 e 7).
+  // Contorno em coordenadas locais da orelha: x<0 para trás, y<0 para baixo, z>0 lado de fora;
+  // (0,0) = canto superior dianteiro (pivô na cabeça).
+  const earOutline = [[0, 0], [-80, 50], [-250, 80], [-420, 70], [-540, 20], [-610, -100], [-630, -280], [-615, -450], [-560, -590], [-440, -690], [-280, -730], [-130, -700], [-30, -600], [20, -440], [35, -260], [20, -110]];
+  const esx = (EAR.width * EM.EAR_SCALE) / 665, esy = (EAR.height * EM.EAR_SCALE) / 810;
+  const EAR_C = { x: -300 * esx, y: -320 * esy };
+  const earShape = (scale = 1, cx = EAR_C.x, cy = EAR_C.y) => {
     const sh = new THREE.Shape();
     const pts = earOutline.map(([x, y]) => new THREE.Vector2(cx + (x * esx - cx) * scale, cy + (y * esy - cy) * scale));
     sh.moveTo(pts[0].x, pts[0].y); sh.splineThru(pts.slice(1).concat([pts[0]]));
     return sh;
   };
-  // deformação da orelha em coordenadas locais (x<0 para trás, y<0 para baixo, z>0 lado de fora)
+  const EAR_W = 665 * esx, EAR_H = 810 * esy;
+  // deformação da orelha (ondulação suave: topo enrolando para fora, traseira abrindo, ponta de baixo fechando)
   const earWarp = (p) => {
-    const topCurl = Math.max(0, (p.y + 150) / 230); p.z += 75 * topCurl * topCurl;
-    const back = Math.min(1, -p.x / 540); p.z += 50 * back * back;
-    const low2 = Math.max(0, (-p.y - 420) / 220); p.z -= 22 * low2 * low2;
-    const n = noise.noise2(p.x / 180 + 7, p.y / 180) * 6; p.z += n;
+    const topCurl = Math.max(0, (p.y + 170 * esy) / (250 * esy)); p.z += 70 * topCurl * topCurl;
+    const back = Math.min(1, -p.x / EAR_W); p.z += 70 * back * back;
+    const low2 = Math.max(0, (-p.y - 380 * esy) / (360 * esy)); p.z += 48 * low2 * low2; // base abre para fora (afasta do ombro)
+    p.z += noise.noise2(p.x / 220 + 7, p.y / 220) * 9;
   };
   const earUV = (g) => {
     g.computeBoundingBox(); const bb = g.boundingBox; const p = g.attributes.position; const uv = g.attributes.uv;
-    for (let i = 0; i < p.count; i++) uv.setXY(i, ((p.getX(i) - bb.min.x) / (bb.max.x - bb.min.x)) * 0.55, ((p.getY(i) - bb.min.y) / (bb.max.y - bb.min.y)) * 0.65);
+    for (let i = 0; i < p.count; i++) uv.setXY(i, ((p.getX(i) - bb.min.x) / (bb.max.x - bb.min.x)) * 0.7, ((p.getY(i) - bb.min.y) / (bb.max.y - bb.min.y)) * 0.8);
     return g;
   };
-  const blanketPoly = earShape(0.80).extractPoints(6).shape;
-  const housePoly = earShape(0.68).extractPoints(6).shape;
+  // uv planar do manto: borda listrada (v 0.5..0.75) ou miolo liso (v 0.75..1)
+  const blanketUV = (g, v0, v1, ru) => {
+    const p = g.attributes.position, uv = g.attributes.uv;
+    for (let i = 0; i < p.count; i++) uv.setXY(i, ((p.getX(i) + EAR_W) / EAR_W) * ru, v0 + (v1 - v0) * 0.98 * ((p.getY(i) + EAR_H) / (EAR_H + 90)));
+  };
+  const housePoly = earShape(0.78).extractPoints(8).shape;
+  const HOUSE_RECT = { x0: -575 * esx, x1: -95 * esx, y0: -640 * esy, y1: -140 * esy };
   for (const side of [-1, 1]) {
     const bone = side < 0 ? BONE.earL : BONE.earR;
-    // orelha aberta para fora (a traseira ultrapassa a largura do corpo) e com o topo inclinado para fora
-    const M = new THREE.Matrix4().compose(new V3(EAR_PIVOT.x, EAR_PIVOT.y, EAR_PIVOT.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0.22, 0.62, -0.06, 'YXZ')), new V3(1, 1, 1));
+    const M = new THREE.Matrix4().compose(new V3(EAR_PIVOT.x, EAR_PIVOT.y, EAR_PIVOT.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.12, EM.EAR_YAW, -0.05, 'YXZ')), new V3(1, 1, 1));
     if (side < 0) M.premultiply(new THREE.Matrix4().makeScale(1, 1, -1));
     const finish = (g) => { g.applyMatrix4(M); if (side < 0) flipWinding(g); g.computeVertexNormals(); return g; };
-    // aba de pele
-    let ear = new THREE.ExtrudeGeometry(earShape(1), { depth: 22, bevelEnabled: true, bevelThickness: 14, bevelSize: 14, bevelSegments: 3, curveSegments: low ? 4 : 6 });
-    ear.translate(0, 0, 14); earUV(ear); mapVertices(ear, earWarp);
+    // aba de pele (grossa na raiz, fina na borda: bisel)
+    let ear = new THREE.ExtrudeGeometry(earShape(1), { depth: 26, bevelEnabled: true, bevelThickness: 16, bevelSize: 16, bevelSegments: 3, curveSegments: low ? 5 : 8 });
+    ear.translate(0, 0, 16); earUV(ear); ear = tessellate(ear, low ? 70 : 48); mapVertices(ear, earWarp);
     ear = mergeVertices(ear); ear.computeVertexNormals();
     add('skin', finish(ear), bone);
-    // manto de pano no lado de fora
-    let bl = new THREE.ExtrudeGeometry(earShape(0.80), { depth: 8, bevelEnabled: true, bevelThickness: 3, bevelSize: 3, bevelSegments: 1, curveSegments: 5 });
-    bl.translate(0, 0, 52); { const p = bl.attributes.position, uv = bl.attributes.uv; for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getX(i) + 560) / 1100 * 2, 0.5 + 0.49 * (p.getY(i) + 680) / 760); }
-    mapVertices(bl, earWarp); bl = mergeVertices(bl); bl.computeVertexNormals();
-    add('cloth', finish(bl), bone);
-    // casas em terraços sobre o manto (blocos pastel com janelas)
+    // manto: miolo liso laranja + borda listrada (anel), ambos no lado de fora
+    const Z_BL = 63; // acima da face de fora da orelha (bisel chega a z≈58)
+    let core = new THREE.ExtrudeGeometry(earShape(0.84), { depth: 6, bevelEnabled: false, curveSegments: 6 });
+    core.translate(0, 0, Z_BL); core = tessellate(core, low ? 70 : 48); blanketUV(core, 0.75, 1, 3);
+    mapVertices(core, earWarp); core = mergeVertices(core); core.computeVertexNormals();
+    add('cloth', finish(core), bone);
+    const ringShape = earShape(0.93); ringShape.holes.push(earShape(0.83));
+    let ring = new THREE.ExtrudeGeometry(ringShape, { depth: 9, bevelEnabled: true, bevelThickness: 3, bevelSize: 3, bevelSegments: 1, curveSegments: 6 });
+    ring.translate(0, 0, Z_BL - 2); ring = tessellate(ring, low ? 70 : 48); blanketUV(ring, 0.5, 0.75, 1);
+    mapVertices(ring, earWarp); ring = mergeVertices(ring); ring.computeVertexNormals();
+    add('cloth', finish(ring), bone);
+    // bloco de casas em terraços sobre o manto: fileiras de prédios pastel saindo da orelha
     const hrng = createRng(SEED + 500 + index * 13 + side);
     const hg = [];
-    for (let y = -640; y < 60; y += 31) for (let x = -560, row = Math.round((y + 640) / 31); x < 40; x += 35) {
-      const xx = x + (row % 2 ? 17 : 0);
-      if (!pointInPolygon(xx, y, housePoly) || !pointInPolygon(xx + 16, y + 12, housePoly) || !pointInPolygon(xx - 16, y - 12, housePoly)) continue;
-      // blocos irregulares: ruído de baixa frequência abre clareiras de pano
-      if (noise.noise2(xx / 150 + side * 9 + index, y / 150) < -0.25) continue;
-      if (hrng() < 0.1) continue;
-      const h = 10 + hrng() * 16;
-      const b = boxHouse(28, 24, h, 'z', hrng.pick(COLORS.houses), hrng.pick(COLORS.houses));
-      b.translate(xx, y, 61 + h / 2);
-      mapVertices(b, earWarp);
-      hg.push(b);
+    const dy = 28 * esy, dx = 31 * esx;
+    for (let y = HOUSE_RECT.y0, row = 0; y < HOUSE_RECT.y1; y += dy, row++) {
+      for (let x = HOUSE_RECT.x0 + (row % 2 ? dx / 2 : 0); x < HOUSE_RECT.x1; x += dx) {
+        if (!pointInPolygon(x, y, housePoly) || !pointInPolygon(x + dx * 0.5, y + dy * 0.5, housePoly) || !pointInPolygon(x - dx * 0.5, y - dy * 0.5, housePoly)) continue;
+        // o bloco tem recortes retangulares (como nas referências): ruído quantizado abre falhas
+        const cut = noise.noise2(Math.floor(x / (dx * 3)) * 0.9 + side * 9 + index, Math.floor(y / (dy * 3)) * 0.9);
+        if (cut < -0.55) continue;
+        if (hrng() < 0.06) continue;
+        // mais fundo no centro do bloco
+        const cxr = (x - (HOUSE_RECT.x0 + HOUSE_RECT.x1) / 2) / ((HOUSE_RECT.x1 - HOUSE_RECT.x0) / 2);
+        const h = EM.EAR_HOUSE_H.min + (EM.EAR_HOUSE_H.max - EM.EAR_HOUSE_H.min) * hrng() * (1 - 0.35 * Math.abs(cxr));
+        const wall = hrng.pick(COLORS.houses);
+        const b = boxHouse(dx * 0.92, dy * 0.9, h, 'z', wall, wall, true);
+        b.translate(x, y, Z_BL + 5 + h / 2);
+        mapVertices(b, earWarp);
+        hg.push(b);
+      }
     }
     if (hg.length) add('city', finish(mergeGeometries(hg, false)), bone);
   }
@@ -824,6 +888,9 @@ export function createElephant(route, index, opts = {}) {
     add('cloth', g);
   }
   // ============================ CIDADE DO DORSO ====================
+  // Tapete denso de casas pastel (20–70 m) cobrindo todo o dorso e descendo em terraços pelos
+  // flancos; palácio com cúpula dourada e minaretes atrás do centro; prédio de tijolos com arcos
+  // e praça de mercado no centro (ponto da entrega). Tudo mesclado em UM grupo de material.
   const city = [];
   const goldCity = [];
   const rngCity = createRng(SEED + 9001 + index * 31);
@@ -833,112 +900,169 @@ export function createElephant(route, index, opts = {}) {
     const ny = Math.sqrt(1 - q); tmp.set(nx, ny, nz); bodyPoint(tmp, out);
     tmp2.set(nx / RX, ny / B.ry, nz / B.rz).normalize(); return tmp2; // normal
   };
-  const inPalace = (x, z) => Math.abs(x - PALACE_X) < 185 && Math.abs(z) < 145;
-  const inBrick = (x, z) => x > PALACE_X + 150 && x < PALACE_X + 345 && Math.abs(z) < 75;
-  const inPlaza = (x, z) => x > PALACE_X + 345 && x < PALACE_X + 440 && Math.abs(z) < 48;
+  const insideNeckOrHead = (p) => (((p.x - 560) / 285) ** 2 + ((p.y - 1095) / 320) ** 2 + (p.z / 320) ** 2 < 1) || (((p.x - HD.cx) / (HD.radius * 1.02)) ** 2 + ((p.y - HD.cy) / (HD.radius * 1.2)) ** 2 + (p.z / (HD.radius * 0.95)) ** 2 < 1);
+  const inPalace = (x, z) => Math.abs(x - PALACE_X) < 225 && Math.abs(z) < 175;
+  const inBrick = (x, z) => Math.abs(x - BRICK.x) < BRICK.hx + 6 && Math.abs(z - BRICK.z) < BRICK.hz + 6;
+  const inPlaza = (x, z) => x > PZ.x0 && x < PZ.x1 && Math.abs(z) < PZ.hz;
+  const nearPlaza = (x, z) => x > PZ.x0 - 40 && x < PZ.x1 + 40 && Math.abs(z) < PZ.hz + 40;
   {
-    const spacing = low ? 34 : 26;
-    const nrm = new V3(), qh = new THREE.Quaternion(), qy = new THREE.Quaternion();
-    for (let x = -RX; x <= RX; x += spacing) for (let z = -B.rz, row = Math.round((x + RX) / spacing); z <= B.rz; z += spacing) {
-      const zz = z + (row % 2 ? spacing / 2 : 0) + rngCity.range(-5, 5), xx = x + rngCity.range(-5, 5);
-      const n = surfAt(xx, zz, tmp3); if (!n) continue;
-      if (n.y < 0.27) continue;
-      if (inPalace(xx, zz) || inBrick(xx, zz) || inPlaza(xx, zz)) continue;
-      // ruas: curvas de ruído + avenida central para a frente
-      const st = noise.noise2(xx / 230 + index * 3.1, zz / 230);
-      if (Math.abs(st) < 0.07) continue;
-      if (Math.abs(zz) < 16 && xx > PALACE_X + 440) continue;
-      // densidade cai nos flancos
-      if (rngCity() > 0.45 + 0.6 * Math.pow(n.y, 1.3)) continue;
-      const w = rngCity.range(14, 32), d = rngCity.range(14, 32), h = rngCity.range(14, 38) * (rngCity() < 0.06 ? 1.8 : 1);
-      const wall = rngCity.pick(COLORS.houses), roof = rngCity.pick(COLORS.roofs);
-      const pitched = rngCity() < 0.4;
-      // as casas acompanham a curvatura do dorso (tapete de casas, como nas referências): "cima" = normal da pele
-      nrm.copy(n); qh.copy(quatFromUp(nrm)).multiply(qy.setFromAxisAngle(_up, rngCity.range(-0.25, 0.25)));
-      const b = boxHouse(w, h + 8, d, 'y', wall, pitched ? wall : roof);
-      b.translate(0, (h - 8) / 2, 0); placeGeom(b, tmp3, qh); city.push(b);
-      if (pitched) { const r = roofWedge(w + 2, d + 2, rngCity.range(6, 12), roof); r.translate(0, h - 0.5, 0); placeGeom(r, tmp3, qh); city.push(r); }
+    const spacing = low ? EM.CITY_SPACING_LOW : EM.CITY_SPACING_HIGH;
+    const nrm = new V3(), qh = new THREE.Quaternion(), qy = new THREE.Quaternion(), dirv = new V3();
+    let row = 0;
+    for (let x = -RX * 0.96; x <= RX * 0.94; x += spacing, row++) {
+      const nx = x / RX; const k = Math.sqrt(Math.max(0.03, 1 - nx * nx));
+      const arcR = (k * (B.ry + B.rz)) / 2;      // raio aproximado da seção transversal
+      const dphi = spacing / arcR;
+      // ângulo máximo a partir do zênite: desce bem pelos flancos no meio, menos nas pontas
+      const phiMax = EM.CITY_FLANK_ANGLE * (0.6 + 0.4 * smooth(0.1, 0.5, k));
+      for (let phi = -phiMax + (row % 2 ? dphi / 2 : 0); phi <= phiMax; phi += dphi) {
+        const p2 = phi + rngCity.range(-0.12, 0.12) * dphi, xx = x + rngCity.range(-0.12, 0.12) * spacing;
+        const nx2 = xx / RX, k2 = Math.sqrt(Math.max(0.03, 1 - nx2 * nx2));
+        dirv.set(nx2, Math.cos(p2) * k2, Math.sin(p2) * k2);
+        bodyPoint(dirv, tmp3);
+        nrm.set(dirv.x / RX, dirv.y / B.ry, dirv.z / B.rz).normalize();
+        const lx = tmp3.x, lz = tmp3.z;
+        if (insideNeckOrHead(tmp3)) continue;
+        if (Math.abs(nx2 + 0.12) < 0.075 && Math.abs(p2) > 1.05) continue; // trama da barriga
+        if (inPalace(lx, lz) || inBrick(lx, lz) || inPlaza(lx, lz)) continue;
+        // ruas: curvas de ruído + avenida central para a frente da praça
+        const st = noise.noise2(lx / 210 + index * 3.1, lz / 210 + phi * 0.3);
+        if (Math.abs(st) < 0.05) continue;
+        if (Math.abs(lz) < 14 && lx > PZ.x1) continue;
+        // densidade quase total em cima, caindo um pouco nos flancos baixos
+        const flank = Math.abs(phi) / phiMax;
+        if (rngCity() > 1 - 0.35 * flank * flank) continue;
+        const edge = nearPlaza(lx, lz);
+        const foot = rngCity.range(EM.HOUSE_FOOT.min, EM.HOUSE_FOOT.max);
+        const w = foot * rngCity.range(0.85, 1.15), d = foot * rngCity.range(0.85, 1.15);
+        let h = rngCity.range(EM.HOUSE_H.min, EM.HOUSE_H.max) * (1 - 0.3 * flank);
+        if (edge) h = rngCity.range(48, 72);
+        else if (rngCity() < EM.TALL_BLOCK_CHANCE) h *= 1.6;
+        const wall = rngCity.pick(COLORS.houses), roof = rngCity() < 0.45 ? rngCity.pick(COLORS.roofs) : rngCity.pick(COLORS.houses);
+        const pitched = !edge && rngCity() < 0.3;
+        nrm.copy(nrm); qh.copy(quatFromUp(nrm)).multiply(qy.setFromAxisAngle(_up, rngCity.range(-0.2, 0.2)));
+        const sink = 18;
+        const b = boxHouse(w, h + sink, d, 'y', wall, pitched ? wall : roof, false, h > 34);
+        b.translate(0, (h - sink) / 2, 0); placeGeom(b, tmp3, qh); city.push(b);
+        if (pitched) { const r = roofWedge(w + 2, d + 2, rngCity.range(6, 14), roof); r.translate(0, h - 0.5, 0); placeGeom(r, tmp3, qh); city.push(r); }
+        else if (h > 50 && rngCity() < 0.14) { // cúpula dourada ou branca sobre prédios altos
+          const dr = Math.min(w, d) * 0.3; const dome = new THREE.SphereGeometry(dr, 10, 6, 0, TAU, 0, Math.PI / 2); dome.translate(0, h - 1, 0); placeGeom(dome, tmp3, qh);
+          if (rngCity() < 0.6) goldCity.push(dome); else { remapUV(dome, REG.PLAIN); setColorRange(dome, 0xf8f4ec); city.push(dome); }
+        }
+      }
     }
   }
-  // --- palácio ---
+  // --- palácio (atrás do centro) ---
   {
-    const px = PALACE_X;
-    const base = archBox(300, 150, 220, REG.PAL, 0xf4f1ea); base.translate(px, 1470 + 75, 0); city.push(base);
-    const tier = archBox(190, 60, 150, REG.PAL, 0xf4f1ea, { rv: 0.34 }); tier.translate(px, PALACE_BASE_TOP + 30, 0); city.push(tier);
-    const drum = new THREE.CylinderGeometry(96, 96, 40, 28, 1, false); remapUV(drum, REG.PAL, 0, Infinity, 1, 0.17); setColorRange(drum, 0xf4f1ea);
-    drum.translate(px, PALACE_BASE_TOP + 60 + 20, 0); city.push(drum);
-    const dome = new THREE.SphereGeometry(DOME_R, 28, 16, 0, TAU, 0, Math.PI / 2); dome.translate(px, DOME_CY, 0); goldCity.push(dome);
-    const spire = new THREE.ConeGeometry(7, 40, 10); spire.translate(px, DOME_CY + DOME_R + 16, 0); goldCity.push(spire);
-    const knob = new THREE.SphereGeometry(7, 8, 6); knob.translate(px, DOME_CY + DOME_R + 2, 0); goldCity.push(knob);
-    // minaretes
-    const nMin = 3 + rngCity.int(0, 2);
-    const minPos = [[px - 132, -92], [px - 132, 92], [px + 132, -92], [px + 132, 92], [px + 40, -130]];
-    for (let i = 0; i < nMin; i++) {
-      const [mx, mz] = minPos[i]; const h = 300 + rngCity.range(-20, 25);
-      const shaft = new THREE.CylinderGeometry(11, 13, h, 12); remapUV(shaft, REG.PLAIN); setColorRange(shaft, 0xf6f3ec); shaft.translate(mx, 1475 + h / 2, mz); city.push(shaft);
-      for (const f of [0.58, 0.82]) { const balc = new THREE.CylinderGeometry(18, 15, 8, 12); remapUV(balc, REG.PLAIN); setColorRange(balc, 0xe8e2d6); balc.translate(mx, 1475 + h * f, mz); city.push(balc); }
-      const cap = new THREE.SphereGeometry(15, 12, 8, 0, TAU, 0, Math.PI / 2); cap.translate(mx, 1475 + h, mz); goldCity.push(cap);
-      const pin = new THREE.ConeGeometry(3, 26, 6); pin.translate(mx, 1475 + h + 22, mz); goldCity.push(pin);
+    const px = PALACE_X; const yb = 1300; // base afunda no corpo
+    const base = archBox(440, PALACE_BASE_TOP - yb, 320, REG.PAL, 0xf4f1ea); base.translate(px, (PALACE_BASE_TOP + yb) / 2, 0); city.push(base);
+    // soco de tijolos vermelhos com arcos ao redor da base
+    const sock = archBox(452, 70, 332, REG.BRK, 0xffffff, { rv: 0.4 }); sock.translate(px, yb + 190, 0); city.push(sock);
+    const tier = archBox(280, 65, 210, REG.PAL, 0xf4f1ea, { rv: 0.34 }); tier.translate(px, PALACE_BASE_TOP + 32, 0); city.push(tier);
+    const drum = new THREE.CylinderGeometry(DOME_R + 6, DOME_R + 6, 38, 32, 1, false); remapUV(drum, REG.PAL, 0, Infinity, 1, 0.17); setColorRange(drum, 0xf4f1ea);
+    drum.translate(px, PALACE_BASE_TOP + 65 + 19, 0); city.push(drum);
+    const dome = new THREE.SphereGeometry(DOME_R, 32, 18, 0, TAU, 0, Math.PI / 2); dome.translate(px, DOME_CY, 0); goldCity.push(dome);
+    const spire = new THREE.ConeGeometry(7, 44, 10); spire.translate(px, DOME_CY + DOME_R + 18, 0); goldCity.push(spire);
+    const knob = new THREE.SphereGeometry(8, 8, 6); knob.translate(px, DOME_CY + DOME_R + 2, 0); goldCity.push(knob);
+    // cúpulas menores nos cantos do bloco principal
+    for (const [cx, cz] of [[-160, -110], [-160, 110], [160, -110], [160, 110]]) {
+      const sd = new THREE.SphereGeometry(34, 16, 9, 0, TAU, 0, Math.PI / 2); sd.translate(px + cx, PALACE_BASE_TOP, cz); goldCity.push(sd);
+      const sdr = new THREE.CylinderGeometry(36, 36, 16, 16); remapUV(sdr, REG.PLAIN); setColorRange(sdr, 0xf4f1ea); sdr.translate(px + cx, PALACE_BASE_TOP, cz); city.push(sdr);
     }
-    // torres quadradas atrás, uma com telhado rosa
+    // minaretes altos (4 cantos + 2 atrás)
+    const minPos = [[px - 200, -150], [px - 200, 150], [px + 200, -150], [px + 200, 150], [px - 60, -185], [px - 60, 185]];
+    for (let i = 0; i < minPos.length; i++) {
+      const [mx, mz] = minPos[i]; const h = (i < 4 ? 400 : 330) + rngCity.range(-15, 15); const y0 = 1400;
+      const shaft = new THREE.CylinderGeometry(12, 15, h, 12); remapUV(shaft, REG.PLAIN); setColorRange(shaft, 0xf6f3ec); shaft.translate(mx, y0 + h / 2, mz); city.push(shaft);
+      for (const f of [0.6, 0.84]) { const balc = new THREE.CylinderGeometry(21, 16, 10, 12); remapUV(balc, REG.PLAIN); setColorRange(balc, 0xe8e2d6); balc.translate(mx, y0 + h * f, mz); city.push(balc); }
+      const cap = new THREE.SphereGeometry(16, 12, 8, 0, TAU, 0, Math.PI / 2); cap.translate(mx, y0 + h, mz); goldCity.push(cap);
+      const pin = new THREE.ConeGeometry(3.5, 30, 6); pin.translate(mx, y0 + h + 24, mz); goldCity.push(pin);
+    }
+    // torres quadradas com telhado piramidal (rosa e vinho) nos fundos
     const tcol = [0xe8a0b4, 0xb0563d];
-    for (const [i, tz] of [[0, -100], [1, 100]]) {
-      const tw = new THREE.BoxGeometry(46, 210, 46); setColorRange(tw, 0xf1ece3); remapUV(tw, REG.TOWER, 0, 8); remapUV(tw, REG.TOWER, 16, 24); remapUV(tw, REG.PLAIN, 8, 16);
-      tw.translate(px - 178, 1455 + 105, tz); city.push(tw);
-      const roof = new THREE.ConeGeometry(34, 70, 4); roof.rotateY(Math.PI / 4); remapUV(roof, REG.PLAIN); setColorRange(roof, tcol[i]); roof.translate(px - 178, 1455 + 210 + 35, tz); city.push(roof);
+    for (const [i, tz] of [[0, -60], [1, 60]]) {
+      const tw = new THREE.BoxGeometry(50, 240, 50); setColorRange(tw, 0xf1ece3); remapUV(tw, REG.TOWER, 0, 8); remapUV(tw, REG.TOWER, 16, 24); remapUV(tw, REG.PLAIN, 8, 16);
+      tw.translate(px - 265, 1350 + 120, tz); city.push(tw);
+      const roof = new THREE.ConeGeometry(37, 80, 4); roof.rotateY(Math.PI / 4); remapUV(roof, REG.PLAIN); setColorRange(roof, tcol[i]); roof.translate(px - 265, 1350 + 240 + 40, tz); city.push(roof);
     }
-    // prédio de tijolos vermelhos com arcos
-    const brick = archBox(180, 130, 130, REG.BRK, 0xffffff, { topColor: 0xc9b79c }); brick.translate(px + 250, 1405 + 65, 0); city.push(brick);
-    // praça de mercado (terraço) à frente
-    const plaza = new THREE.BoxGeometry(90, 70, 90); setColorRange(plaza, 0xe4dccb); remapUV(plaza, REG.PLAIN, 0, 8); remapUV(plaza, REG.PLAIN, 12, 24); remapUV(plaza, REG.PAVE, 8, 12);
-    surfAt(px + 350, 0, tmp3); plaza.translate(px + 395, tmp3.y - 20, 0); city.push(plaza);
-    // tendas coloridas na praça
-    for (let i = 0; i < 7; i++) { const t = new THREE.ConeGeometry(7, 7, 4); t.rotateY(Math.PI / 4); setColorRange(t, rngCity.pick(COLORS.pompoms)); remapUV(t, REG.PLAIN); t.translate(px + 365 + (i % 4) * 18, tmp3.y + 15 + 4, -24 + Math.floor(i / 4) * 30 + (i % 2) * 6); city.push(t); }
+  }
+  // --- prédio alto de tijolos vermelhos com arcos, ao lado da praça ---
+  {
+    surfAt(BRICK.x, BRICK.z, tmp3); const y0 = tmp3.y - 40;
+    const brick = archBox(BRICK.hx * 2, BRICK_TOP - y0, BRICK.hz * 2, REG.BRK, 0xffffff, { topColor: 0xc9b79c }); brick.translate(BRICK.x, (BRICK_TOP + y0) / 2, BRICK.z); city.push(brick);
+    const crown = archBox(BRICK.hx * 2 + 10, 14, BRICK.hz * 2 + 10, REG.PLAIN, 0xe9d9c4); crown.translate(BRICK.x, BRICK_TOP + 5, BRICK.z); city.push(crown);
+    // minarete fino colado ao prédio
+    const mh = 300; const shaft = new THREE.CylinderGeometry(9, 11, mh, 10); remapUV(shaft, REG.PLAIN); setColorRange(shaft, 0xf6f3ec); shaft.translate(BRICK.x + BRICK.hx + 16, y0 + mh / 2, BRICK.z + BRICK.hz - 10); city.push(shaft);
+    const cap = new THREE.SphereGeometry(13, 10, 7, 0, TAU, 0, Math.PI / 2); cap.translate(BRICK.x + BRICK.hx + 16, y0 + mh, BRICK.z + BRICK.hz - 10); goldCity.push(cap);
+  }
+  // --- praça de mercado (terraço calçado no centro do dorso) com tendas coloridas ---
+  {
+    surfAt((PZ.x0 + PZ.x1) / 2, 0, tmp3); const top = PLAZA_TOP;
+    const plaza = new THREE.BoxGeometry(PZ.x1 - PZ.x0, 80, PZ.hz * 2); setColorRange(plaza, 0xe4dccb); remapUV(plaza, REG.PLAIN, 0, 8); remapUV(plaza, REG.PLAIN, 12, 24); remapUV(plaza, REG.PAVE, 8, 12);
+    plaza.translate((PZ.x0 + PZ.x1) / 2, top - 40, 0); city.push(plaza);
+    const trng = createRng(SEED + 4242 + index);
+    for (let i = 0; i < 22; i++) {
+      const t = new THREE.ConeGeometry(trng.range(5, 8), 6, trng() < 0.5 ? 4 : 8); t.rotateY(Math.PI / 4); setColorRange(t, trng.pick(COLORS.pompoms)); remapUV(t, REG.PLAIN);
+      t.translate(PZ.x0 + 20 + trng() * (PZ.x1 - PZ.x0 - 40), top + 5, -PZ.hz + 16 + trng() * (PZ.hz * 2 - 32)); city.push(t);
+    }
+    // fonte no centro da praça
+    const fb = new THREE.CylinderGeometry(12, 13, 4, 12); remapUV(fb, REG.PLAIN); setColorRange(fb, 0xd9d0bd); fb.translate((PZ.x0 + PZ.x1) / 2, top + 2, 0); city.push(fb);
   }
   // --- torres esguias ---
-  const slimTower = (p, up, h, color, capGold = true) => {
+  const slimTower = (p, up, h, color, capGold = true, r = 6.5) => {
     const q = quatFromUp(up);
-    const shaft = new THREE.CylinderGeometry(6.5, 8, h, 10); remapUV(shaft, REG.TOWER, 0, Infinity, 1, h / 90); setColorRange(shaft, color);
+    const shaft = new THREE.CylinderGeometry(r, r * 1.25, h, 10); remapUV(shaft, REG.TOWER, 0, Infinity, 1, Math.min(0.99, h / 160)); setColorRange(shaft, color);
     shaft.translate(0, h / 2 - 4, 0); placeGeom(shaft, p, q); city.push(shaft);
-    const top = new THREE.CylinderGeometry(11, 9, 8, 10); remapUV(top, REG.PLAIN); setColorRange(top, color); top.translate(0, h - 4, 0); placeGeom(top, p, q); city.push(top);
-    if (capGold) { const cap = new THREE.SphereGeometry(10, 10, 7, 0, TAU, 0, Math.PI / 2); cap.translate(0, h - 2, 0); placeGeom(cap, p, q); goldCity.push(cap); }
-    else { const cap = new THREE.ConeGeometry(11, 20, 8); remapUV(cap, REG.PLAIN); setColorRange(cap, 0xb0563d); cap.translate(0, h + 8, 0); placeGeom(cap, p, q); city.push(cap); }
+    const top = new THREE.CylinderGeometry(r * 1.7, r * 1.4, 8, 10); remapUV(top, REG.PLAIN); setColorRange(top, color); top.translate(0, h - 4, 0); placeGeom(top, p, q); city.push(top);
+    if (capGold) { const cap = new THREE.SphereGeometry(r * 1.55, 10, 7, 0, TAU, 0, Math.PI / 2); cap.translate(0, h - 2, 0); placeGeom(cap, p, q); goldCity.push(cap); }
+    else { const cap = new THREE.ConeGeometry(r * 1.7, r * 3, 8); remapUV(cap, REG.PLAIN); setColorRange(cap, 0xb0563d); cap.translate(0, h + r * 1.2, 0); placeGeom(cap, p, q); city.push(cap); }
   };
-  // --- cidades das presas ---
+  // torres e pequenas mesquitas espalhadas pelo tapete de casas
+  for (let i = 0; i < 14; i++) {
+    const x = rngCity.range(-RX * 0.8, RX * 0.8), z = rngCity.range(-B.rz * 0.7, B.rz * 0.7);
+    if (inPalace(x, z) || inBrick(x, z) || nearPlaza(x, z)) continue;
+    const n = surfAt(x, z, tmp3); if (!n || n.y < 0.5 || insideNeckOrHead(tmp3)) continue;
+    if (i % 3 === 0) { // mesquita pequena: tambor + cúpula + minarete
+      const dr = rngCity.range(26, 40); const drum = new THREE.CylinderGeometry(dr, dr, 56, 16); remapUV(drum, REG.PAL, 0, Infinity, 1, 0.3); setColorRange(drum, 0xf6f1e8); drum.translate(0, 20, 0); placeGeom(drum, tmp3, quatFromUp(n)); city.push(drum);
+      const dome = new THREE.SphereGeometry(dr, 18, 10, 0, TAU, 0, Math.PI / 2); dome.translate(0, 48, 0); placeGeom(dome, tmp3, quatFromUp(n)); goldCity.push(dome);
+      slimTower(tmp3.clone().addScaledVector(n, -4).add(new V3(dr + 14, 0, 0)), n.clone(), 120 + rngCity.range(0, 60), 0xf6f3ec, true, 7);
+    } else slimTower(tmp3.clone().addScaledVector(n, -4), n.clone(), 90 + rngCity.range(0, 90), rngCity.pick([0xf6f3ec, 0xf1c9b1, 0xeadbc6]), rngCity() < 0.6, 7);
+  }
+  // --- cidades das presas: casas densas no dorso de cada presa + torres esguias ---
   for (const [si, curve] of tuskCurves.entries()) {
-    const side = si === 0 ? -1 : 1;
     const rAt = (t) => (t < 0.06 ? lerp(92, 72, t / 0.06) : lerp(72, TK.tipRadius, (t - 0.06) / 0.91));
     const tan = new V3(), up = new V3(), sd = new V3(), P = new V3();
     const trng = createRng(SEED + 1200 + index * 7 + si);
-    for (let t = 0.17; t < 0.95; t += 0.0115) {
-      if (Math.abs(t - 0.3) < 0.04 || Math.abs(t - 0.62) < 0.04) continue;
+    for (let t = 0.15; t < 0.955; t += EM.TUSK_HOUSE_STEP) {
+      if (Math.abs(t - 0.3) < 0.035 || Math.abs(t - 0.62) < 0.035) continue;
       curve.getPointAt(t, P); curve.getTangentAt(t, tan); surfaceUp(tan, up); sd.crossVectors(tan, up).normalize();
-      const r = rAt(t); const nAcross = r > 50 ? 3 : r > 32 ? 2 : 1;
+      const r = rAt(t); const nAcross = r > 56 ? 5 : r > 44 ? 4 : r > 30 ? 3 : 2;
+      const span = Math.min(0.95, 36 / r * 1.1);
       for (let k = 0; k < nAcross; k++) {
-        const phi = nAcross === 1 ? trng.range(-0.25, 0.25) : ((k / (nAcross - 1)) * 2 - 1) * Math.min(0.62, 28 / r * 1.2) + trng.range(-0.08, 0.08);
-        if (trng() < 0.12) continue;
+        const phi = ((k / (nAcross - 1)) * 2 - 1) * span + trng.range(-0.06, 0.06);
+        if (trng() < 0.08) continue;
         const nrm = tmp.copy(up).multiplyScalar(Math.cos(phi)).addScaledVector(sd, Math.sin(phi)).normalize();
-        const w = trng.range(8, 14), d = trng.range(8, 14), h = trng.range(7, 16);
-        const b = boxHouse(w, h + 4, d, 'y', trng.pick(COLORS.houses), trng.pick(COLORS.roofs));
-        b.translate(0, (h - 4) / 2, 0); placeGeom(b, tmp2.copy(P).addScaledVector(nrm, r - 1), quatFromUp(nrm).multiply(new THREE.Quaternion().setFromAxisAngle(_up, Math.atan2(tan.z, tan.x))));
+        const w = trng.range(8, 13), d = trng.range(8, 13), h = trng.range(7, 18) * (trng() < 0.08 ? 1.7 : 1);
+        const b = boxHouse(w, h + 5, d, 'y', trng.pick(COLORS.houses), trng.pick(COLORS.roofs));
+        b.translate(0, (h - 5) / 2, 0); placeGeom(b, tmp2.copy(P).addScaledVector(nrm, r - 1.5), quatFromUp(nrm).multiply(new THREE.Quaternion().setFromAxisAngle(_up, Math.atan2(tan.z, tan.x))));
         city.push(b);
       }
     }
-    for (const t of [0.2, 0.4, 0.52, 0.74, 0.9]) {
+    for (const t of [0.19, 0.4, 0.5, 0.56, 0.72, 0.8, 0.9]) {
       curve.getPointAt(t, P); curve.getTangentAt(t, tan); surfaceUp(tan, up);
-      slimTower(tmp2.copy(P).addScaledVector(up, rAt(t) - 2), up.clone(), 50 + trng.range(0, 40), trng.pick([0xf6f3ec, 0xf1c9b1, 0xeadbc6]), trng() < 0.7);
+      slimTower(tmp2.copy(P).addScaledVector(up, rAt(t) - 2), up.clone(), 55 + trng.range(0, 60), trng.pick([0xf6f3ec, 0xf1c9b1, 0xeadbc6]), trng() < 0.7, 4.5);
     }
   }
   // --- torres no alto da cabeça (atrás da placa) ---
   for (const lon of [-0.62, -0.36, -0.12, 0.12, 0.36, 0.62]) {
     const d = headDir(1.28, lon, new V3()); headPoint(d, tmp);
-    slimTower(tmp.clone().addScaledVector(d, -6), new V3(0, 1, 0), 70 + rngCity.range(0, 50), rngCity.pick([0xf6f3ec, 0xeadbc6]), rngCity() < 0.6);
+    slimTower(tmp.clone().addScaledVector(d, -6), new V3(0, 1, 0), 80 + rngCity.range(0, 60), rngCity.pick([0xf6f3ec, 0xeadbc6]), rngCity() < 0.6);
   }
   // casinhas no topo da cabeça entre as torres
-  for (let i = 0; i < (low ? 30 : 60); i++) {
-    const d = headDir(rngCity.range(1.12, 1.42), rngCity.range(-0.75, 0.75), new V3()); headPoint(d, tmp);
-    const w = rngCity.range(9, 16), dd = rngCity.range(9, 16), h = rngCity.range(8, 18);
-    const b = boxHouse(w, h + 10, dd, 'y', rngCity.pick(COLORS.houses), rngCity.pick(COLORS.roofs)); b.translate(tmp.x, tmp.y + (h - 10) / 2, tmp.z); city.push(b);
+  for (let i = 0; i < (low ? 40 : 90); i++) {
+    const d = headDir(rngCity.range(1.1, 1.44), rngCity.range(-0.8, 0.8), new V3()); headPoint(d, tmp);
+    const w = rngCity.range(9, 17), dd = rngCity.range(9, 17), h = rngCity.range(10, 24);
+    const b = boxHouse(w, h + 12, dd, 'y', rngCity.pick(COLORS.houses), rngCity.pick(COLORS.roofs)); b.translate(tmp.x, tmp.y + (h - 12) / 2, tmp.z); city.push(b);
   }
   if (city.length) add('city', mergeGeometries(city, false));
   for (const g of goldCity) add('gold', g);
@@ -998,7 +1122,7 @@ export function createElephant(route, index, opts = {}) {
     [HD.cx, HD.cy, 0, 345], [560, 1090, 0, 300],
     [1120, 700, 0, 135], [1140, 420, 0, 115], [1240, 150, 0, 95],
     [1260, 720, -300, 85], [1620, 700, -400, 65], [1260, 720, 300, 85], [1620, 700, 300 + 100, 65],
-    [520, 1050, -400, 240], [520, 1050, 400, 240],
+    [540, 1000, -450, 300], [540, 1000, 450, 300],
   ];
   for (const sx of [1, -1]) for (const sz of [-1, 1]) { colLocal.push([sx * LG.offsetX, 250, sz * LG.offsetZ, 160], [sx * LG.offsetX, 600, sz * LG.offsetZ, 170]); }
   const colliders = colLocal.map((c) => ({ center: new THREE.Vector3(), local: new THREE.Vector3(c[0], c[1], c[2]), radius: c[3] }));
@@ -1039,7 +1163,7 @@ export function createElephant(route, index, opts = {}) {
       B2.tail.rotation.x = 0.05 * Math.sin((TAU * t) / 3.7);
       group.updateMatrixWorld(true);
       for (const c of colliders) c.center.copy(c.local).applyMatrix4(rig.matrixWorld);
-      ent.deliveryMarker.set(PALACE_X, ent.cityTop + 260, 0).applyMatrix4(group.matrixWorld);
+      ent.deliveryMarker.set((PZ.x0 + PZ.x1) / 2, ent.cityTop + 260, 0).applyMatrix4(group.matrixWorld);
     },
     // Altura (mundo) da superfície do elefante/cidade na vertical de (x,z); null fora.
     getSurfaceHeight(x, z) {
@@ -1053,9 +1177,10 @@ export function createElephant(route, index, opts = {}) {
         const ny = Math.sqrt(1 - q), nx = px / RX, nz = pz / B.rz;
         let h = B.cy + B.ry * ny + backBump(nx, ny);
         const nY = (ny / B.ry) / Math.hypot(nx / RX, ny / B.ry, nz / B.rz);
-        if (nY > 0.27 && !inPlaza(px, pz)) h += HOUSE_H;
-        if (inPalace(px, pz)) { h = Math.max(h, Math.abs(px - PALACE_X) < 95 && Math.abs(pz) < 75 ? PALACE_BASE_TOP + 60 : PALACE_BASE_TOP); const rr = Math.hypot(px - PALACE_X, pz); if (rr < DOME_R) h = Math.max(h, DOME_CY + Math.sqrt(DOME_R * DOME_R - rr * rr)); }
-        else if (inBrick(px, pz)) h = Math.max(h, 1535);
+        if (inPlaza(px, pz)) h = Math.max(h, PLAZA_TOP);
+        else if (inPalace(px, pz)) { h = Math.max(h, Math.abs(px - PALACE_X) < 140 && Math.abs(pz) < 105 ? PALACE_BASE_TOP + 65 : PALACE_BASE_TOP); const rr = Math.hypot(px - PALACE_X, pz); if (rr < DOME_R) h = Math.max(h, DOME_CY + Math.sqrt(DOME_R * DOME_R - rr * rr)); }
+        else if (inBrick(px, pz)) h = Math.max(h, BRICK_TOP);
+        else if (nY > 0.3) h += nearPlaza(px, pz) ? 60 : HOUSE_AVG;
         best = Math.max(best, h);
       }
       // cabeça (elipsoide) — topo

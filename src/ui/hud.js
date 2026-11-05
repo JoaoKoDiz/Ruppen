@@ -75,7 +75,7 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
 
   // ----------------------------- estado -------------------------------
   let helpTimer = H.HELP_INITIAL_TIME;
-  let toastTimer = 0;
+  let toastTimer = 0, toastDur = 1;
   let flashText = '', flashTimer = 0;   // dica breve (ex.: "Você não está sobre a cidade")
   let pulseT = 0;
   let mapOpen = false;
@@ -105,11 +105,23 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
     toastEl.replaceChildren();
     const parts = Array.isArray(next.msg) ? next.msg : [{ text: String(next.msg) }];
     for (const p of parts) { const s = el('span', p.accent ? 'accent' : '', p.text); toastEl.append(s); }
-    toastEl.classList.remove('show'); void toastEl.offsetWidth; // reinicia a animação
     toastEl.classList.add('show');
-    toastTimer = next.ms / 1000;
+    toastDur = next.ms / 1000; toastTimer = toastDur;
+    styleToast();
   }
   function flash(text) { flashText = text; flashTimer = H.FLASH_TIME; }
+  // Animação do aviso guiada pelo tempo de jogo (entra com escala, some com fade).
+  function styleToast() {
+    const p = 1 - toastTimer / toastDur;                  // 0..1
+    const ease = (k) => 1 - (1 - k) * (1 - k);
+    let op, sc = 1, dy = 0;
+    if (p < 0.12) { const k = ease(p / 0.12); op = k; sc = 0.86 + 0.17 * k; }
+    else if (p < 0.22) { const k = (p - 0.12) / 0.1; op = 1; sc = 1.03 - 0.03 * k; }
+    else if (p < 0.8) { op = 1; }
+    else { const k = (p - 0.8) / 0.2; op = 1 - k; sc = 1 + 0.04 * k; dy = -6 * k; }
+    toastEl.style.opacity = op.toFixed(3);
+    toastEl.style.transform = `translateY(${dy.toFixed(1)}px) scale(${sc.toFixed(3)})`;
+  }
 
   // ------------------------ eventos da entrega ------------------------
   delivery.onEvent?.((ev) => {
@@ -153,14 +165,19 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
     if (onScreen) {
       edge.style.display = 'none';
       if (zs.distance < H.MARKER_MIN_DIST || zs.overCity) { marker.style.display = 'none'; return; }
+      const sx = ((nx + 1) / 2) * W, sy = ((1 - ny) / 2) * Hh;
+      // não sobrepor o bloco de texto do topo (que já diz nome e distância)
+      const tr = top.getBoundingClientRect();
+      if (sy < tr.bottom + 40 && sx > tr.left + tr.width * 0.5 - 240 && sx < tr.left + tr.width * 0.5 + 240) { marker.style.display = 'none'; return; }
       marker.style.display = '';
-      marker.style.transform = `translate(${((nx + 1) / 2) * W}px, ${((1 - ny) / 2) * Hh}px)`;
+      marker.style.transform = `translate(${sx}px, ${sy}px)`;
       markerName.textContent = t.name;
       markerDist.textContent = formatDistance(zs.distance);
       return;
     }
     // fora da tela: leva o ponto até a borda do retângulo (com margem), a partir do centro
     marker.style.display = 'none';
+    if (zs.overCity || zs.distance < H.MARKER_MIN_DIST) { edge.style.display = 'none'; return; } // já estamos lá: a dica diz o que fazer
     edge.style.display = '';
     const cx = W / 2, cy = Hh / 2;
     let dx = nx * cx, dy = -ny * cy;            // vetor em px a partir do centro
@@ -169,13 +186,15 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
     const sx = Math.abs(dx) > 1e-6 ? (cx - m) / Math.abs(dx) : Infinity;
     const sy = Math.abs(dy) > 1e-6 ? (cy - m) / Math.abs(dy) : Infinity;
     const s = Math.min(sx, sy);
-    const ex = cx + dx * s, ey = cy + dy * s;
+    let ex = cx + dx * s, ey = cy + dy * s;
+    // não sobrepor o bloco de texto do topo: desce a seta para logo abaixo dele
+    const tr = top.getBoundingClientRect();
+    let underCaption = false;
+    if (ey < tr.bottom + 28 && Math.abs(ex - W / 2) < 300) { ey = tr.bottom + 28; underCaption = true; }
     const ang = Math.atan2(dy, dx) * 180 / Math.PI;     // 0° = direita
     edge.style.transform = `translate(${ex}px, ${ey}px)`;
     edgeSvg.style.transform = `rotate(${ang + 180}deg)`;  // o path aponta para a esquerda
-    edgeName.textContent = `${t.name} · ${formatDistance(zs.distance)}`;
-    // nome do lado de dentro da tela
-    edgeName.style.transform = `translate(${-dx * 0.0 - Math.sign(dx) * 0}px, 0)`;
+    edgeName.textContent = underCaption ? '' : `${t.name} · ${formatDistance(zs.distance)}`;
     edge.classList.toggle('hud-edge--left', ex < W * 0.25);
     edge.classList.toggle('hud-edge--right', ex > W * 0.75);
     edge.classList.toggle('hud-edge--top', ey < Hh * 0.25);
@@ -218,7 +237,8 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
     // toast
     if (toastTimer > 0) {
       toastTimer -= dt;
-      if (toastTimer <= 0) { toastEl.classList.remove('show'); if (toastQueue.length) showNextToast(); }
+      if (toastTimer <= 0) { toastEl.classList.remove('show'); toastEl.style.opacity = '0'; if (toastQueue.length) showNextToast(); }
+      else styleToast();
     }
 
     updateMarker();

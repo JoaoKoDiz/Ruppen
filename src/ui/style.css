@@ -1,1 +1,191 @@
-/* Estilos do HUD e do mapa (preenchido pelo módulo de UI) */
+/* =====================================================================
+   RUPPEN — estilos do HUD e do mapa.
+   O HUD é só texto sobre o jogo (sem caixas), no estilo das legendas das
+   referências: branco em negrito com sombra suave e a palavra-chave em
+   amarelo (#f5d54a). O mapa é um painel que desliza da esquerda ao centro
+   com o jogo borrado atrás.
+   ===================================================================== */
+
+:root {
+  --ui-accent: #f5d54a;
+  --ui-text: #ffffff;
+  --ui-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --ui-shadow: 0 1px 2px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.45), 0 0 24px rgba(0, 20, 50, 0.35);
+  --ui-gutter: 16px;
+}
+
+/* ------------------------------- HUD -------------------------------- */
+.hud {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  font-family: var(--ui-font);
+  color: var(--ui-text);
+  text-shadow: var(--ui-shadow);
+  user-select: none; -webkit-user-select: none;
+  z-index: 2;
+  transition: opacity 0.35s ease;
+}
+.hud.hud--mapopen { opacity: 0.25; }
+
+/* topo: "ENTREGAR EM / Zamurra / 12,4 km / Entregas: 3 / dica" */
+.hud-top {
+  position: absolute; top: max(14px, 2.2vh); left: 0; right: 0;
+  display: flex; flex-direction: column; align-items: center;
+  text-align: center; padding: 0 var(--ui-gutter);
+}
+.hud-label {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.32em; text-transform: uppercase;
+  opacity: 0.9;
+}
+.hud-city {
+  font-size: clamp(26px, 3.4vw, 36px); font-weight: 800; letter-spacing: 0.06em; line-height: 1.15;
+  color: var(--ui-accent); text-transform: uppercase;
+  margin-top: 2px;
+}
+.hud-dist { font-size: 16px; font-weight: 700; letter-spacing: 0.04em; margin-top: 2px; }
+.hud-count { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; opacity: 0.72; margin-top: 2px; }
+.hud-hint {
+  margin-top: 10px; font-size: 15px; font-weight: 700; letter-spacing: 0.03em;
+  opacity: 0; transform: translateY(-4px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  min-height: 1.3em;
+}
+.hud-hint.show { opacity: 1; transform: none; }
+.hud-hint.pulse { animation: hud-pulse 1.1s ease-in-out infinite; }
+.hud-hint.warn { color: #ffd7a8; }
+@keyframes hud-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(1.035); }
+}
+
+/* botão da setinha que abre o mapa (único elemento "com caixa") */
+.hud-mapbtn {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  width: 42px; height: 42px; border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(10, 30, 60, 0.32);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  color: var(--ui-text); font: 700 26px/1 var(--ui-font);
+  padding: 0 0 4px 0; cursor: pointer; pointer-events: auto;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  transition: background 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+  touch-action: manipulation;
+}
+.hud-mapbtn:hover { background: rgba(20, 50, 95, 0.55); border-color: rgba(255, 255, 255, 0.8); transform: translateY(-50%) scale(1.06); }
+.hud-mapbtn:active { transform: translateY(-50%) scale(0.96); }
+.hud-mapbtn:focus { outline: none; }
+.hud--mapopen .hud-mapbtn { opacity: 0; pointer-events: none; }
+
+/* dicas de controle (embaixo à esquerda) */
+.hud-help {
+  position: absolute; left: var(--ui-gutter); bottom: 14px; right: 150px;
+  font-size: 13px; font-weight: 500; letter-spacing: 0.02em; line-height: 1.6;
+  opacity: 0; transition: opacity 0.6s ease;
+}
+.hud-help.show { opacity: 0.92; }
+.hud-help b { font-weight: 800; color: var(--ui-accent); }
+.hud-help-item { white-space: nowrap; }
+.hud-help-sep { margin: 0 7px; opacity: 0.6; }
+
+/* telemetria (embaixo à direita) */
+.hud-tele {
+  position: absolute; right: var(--ui-gutter); bottom: 14px;
+  display: flex; gap: 14px; font-size: 12px; font-weight: 600; letter-spacing: 0.08em;
+  opacity: 0.7; font-variant-numeric: tabular-nums;
+}
+
+/* aviso central */
+.hud-toast {
+  position: absolute; left: 0; right: 0; top: 38%;
+  text-align: center; padding: 0 var(--ui-gutter);
+  font-size: clamp(26px, 4vw, 44px); font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+  opacity: 0; transform: scale(0.9); pointer-events: none;
+}
+.hud-toast .accent { color: var(--ui-accent); }
+.hud-toast.show { will-change: opacity, transform; } /* opacidade/escala guiadas por hud.js (tempo de jogo) */
+
+/* indicador do alvo na tela: losango dourado + nome */
+.hud-marker {
+  position: absolute; left: 0; top: 0; width: 0; height: 0;
+  display: flex; flex-direction: column; align-items: center;
+}
+.hud-marker-diamond {
+  width: 11px; height: 11px; transform: translateY(-50%) rotate(45deg);
+  background: var(--ui-accent); border: 1.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 10px rgba(245, 213, 74, 0.7), 0 1px 4px rgba(0, 0, 0, 0.5);
+  animation: hud-diamond 1.6s ease-in-out infinite;
+}
+@keyframes hud-diamond { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+.hud-marker-name { margin-top: 8px; font-size: 13px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ui-accent); white-space: nowrap; }
+.hud-marker-dist { font-size: 11px; font-weight: 600; opacity: 0.85; white-space: nowrap; }
+
+/* seta na borda (alvo fora da tela) */
+.hud-edge { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.hud-edge svg { position: absolute; left: -20px; top: -20px; overflow: visible; filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55)); }
+.hud-edge-arrow { fill: var(--ui-accent); stroke: rgba(255, 255, 255, 0.85); stroke-width: 1.5; stroke-linejoin: round; }
+.hud-edge-name {
+  position: absolute; white-space: nowrap; font-size: 12px; font-weight: 700; letter-spacing: 0.06em;
+  top: 24px; left: 0; transform: translateX(-50%);
+}
+.hud-edge--top .hud-edge-name { top: 24px; }
+.hud-edge--bottom .hud-edge-name { top: auto; bottom: 24px; }
+.hud-edge--left .hud-edge-name { left: 26px; transform: translateY(-50%); top: 0; bottom: auto; }
+.hud-edge--right .hud-edge-name { left: auto; right: 26px; transform: translateY(-50%); top: 0; bottom: auto; }
+
+/* ------------------------------- MAPA ------------------------------- */
+.map-backdrop {
+  position: absolute; inset: 0; z-index: 5;
+  background: rgba(6, 18, 40, 0.35);
+  backdrop-filter: blur(10px) saturate(0.9); -webkit-backdrop-filter: blur(10px) saturate(0.9);
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.42s ease-out;
+}
+.map-backdrop.open { opacity: 1; pointer-events: auto; }
+
+.map-panel {
+  position: absolute; left: 50%; top: 50%; z-index: 6;
+  width: min(86vw, 1100px); height: min(86vh, 760px);
+  transform: translate(calc(-50% - 110vw), -50%);
+  transition: transform 0.42s ease-out;
+  display: flex; flex-direction: column;
+  border-radius: 14px; overflow: hidden;
+  background: rgba(8, 24, 52, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  font-family: var(--ui-font); color: var(--ui-text);
+  pointer-events: none; user-select: none; -webkit-user-select: none;
+}
+.map-panel.open { transform: translate(-50%, -50%); pointer-events: auto; }
+.map-head {
+  display: flex; align-items: baseline; gap: 14px;
+  padding: 10px 14px 8px 18px;
+  background: rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+.map-title { font-size: 20px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5); }
+.map-sub { flex: 1; font-size: 13px; font-weight: 600; opacity: 0.8; letter-spacing: 0.03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.map-close {
+  align-self: center;
+  width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.08); color: #fff; font: 700 16px/1 var(--ui-font);
+  cursor: pointer; padding: 0; touch-action: manipulation;
+  transition: background 0.2s ease;
+}
+.map-close:hover { background: rgba(255, 255, 255, 0.2); }
+.map-close:focus { outline: none; }
+.map-body { flex: 1; min-height: 0; position: relative; }
+.map-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+/* telas estreitas */
+@media (max-width: 900px) {
+  .hud-help { right: var(--ui-gutter); }
+  .hud-tele { bottom: auto; top: 14px; }   /* sobe para o canto superior direito, longe das dicas */
+}
+@media (max-width: 640px) {
+  .hud-help { font-size: 11px; }
+  .hud-tele { font-size: 11px; gap: 10px; }
+  .hud-mapbtn { width: 38px; height: 38px; font-size: 22px; }
+  .map-panel { width: 94vw; height: 88vh; border-radius: 10px; }
+  .map-sub { display: none; }
+}

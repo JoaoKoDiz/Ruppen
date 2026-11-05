@@ -109,7 +109,7 @@ export function createMapUI({ root, worldData, elephants = [], flight, delivery,
     p.moveTo(10.5 * s, 1.2 * s); p.quadraticCurveTo(13.5 * s, 3 * s, 15 * s, 2 * s); p.quadraticCurveTo(13.6 * s, 4.2 * s, 10.2 * s, 2.4 * s); p.closePath();
     return p;
   }
-  const ELE_PATH = elephantPath(1);
+  const ELE_PATH = elephantPath(1.25);
   // Pomba vista de cima (frente = +x).
   function dovePath() {
     const p = new Path2D();
@@ -162,7 +162,7 @@ export function createMapUI({ root, worldData, elephants = [], flight, delivery,
     }
 
     // tracejado curto à frente de cada elefante
-    ctx.setLineDash([4, 4]); ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 1.4;
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = 1.8; ctx.lineCap = 'round';
     for (const e of elephants) {
       if (!e.route || typeof e.route.aheadPoints !== 'function') continue;
       const pts = e.route.aheadPoints(e.u, M.AHEAD_METERS, M.AHEAD_POINTS);
@@ -196,12 +196,12 @@ export function createMapUI({ root, worldData, elephants = [], flight, delivery,
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(-e.heading);         // frente do elefante no mundo = (cos h, 0, −sin h) → no mapa (cos h, −sin h)
-      ctx.lineJoin = 'round'; ctx.lineWidth = 3; ctx.strokeStyle = isTarget ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.9)';
+      ctx.lineJoin = 'round'; ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.95)';
       ctx.stroke(ELE_PATH);
-      ctx.fillStyle = isTarget ? C.accent : '#cfd3d9';
+      ctx.fillStyle = isTarget ? C.accent : '#aab0ba';
       ctx.fill(ELE_PATH);
       ctx.restore();
-      strokedText(e.name, x, y + 13, isTarget ? C.accent : 'rgba(255,255,255,0.92)', 'rgba(5,20,45,0.8)');
+      strokedText(e.name, x, y + 15, isTarget ? C.accent : 'rgba(255,255,255,0.92)', 'rgba(5,20,45,0.8)');
     }
 
     // jogador
@@ -215,8 +215,9 @@ export function createMapUI({ root, worldData, elephants = [], flight, delivery,
       ctx.stroke(DOVE_PATH);
       ctx.fillStyle = '#ffffff'; ctx.fill(DOVE_PATH);
       ctx.restore();
-      ctx.font = '600 10px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-      strokedText('você', x, y + 12, 'rgba(255,255,255,0.9)', 'rgba(5,20,45,0.8)');
+      ctx.font = '600 10px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'; ctx.textBaseline = 'bottom';
+      strokedText('você', x, y - 12, 'rgba(255,255,255,0.9)', 'rgba(5,20,45,0.8)');
+      ctx.textBaseline = 'top';
     }
 
     // escala (5 km) — canto inferior esquerdo
