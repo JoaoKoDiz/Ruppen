@@ -15,9 +15,9 @@
 // =====================================================================
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { ELEPHANT, COLORS, SEED } from '../../config.js';
-import { createRng, hashInt } from '../../util/rng.js';
-import { createNoise } from '../../util/noise.js';
+import { ELEPHANT, COLORS, SEED } from '../config.js';
+import { createRng, hashInt } from '../util/rng.js';
+import { createNoise } from '../util/noise.js';
 
 const E = ELEPHANT, B = E.BODY, LG = E.LEG, HD = E.HEAD, EAR = E.EAR, TR = E.TRUNK, TK = E.TUSK;
 const TAU = Math.PI * 2;

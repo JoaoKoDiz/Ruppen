@@ -192,3 +192,64 @@ export const PACKAGE = {
   LAND_DEPTH_TOLERANCE: 30, // m — só pousa se cruzou a superfície vindo de cima (até isto abaixo)
   FALL_TIMEOUT: 40,       // s — segurança: cesta perdida se nunca tocar nada
 };
+
+// ---------------------------- JOGO / ENTREGAS --------------------------
+// Fluxo das entregas (src/game/delivery.js): atrasos, escolha do próximo alvo
+// e o ronco distante dos elefantes.
+export const GAME = {
+  NEXT_TARGET_DELAY: 2.5,   // s — após entregar, até escolher a próxima cidade
+  WRONG_CITY_DELAY: 2,      // s — cidade errada: nova cesta após isto
+  LOST_DELAY: 2,            // s — cesta perdida: nova cesta após isto
+  NEXT_PREFER_MIN: 8000,    // m — distância preferida do próximo alvo (mínimo)
+  NEXT_PREFER_MAX: 25000,   // m — idem (máximo)
+  RUMBLE_INTERVAL_MIN: 40,  // s — intervalo aleatório entre roncos distantes
+  RUMBLE_INTERVAL_MAX: 90,
+  RUMBLE_DIST: 6000,        // m — só ronca se algum elefante estiver a menos disto
+};
+
+// --------------------------------- HUD ---------------------------------
+export const HUD = {
+  HINT_NEAR_DIST: 3000,     // m — abaixo disto aparece "Aproxime-se da cidade"
+  MARKER_MIN_DIST: 1500,    // m — o losango/nome do alvo só aparece além disto
+  HELP_INITIAL_TIME: 12,    // s — as dicas de controle somem após isto
+  HELP_RECALL_TIME: 8,      // s — tecla H traz as dicas de volta por isto
+  TOAST_TIME: 2600,         // ms — duração padrão do aviso central
+  FLASH_TIME: 2.2,          // s — duração da dica de erro ("não está sobre a cidade")
+  EDGE_MARGIN: 58,          // px — margem da seta na borda da tela
+};
+
+// --------------------------------- MAPA --------------------------------
+export const MAP_UI = {
+  AHEAD_METERS: 2500,       // m — comprimento do tracejado à frente de cada elefante
+  AHEAD_POINTS: 12,
+  GRID_STEP: 10000,         // m — linhas de grade
+  SCALE_BAR: 5000,          // m — barra de escala
+  OUTLINE_POINTS: 96,       // pontos do contorno de cada ilha
+  FOREST_SCALE: 0.55,       // miolo de floresta (polígono escalado ao centro)
+  ROCK_SCALE: 0.3,          // núcleo rochoso
+  PADDING: 28,              // px — folga ao redor do mundo no canvas
+};
+
+// --------------------------------- ÁUDIO -------------------------------
+export const AUDIO = {
+  MASTER: 0.5,
+  WIND_FREQ_MIN: 240,       // Hz — corte do passa-baixas do vento parado…
+  WIND_FREQ_MAX: 2400,      // …e no boost
+  WIND_GAIN_MIN: 0.05,
+  WIND_GAIN_MAX: 0.42,
+  WIND_SMOOTH: 0.45,        // s — constante de tempo da suavização
+  RUMBLE_FREQ: 48,          // Hz — ronco grave
+  RUMBLE_TIME: 2.2,         // s
+  RUMBLE_TREMOLO: 2.3,      // Hz
+};
+
+// Cores da interface (texto e mapa 2D).
+export const UI_COLORS = {
+  accent: '#f5d54a',        // amarelo das legendas (nome da cidade, alvo no mapa)
+  text: '#ffffff',
+  mapOcean: '#16407a',
+  mapSand: '#e2d6a6',
+  mapGrass: '#7aa44f',
+  mapForest: '#3e6d38',
+  mapRock: '#8c857a',
+};
