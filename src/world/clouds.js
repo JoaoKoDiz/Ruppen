@@ -192,8 +192,8 @@ void main() {
   vec2 cell = vec2(mod(cellIdx, 2.0), floor(cellIdx / 2.0));
   vec2 uv = (vUv + cell) * 0.5;
   vec4 tx = texture2D(uMap, uv);
-  float alpha = tx.a * vFade * smoothstep(0.5, 0.40, length(vUv - 0.5));
-  if (alpha < 0.003) discard;
+  float alpha = tx.a * vFade * smoothstep(0.5, 0.30, length(vUv - 0.5));
+  if (alpha < 0.02) discard;
   float lit = tx.r;
   float light = vShade * 0.65 + (lit - 0.5) * 0.55 + 0.30 + (vUv.y - 0.5) * 0.25 + (vUv.x - 0.5) * vSunSide * 0.28;
   // as partes densas do miolo ficam um pouco mais sombreadas (volume)
