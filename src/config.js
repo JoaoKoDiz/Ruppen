@@ -56,6 +56,7 @@ export const COLORS = {
 // procedural, as cidades, as colisões e a entrega.
 export const ELEPHANT = {
   COUNT: 7,
+  SCALE: 3.0,               // fator de escala global do modelo (as dimensões abaixo são do modelo-base; o mundo vê 3×)
   SPEED: 6,                 // m/s — extremamente devagar (visível no mapa ao longo de minutos)
   SHOULDER_HEIGHT: 1500,    // y do topo das costas (pele), sem contar as construções
   BODY: { rx: 560, ry: 430, rz: 470, cy: 1070 }, // elipsoide do corpo (semi-eixos) e y do centro
@@ -64,10 +65,10 @@ export const ELEPHANT = {
   EAR: { width: 540, height: 640, thickness: 50 },
   TRUNK: { length: 1050, baseRadius: 125, tipRadius: 45 },
   TUSK: { length: 860, baseRadius: 64, tipRadius: 22 },
-  STRIDE: 720,              // comprimento do passo (m): cadência das pernas = SPEED / STRIDE
+  STRIDE: 2200,              // comprimento do passo (m): cadência das pernas = SPEED / STRIDE
   CITY_MAX_HEIGHT: 340,     // altura máxima das construções acima da pele
-  DELIVERY_ABOVE_MAX: 520,  // o drop só conta se o jogador estiver até esta altura acima do topo da cidade
-  FOOT_CLOUD_RADIUS: 700,   // raio das nuvens/espuma ao redor das patas
+  DELIVERY_ABOVE_MAX: 900,  // o drop só conta se o jogador estiver até esta altura acima do topo da cidade
+  FOOT_CLOUD_RADIUS: 2100,   // raio das nuvens/espuma ao redor das patas
 };
 
 // ----------------------------- POMBA ---------------------------------
@@ -79,7 +80,7 @@ export const DOVE = {
   SPEED_BOOST: 140,
   ACCEL: 35,
   ALT_MIN: 6,               // nunca descer abaixo disso sobre a água
-  ALT_MAX: 3600,
+  ALT_MAX: 8000,
   TURN_RATE: 1.0,           // rad/s de guinada máxima
   PITCH_RATE: 1.1,
   MAX_BANK: 1.05,           // inclinação visual máxima (rad)
@@ -154,7 +155,7 @@ export const FLIGHT = {
   BOUNDS_MARGIN: 2500,    // m — faixa antes de WORLD.HALF onde a direção volta ao centro
   BOUNDS_HARD: 1500,      // m — além de WORLD.HALF + isto a posição é travada
   COLLIDER_RADIUS: 3,     // m — raio da pomba na colisão com os elefantes
-  BROADPHASE_DIST: 2500,  // m — distância ao elefante para testar os colisores
+  BROADPHASE_DIST: 8000,  // m — distância ao elefante para testar os colisores
   COLLIDE_TIME: 0.5,      // s — autoridade reduzida dos comandos após um toque
 };
 
@@ -209,7 +210,7 @@ export const GAME = {
 
 // --------------------------------- HUD ---------------------------------
 export const HUD = {
-  HINT_NEAR_DIST: 3000,     // m — abaixo disto aparece "Aproxime-se da cidade"
+  HINT_NEAR_DIST: 6000,     // m — abaixo disto aparece "Aproxime-se da cidade"
   MARKER_MIN_DIST: 1500,    // m — o losango/nome do alvo só aparece além disto
   HELP_INITIAL_TIME: 12,    // s — as dicas de controle somem após isto
   HELP_RECALL_TIME: 8,      // s — tecla H traz as dicas de volta por isto

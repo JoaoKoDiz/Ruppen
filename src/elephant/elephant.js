@@ -1132,7 +1132,10 @@ export function createElephant(route, index, opts = {}) {
     [540, 1000, -450, 300], [540, 1000, 450, 300],
   ];
   for (const sx of [1, -1]) for (const sz of [-1, 1]) { colLocal.push([sx * LG.offsetX, 250, sz * LG.offsetZ, 160], [sx * LG.offsetX, 600, sz * LG.offsetZ, 170]); }
-  const colliders = colLocal.map((c) => ({ center: new THREE.Vector3(), local: new THREE.Vector3(c[0], c[1], c[2]), radius: c[3] }));
+  // Escala global: o modelo é construído nas dimensões-base e o grupo é ampliado por ELEPHANT.SCALE.
+  const SCALE = E.SCALE || 1;
+  group.scale.setScalar(SCALE);
+  const colliders = colLocal.map((c) => ({ center: new THREE.Vector3(), local: new THREE.Vector3(c[0], c[1], c[2]), radius: c[3] * SCALE }));
   const B2 = { legFL: bones[BONE.legFL], legFR: bones[BONE.legFR], legBL: bones[BONE.legBL], legBR: bones[BONE.legBR], earL: bones[BONE.earL], earR: bones[BONE.earR], trunk: bones[BONE.trunk], tail: bones[BONE.tail] };
   const phaseOff = index * 1.7;
 
@@ -1142,8 +1145,9 @@ export function createElephant(route, index, opts = {}) {
     get heading() { return state.heading; },
     get u() { return state.u; },
     colliders,
-    cityTop: E.SHOULDER_HEIGHT + 60,
-    cityFootprint: { rx: B.rx * BODY_SX + 150, rz: B.rz + 150 },
+    cityTop: (E.SHOULDER_HEIGHT + 60) * SCALE,
+    cityTopLocal: E.SHOULDER_HEIGHT + 60,
+    cityFootprint: { rx: (B.rx * BODY_SX + 150) * SCALE, rz: (B.rz + 150) * SCALE },
     deliveryMarker: new THREE.Vector3(),
     bones: B2,
     update(dt, time) {
@@ -1170,12 +1174,12 @@ export function createElephant(route, index, opts = {}) {
       B2.tail.rotation.x = 0.05 * Math.sin((TAU * t) / 3.7);
       group.updateMatrixWorld(true);
       for (const c of colliders) c.center.copy(c.local).applyMatrix4(rig.matrixWorld);
-      ent.deliveryMarker.set((PZ.x0 + PZ.x1) / 2, ent.cityTop + 260, 0).applyMatrix4(group.matrixWorld);
+      ent.deliveryMarker.set((PZ.x0 + PZ.x1) / 2, ent.cityTopLocal + 260, 0).applyMatrix4(group.matrixWorld);
     },
     // Altura (mundo) da superfície do elefante/cidade na vertical de (x,z); null fora.
     getSurfaceHeight(x, z) {
       const c = Math.cos(state.heading), sn = Math.sin(state.heading);
-      const wx = x - state.position.x, wz = z - state.position.z;
+      const wx = (x - state.position.x) / SCALE, wz = (z - state.position.z) / SCALE;
       const px = c * wx - sn * wz, pz = sn * wx + c * wz;
       let best = -Infinity;
       // corpo + cidade
@@ -1196,7 +1200,7 @@ export function createElephant(route, index, opts = {}) {
       // pescoço
       const dnx = (px - 560) / 265, dnz = pz / 300; const qn = dnx * dnx + dnz * dnz;
       if (qn < 1) best = Math.max(best, 1095 + 300 * Math.sqrt(1 - qn));
-      return best === -Infinity ? null : best + rig.position.y;
+      return best === -Infinity ? null : (best + rig.position.y) * SCALE;
     },
     isOverCity(x, z) {
       const c = Math.cos(state.heading), sn = Math.sin(state.heading);

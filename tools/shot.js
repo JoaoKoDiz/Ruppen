@@ -36,7 +36,7 @@ try {
   await page.evaluate(async (n) => { if (typeof window.__step === 'function') await window.__step(n); }, frames);
   await page.waitForTimeout(wait);
   await page.evaluate(async () => { if (typeof window.__step === 'function') await window.__step(2); });
-  await page.screenshot({ path: out });
+  await page.screenshot({ path: out, timeout: 240000 });
   const stats = await page.evaluate(() => (typeof window.__stats === 'function' ? window.__stats() : null));
   if (stats) console.log('[stats]', JSON.stringify(stats));
   console.log(`[shot] ${out} (${W}x${H}) em ${((Date.now() - t0) / 1000).toFixed(1)}s`);

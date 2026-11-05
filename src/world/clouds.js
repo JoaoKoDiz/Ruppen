@@ -314,20 +314,21 @@ function generatePuffs(worldData, scale, clusters) {
 
   // --- anéis ao redor das patas (deslocamentos LOCAIS ao elefante)
   const nFoot = Math.round(FOOT_PUFFS * scale);
+  const FS = ELEPHANT.SCALE || 1; // as nuvens das patas acompanham a escala do elefante
   for (let e = 0; e < NUM_ANCHORS; e++) {
     const nBig = Math.round(12 * scale); // base sólida: puffs grandes em anel regular
     for (let i = 0; i < nBig; i++) {
       const ang = (i / nBig) * Math.PI * 2 + rng.range(-0.15, 0.15);
       const rad = ELEPHANT.FOOT_CLOUD_RADIUS * rng.range(0.8, 1.05);
-      const size = rng.range(360, 440);
-      out.push({ x: Math.cos(ang) * rad, y: FOOT_Y_MIN + size * 0.22, z: Math.sin(ang) * rad, size, shade: 0.5, rot: rng.range(-0.3, 0.3), variant: Math.floor(rng() * 8), group: e });
+      const size = rng.range(360, 440) * FS;
+      out.push({ x: Math.cos(ang) * rad, y: FOOT_Y_MIN * FS + size * 0.22, z: Math.sin(ang) * rad, size, shade: 0.5, rot: rng.range(-0.3, 0.3), variant: Math.floor(rng() * 8), group: e });
     }
     for (let i = 0; i < nFoot; i++) {
       const ang = rng.range(0, Math.PI * 2);
-      const rad = Math.max(230, Math.min(1150, ELEPHANT.FOOT_CLOUD_RADIUS + rng.gauss() * 230));
+      const rad = Math.max(230 * FS, Math.min(1150 * FS, ELEPHANT.FOOT_CLOUD_RADIUS + rng.gauss() * 230 * FS));
       const yt = Math.pow(rng(), 1.3);
-      const y = FOOT_Y_MIN + yt * (FOOT_Y_MAX - FOOT_Y_MIN);
-      const size = rng.range(170, 400) * (1.0 - 0.3 * yt);
+      const y = (FOOT_Y_MIN + yt * (FOOT_Y_MAX - FOOT_Y_MIN)) * FS;
+      const size = rng.range(170, 400) * FS * (1.0 - 0.3 * yt);
       const shade = 0.45 + 0.55 * yt;
       out.push({ x: Math.cos(ang) * rad, y, z: Math.sin(ang) * rad, size, shade, rot: rng.range(-0.4, 0.4), variant: Math.floor(rng() * 8), group: e });
     }
