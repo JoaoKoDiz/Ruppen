@@ -103,3 +103,92 @@ export const SEED = 20260512;
 
 // Camadas de renderização (camera.layers) — úteis para o mapa/HUD se precisar
 export const LAYERS = { DEFAULT: 0, NO_FOG: 1 };
+
+// ----------------------------- ILHAS ---------------------------------
+// Parâmetros da malha de terreno e da vegetação instanciada (src/world/islands.js).
+export const ISLANDS = {
+  GRID_HIGH: 170,          // vértices por lado da malha de terreno (quality=high)
+  GRID_LOW: 110,           // idem para quality=low
+  TREES_HIGH: 3000,        // árvores instanciadas por ilha
+  TREES_LOW: 1800,
+  ROCKS_HIGH: 400,         // pedras instanciadas por ilha
+  ROCKS_LOW: 220,
+  TREE_HEIGHT_MIN: 15,     // árvores propositalmente grandes (m) para serem visíveis do voo
+  TREE_HEIGHT_MAX: 40,
+  SKIRT_Y: -300,           // y da "saia" submersa da malha fora do contorno da ilha
+  TREE_VIS_DIST: 28000,    // além desta distância da câmera as árvores somem (sub-pixel)
+  ROCK_VIS_DIST: 18000,    // idem para as pedras
+};
+
+// ------------------------- MODELO DA POMBA ----------------------------
+// Cores e medidas usadas pelos modelos procedurais da pomba (src/player/candidates/dove_*.js).
+export const DOVE_MODEL = {
+  HEAD_RADIUS: 0.2,         // raio da cabeça (m)
+  TAIL_LENGTH: 0.8,         // comprimento da cauda em leque (m)
+  RIDER_HEIGHT: 1.75,       // altura do cavaleiro em pé (m) — sentado ≈ 0,92 acima do quadril
+  WING_THICKNESS: 0.028,    // espessura das asas (chapas extrudadas)
+  FLAP_HZ_CRUISE: 1.3,      // batidas por segundo em cruzeiro
+  FLAP_HZ_BOOST: 2.2,       // batidas por segundo acelerando / subindo
+  GLIDE_PERIOD: 7.5,        // ciclo em cruzeiro: ~4 s planando + ~3,5 s batendo
+  REIN_LENGTH: 0.95,        // comprimento em repouso de cada rédea (m) — define a folga
+  COLORS: {
+    featherTop: 0xfff7ee, featherUnder: 0xe2e7ee, primaries: 0x343840,
+    beak: 0xd8bdb4, eye: 0x1b1b1f, feet: 0xe58a66,
+    leather: 0x5b3a21, leatherDark: 0x3d2614, metal: 0xcfd3d8,
+    jacket: 0x23262e, trousers: 0x2b2826, boots: 0x261a12, skin: 0xc9977b, hair: 0x2a1c12, pack: 0x4d3b26,
+  },
+};
+
+// ------------------------------- VOO ----------------------------------
+// Sensação de voo (src/player/flight.js): suavizações, auto-nivelamento,
+// antecipação do relevo, limites do mundo e colisão com os elefantes.
+export const FLIGHT = {
+  INPUT_SMOOTH: 7,        // 1/s — suavização das entradas (climbInput/turnInput)
+  PITCH_RETURN: 1.3,      // 1/s — auto-nivelamento do nariz sem entrada
+  BANK_SMOOTH: 4.5,       // 1/s — suavização do rolamento (banking)
+  BANK_FACTOR: 0.85,      // fração de DOVE.MAX_BANK na curva máxima
+  DIVE_ACCEL: 24,         // m/s² a −90° de pitch (mergulhar ganha velocidade, subir perde)
+  DRAG_DECEL: 0.6,        // fração de DOVE.ACCEL ao desacelerar (mais lenta que acelerar)
+  LOOKAHEAD_TIME: 1.7,    // s — antecipação do relevo à frente para puxar o nariz
+  LOOKAHEAD_MARGIN: 14,   // m — folga extra sobre ALT_MIN na antecipação
+  BOUNDS_MARGIN: 2500,    // m — faixa antes de WORLD.HALF onde a direção volta ao centro
+  BOUNDS_HARD: 1500,      // m — além de WORLD.HALF + isto a posição é travada
+  COLLIDER_RADIUS: 3,     // m — raio da pomba na colisão com os elefantes
+  BROADPHASE_DIST: 2500,  // m — distância ao elefante para testar os colisores
+  COLLIDE_TIME: 0.5,      // s — autoridade reduzida dos comandos após um toque
+};
+
+// ---------------------------- CÂMERA ---------------------------------
+// Câmera de perseguição (src/player/camera.js), no referencial da pomba.
+export const CHASE_CAM = {
+  OFFSET: { x: 0, y: 3.0, z: 9.5 },   // posição atrás/acima da pomba (frente = −Z)
+  LOOK_AHEAD: 14,         // m — ponto à frente da pomba para onde a câmera olha
+  LOOK_UP: 2.4,           // m — elevação do ponto olhado (pomba fica no centro-baixo da tela)
+  FOV: 62, FOV_BOOST: 72, FOV_SMOOTH: 3,
+  YAW_SMOOTH: 5,          // 1/s — lag da guinada
+  PITCH_FOLLOW: 0.5, PITCH_SMOOTH: 4,
+  ROLL_FOLLOW: 0.3, ROLL_SMOOTH: 4,  // horizonte quase estável
+  BOOST_PULLBACK: 2.0,    // m — a câmera afasta-se um pouco no boost
+  MIN_ABOVE_GROUND: 2,    // m — nunca abaixo da água/relevo + isto
+  SHAKE: 0.07,            // m — tremor sutil no boost
+  LOOK_SENS: 0.0045,      // rad/px — olhar com o mouse (arrastar)
+  LOOK_RETURN: 3,         // 1/s — retorno do olhar ao soltar
+  LOOK_MAX_YAW: 2.4, LOOK_MAX_PITCH: 0.8,
+};
+
+// ---------------------------- ENCOMENDA -------------------------------
+// Cesta-gaiola, corda, pêndulo e queda (src/player/package.js).
+export const PACKAGE = {
+  CAGE_RADIUS: 0.7,       // m — gaiola esférica de 1,4 m de diâmetro
+  ROPE_RADIUS: 0.022,
+  GRAVITY: 9.81,
+  TERMINAL_SPEED: 60,     // m/s — velocidade terminal da cesta em queda
+  DRAG_HANGING: 0.0012,   // arrasto (1/m) da cesta pendurada — faz atrasar/inclinar atrás
+  SWING_DAMPING: 0.5,     // 1/s — amortecimento do balanço
+  SCALE_IN_TIME: 0.4,     // s — animação de aparecer da nova cesta
+  MAX_LANDED: 40,         // cestas pousadas mantidas nos elefantes (remove a mais antiga)
+  SPLASH_TIME: 0.9,       // s — duração do splash/poeira ao perder a cesta
+  AUTO_REATTACH_DELAY: 2, // s — se ninguém escuta onLanded/onLost, nova cesta sozinha
+  LAND_DEPTH_TOLERANCE: 30, // m — só pousa se cruzou a superfície vindo de cima (até isto abaixo)
+  FALL_TIMEOUT: 40,       // s — segurança: cesta perdida se nunca tocar nada
+};
