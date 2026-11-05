@@ -131,6 +131,8 @@ varying float vShade;
 varying float vFade;
 varying float vSunSide;
 varying float vVar;
+varying float vWorldY;
+varying float vSize;
 
 void main() {
   float size = aParams.x;
@@ -165,8 +167,10 @@ void main() {
 
   float depth = -(viewMatrix * vec4(center, 1.0)).z;
   vFade = smoothstep(max(size * 0.22, 18.0), max(size * 0.75, 60.0), depth);
-  // some suavemente perto do nível do mar (evita o corte reto do quad na água)
-  vFade *= smoothstep(0.0, size * 0.3, world.y);
+  // o desvanecimento junto ao mar é feito POR PIXEL no fragment (vWorldY/vSize): por vértice,
+  // a interpolação deixava a metade de baixo de cada puff semitransparente (bancos viravam "vapor")
+  vWorldY = world.y;
+  vSize = size;
   vUv = uv;
   vShade = aParams.y;
   vSunSide = dot(uSunDir, right) * mirror;
@@ -185,6 +189,8 @@ varying float vShade;
 varying float vFade;
 varying float vSunSide;
 varying float vVar;
+varying float vWorldY;
+varying float vSize;
 
 void main() {
   #include <logdepthbuf_fragment>
@@ -193,6 +199,8 @@ void main() {
   vec2 uv = (vUv + cell) * 0.5;
   vec4 tx = texture2D(uMap, uv);
   float alpha = tx.a * vFade * smoothstep(0.5, 0.34, length(vUv - 0.5));
+  // some suavemente perto do nível do mar (sem corte reto do quad na água)
+  alpha *= smoothstep(0.0, vSize * 0.22, vWorldY);
   if (alpha < 0.006) discard;
   float lit = tx.r;
   // topo branco iluminado, base azul-cinza: altura dentro da nuvem (vShade) + relevo assado forte

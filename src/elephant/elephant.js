@@ -1,24 +1,34 @@
 // =====================================================================
-//  RUPPEN — o elefante colossal (modelo final, derivado do candidato B).
-//  Foco: anatomia inconfundível (barriga caída, cabeça abaulada, tromba e
-//  presas afiladas, joelhos, unhas) + pele enrugada procedural (mapa de cor
-//  + bump) + os adornos e a civilização das referências: orelhas GIGANTES
-//  (≈ altura da cabeça) com manto laranja de borda listrada e um bloco de
-//  casas em terraços; tapete denso de casas pastel (20–70 m) cobrindo o dorso
-//  e descendo pelos flancos; palácio com cúpula dourada, minaretes e soco de
-//  tijolos; prédio alto de tijolos com arcos; praça de mercado no centro
-//  (ponto da entrega); cidades e torres nas presas; placa dourada com tachas,
-//  guirlanda de pompons, borla rosa, anéis de ouro, faixas nos tornozelos.
-//  Medidas extras em config.js → ELEPHANT_MODEL e ELEPHANT_POLISH (olho, perfil das patas).
-//  Polimento: patas em perfil de revolução (pé alargado, joelho com pregas, coxa que entra na
-//  barriga), corpo com polos no eixo da espinha (sem "estrela" na barriga), olho com íris e brilho,
-//  presas que sobem pouco, pompons de lã fosca e janelas cinza-quentes com moldura clara.
+//  RUPPEN — o elefante colossal (modelo final, derivado do candidato B,
+//  reformado para bater com as referências).
+//  Anatomia: cabeça grande e pesada com testa em domo alto, pescoço cheio,
+//  garupa mais baixa, tromba grossa na raiz, patas em coluna; pele cinza quente
+//  ESCURA com dobras GRANDES esculpidas (textura procedural de cor + bump:
+//  poucas linhas grossas e onduladas, sombreado suave, camada fina discreta;
+//  faixas horizontais nas patas/tromba, diagonais nos flancos).
+//  Adornos: placa dourada em gota ENORME (do alto do crânio à raiz da tromba,
+//  de orelha a orelha) com tachas em malha hexagonal de 3 tamanhos e bossa
+//  central; guirlanda de pompons felpudos com elos de prata; borla rosa com
+//  cúpula tacheada, cone de ouro e franja comprida; anéis de ouro com contas
+//  nas presas; mangas listradas (laranja/castanho/creme/rosa) na tromba e nos
+//  tornozelos. Orelhas GIGANTES quase retangulares, pendendo abaixo da cabeça,
+//  com manto: borda listrada concêntrica, tecido escuro e um bloco retangular
+//  de casas em terraços.
+//  Civilização: tapete FINO de milhares de casinhas pálidas (InstancedMesh ×2)
+//  cobrindo o dorso, descendo pelos flancos e transbordando para o pescoço;
+//  palácio com muralha arcada, cúpula dourada sobre tambor, 6 minaretes com
+//  varandas, torres rosa de telhado cônico e muro de tijolos arcado; prédio de
+//  tijolos e praça de mercado no centro (ponto da entrega); mesquitas e torres
+//  espalhadas; presas com a metade de cima coberta de casinhas de telhado
+//  vermelho e torres brancas; torres e casinhas no alto da cabeça.
+//  Medidas em config.js → ELEPHANT, ELEPHANT_MODEL e ELEPHANT_POLISH.
 //
-//  Estrutura: UM SkinnedMesh com 9 ossos (raiz, 4 patas, 2 orelhas,
-//  tromba, cauda) e grupos de material (pele, tecido da tromba, panos,
-//  marfim, ouro, cidade, borla, olhos, prata) + 2 InstancedMesh (tachas
-//  e pompons). Tudo o que é rígido vai preso ao osso raiz; o que anima vai
-//  preso ao osso da parte. Resultado: ~11 draw calls por elefante.
+//  Estrutura: UM SkinnedMesh com 9 ossos (raiz, 4 patas, 2 orelhas, tromba,
+//  cauda) e grupos de material (pele, tecido da tromba, panos, marfim, ouro,
+//  cidade, borla, olhos, prata) + 4 InstancedMesh (tapete de casas ×2, tachas,
+//  pompons). Tudo o que é rígido vai preso ao osso raiz; o que anima vai preso
+//  ao osso da parte. Resultado: 14 draw calls e ≈ 208 k triângulos por elefante
+//  (quality=high; ≈ 120 k em low).
 //
 //  Espaço local: +X = frente, +Y = cima, +Z = lado direito; origem no
 //  nível do mar entre as patas (ver config.js / ARCHITECTURE.md).
@@ -848,7 +858,7 @@ export function createElephant(route, index, opts = {}) {
     curve.arcLengthDivisions = 300;
     tuskCurves.push(curve);
     const rAt = (t) => (t < 0.06 ? lerp(92, 72, t / 0.06) : t < 0.97 ? lerp(72, TK.tipRadius, (t - 0.06) / 0.91) : TK.tipRadius * Math.sqrt(Math.max(0, 1 - ((t - 0.97) / 0.03) ** 2)) + 0.5);
-    const g = tubeGeometry(curve, low ? 36 : 54, low ? 12 : 16, rAt);
+    const g = tubeGeometry(curve, low ? 36 : 48, low ? 12 : 14, rAt);
     add('ivory', g);
     // anéis de ouro com contas (3 por presa)
     for (const t of TUSK_RINGS) {
@@ -1115,16 +1125,16 @@ export function createElephant(route, index, opts = {}) {
         if (Math.abs(lz) < 12 && lx > PZ.x1) continue;
         // densidade quase total em cima, caindo um pouco nos flancos baixos
         const flank = Math.abs(phi) / phiMax;
-        if (rngCity() > 1 - 0.3 * flank * flank * flank) continue;
+        if (rngCity() > 1 - 0.12 * flank * flank * flank) continue;
         const edge = nearPlaza(lx, lz);
-        const foot = rngCity.range(EM.HOUSE_FOOT.min, EM.HOUSE_FOOT.max);
+        const fl = smooth(0.8, 1.5, Math.abs(phi));
+        const foot = rngCity.range(EM.HOUSE_FOOT.min, EM.HOUSE_FOOT.max) * (1 + 0.35 * fl);   // nos flancos, casas um pouco maiores: crosta contínua
         const w = foot * rngCity.range(0.85, 1.15), d = foot * rngCity.range(0.85, 1.15);
         let h = rngCity.range(EM.HOUSE_H.min, EM.HOUSE_H.max) * (1 - 0.25 * flank);
         if (edge) h = rngCity.range(44, 66);
         else if (rngCity() < EM.TALL_BLOCK_CHANCE) h *= 1.6;
         // nos flancos as casas inclinam um pouco para o "para cima" (terraços) e saem da pele em vez
         // de afundar (uma casa em pé num flanco quase vertical ficaria enterrada no corpo)
-        const fl = smooth(0.8, 1.5, Math.abs(phi));
         upMix.copy(nrm).addScaledVector(_up, 0.45 * fl).normalize();
         qh.copy(quatFromUp(upMix)).multiply(qy.setFromAxisAngle(_up, rngCity.range(-0.25, 0.25)));
         if (edge) {   // prédios mais altos ao redor da praça: geometria mesclada (fachada de vários andares)
@@ -1257,7 +1267,7 @@ export function createElephant(route, index, opts = {}) {
   for (let i = 0; i < 24; i++) {
     const x = rngCity.range(-RX * 0.85, RX * 0.85), z = rngCity.range(-B.rz * 0.75, B.rz * 0.75);
     if (inPalace(x, z) || inBrick(x, z) || nearPlaza(x, z)) continue;
-    const n = surfAt(x, z, tmp3); if (!n || n.y < 0.5 || insideNeckOrHead(tmp3)) continue;
+    const n = surfAt(x, z, tmp3); if (!n || n.y < 0.82 || insideNeckOrHead(tmp3)) continue;
     if (i % 3 === 0) { // mesquita pequena: tambor + cúpula + minarete
       const dr = rngCity.range(26, 40); const drum = new THREE.CylinderGeometry(dr, dr, 56, 16); remapUV(drum, REG.PAL, 0, Infinity, 1, 0.3); setColorRange(drum, 0xf6f1e8); drum.translate(0, 20, 0); placeGeom(drum, tmp3, quatFromUp(n)); city.push(drum);
       const dome = new THREE.SphereGeometry(dr, 14, 8, 0, TAU, 0, Math.PI / 2); dome.translate(0, 48, 0); placeGeom(dome, tmp3, quatFromUp(n)); goldCity.push(dome);

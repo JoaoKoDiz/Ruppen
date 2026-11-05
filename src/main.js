@@ -9,6 +9,7 @@ import { WORLD_DATA } from './world/worldData.js';
 import { createSky } from './world/sky.js';
 import { createOcean } from './world/ocean.js';
 import { createClouds } from './world/clouds.js';
+import { createPost } from './world/post.js';
 import { createIslands } from './world/islands.js';
 import { createInput } from './input.js';
 import { createFlightController } from './player/flight.js';
@@ -49,6 +50,8 @@ const sky = createSky(scene, { quality });
 const ocean = createOcean(scene, { quality });
 const islands = createIslands(scene, WORLD_DATA, { quality });
 const clouds = createClouds(scene, WORLD_DATA, { quality });
+const post = createPost(scene, camera); // vinheta/haze sutil (quad de tela cheia)
+if (quality === 'low') post.object.visible = false;
 const elephants = WORLD_DATA.routes.map((route, i) => createElephant(route, i, { quality }));
 for (const e of elephants) scene.add(e.group);
 
@@ -106,6 +109,7 @@ function tick(dt) {
   sky.update(camera, time);
   ocean.update(camera, time);
   clouds.update(camera, time, dt);
+  post.update?.(camera, time);
   islands.update?.(camera, time);
   hud.update(dt);
   map.update(dt);

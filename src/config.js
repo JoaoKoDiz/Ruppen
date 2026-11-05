@@ -318,7 +318,7 @@ export const ELEPHANT_MODEL = {
   PALACE_X: -262,           // x local do centro do palácio (atrás do centro)
   PALACE_SIZE: { hx: 250, hz: 190 },    // meio-lados do bloco arcado principal do palácio
   PLAZA: { x0: -60, x1: 120, hz: 75 },  // praça de mercado (no centro do dorso: ponto da entrega)
-  TUSK_HOUSE_STEP: 0.0095,  // passo (fração da presa) entre fileiras de casas
+  TUSK_HOUSE_STEP: 0.0105,  // passo (fração da presa) entre fileiras de casas
   TUSK_HOUSE_SPAN: 1.5,     // rad — meio-ângulo coberto pelas casas (±: toda a metade de cima da presa)
 };
 export const ELEPHANT_POLISH = {
