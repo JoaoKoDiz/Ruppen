@@ -26,7 +26,7 @@ export const COLORS = {
   oceanShallow: 0x5187b1,
   foam: 0xf4f8fb,
   cloudLit: 0xffffff,
-  cloudShade: 0x98adc8,   // base das nuvens azul-cinza (nunca cinza-marrom)
+  cloudShade: 0x8ca3c2,   // base das nuvens azul-cinza (nunca cinza-marrom)
   sand: 0xe2d6a6,
   grass: 0x7aa44f,
   forest: 0x3e6d38,
@@ -97,7 +97,7 @@ export const DOVE = {
 };
 
 export const CLOUDS = {
-  COUNT: 170,               // nuvens-cúmulo pequenas/médias espalhadas pelo mundo (fixas, semente)
+  COUNT: 140,               // nuvens-cúmulo pequenas/médias espalhadas pelo mundo (fixas, semente)
   BASE_MIN: 170,
   BASE_MAX: 720,
   PUFFS_MIN: 18,
@@ -111,12 +111,12 @@ export const CLOUDS = {
   BIG_PUFFS_MIN: 80,
   BIG_PUFFS_MAX: 130,
   // bancos de nuvem ao redor das patas (src/world/clouds.js), por elefante
-  FOOT_PUFFS: 220,          // puffs do banco (quality=high)
+  FOOT_PUFFS: 300,          // puffs do banco (quality=high)
   FOOT_HEAPS: 5,            // montes mais altos dentro do banco
-  FOOT_HEAP_PUFFS: 18,
+  FOOT_HEAP_PUFFS: 22,
   FOOT_TOP_FRACTION: 0.30,  // altura do banco como fração da altura da pata (joelho ≈ 0,3)
   FOOT_HEAP_FRACTION: 0.46, // altura dos montes como fração da altura da pata
-  // orçamento: COUNT×~34 + BIG_COUNT×~105 + 7×(14+FOOT_PUFFS+FOOT_HEAPS×FOOT_HEAP_PUFFS) ≈ 10,4 k instâncias (≤ 12 k)
+  // orçamento: COUNT×~34 + BIG_COUNT×~105 + 7×(14+FOOT_PUFFS+FOOT_HEAPS×FOOT_HEAP_PUFFS) ≈ 10,1 k instâncias (≤ 12 k)
 };
 
 export const CITY_NAMES = ['Zamurra', 'Kethari', 'Oronde', 'Vashtu', 'Mirapol', 'Sulaymi', 'Tendravel'];
@@ -310,13 +310,13 @@ export const ELEPHANT_MODEL = {
   TRUNK_ROOT_RADIUS: 235,   // m — raio da tromba na raiz (afunila até TRUNK.baseRadius a ~25% do comprimento)
   CITY_SPACING_HIGH: 10.5,  // m — passo da malha de casas do dorso (quality=high): tapete fino
   CITY_SPACING_LOW: 20,
-  CITY_FLANK_ANGLE: 1.75,    // rad — até que ângulo (a partir do zênite) as casas descem pelos flancos
+  CITY_FLANK_ANGLE: 1.95,    // rad — até que ângulo (a partir do zênite) as casas descem pelos flancos
   HOUSE_H: { min: 6, max: 20 },         // m — alturas das casas do dorso
   HOUSE_FOOT: { min: 5, max: 10 },      // m — lado das casas do dorso
   TALL_BLOCK_CHANCE: 0.05,  // fração de prédios mais altos (até ~1,6× HOUSE_H.max)
   ROOF_TILE_CHANCE: 0.35,   // fração de casas do dorso com telhado rosa/terracota (o resto é laje pálida)
-  PALACE_X: -290,           // x local do centro do palácio (atrás do centro)
-  PALACE_SIZE: { hx: 270, hz: 190 },    // meio-lados do bloco arcado principal do palácio
+  PALACE_X: -262,           // x local do centro do palácio (atrás do centro)
+  PALACE_SIZE: { hx: 250, hz: 190 },    // meio-lados do bloco arcado principal do palácio
   PLAZA: { x0: -60, x1: 120, hz: 75 },  // praça de mercado (no centro do dorso: ponto da entrega)
   TUSK_HOUSE_STEP: 0.0095,  // passo (fração da presa) entre fileiras de casas
   TUSK_HOUSE_SPAN: 1.5,     // rad — meio-ângulo coberto pelas casas (±: toda a metade de cima da presa)

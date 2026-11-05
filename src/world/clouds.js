@@ -46,7 +46,7 @@ function makePuffAtlas(cell) {
         const n1 = noise.fbm2(dx * 1.25 + sx, dy * 1.25 + sy, 3, 2.0, 0.5);      // lóbulos grandes do contorno
         const n2 = noise.fbm2(dx * 3.1 + sx * 2, dy * 3.1 + sy * 2, 3, 2.1, 0.5); // lóbulos médios
         const edge = 0.70 + 0.17 * n1 + 0.06 * n2;  // raio da borda ∈ ~[0.47, 0.93]
-        let d = smooth(edge, edge * 0.30, r); // queda mais larga: bordas macias que se fundem ao sobrepor
+        let d = smooth(edge, edge * 0.42, r); // lóbulos definidos (couve-flor), borda ainda macia
         d *= clamp01(0.92 + 0.16 * n2);
         d *= smooth(0.95, 0.80, r); // margem transparente larga (mips grosseiros não "vazam")
         dens[(oy + y) * size + ox + x] = clamp01(d);
@@ -64,7 +64,7 @@ function makePuffAtlas(cell) {
       const nx = -gx, ny = -gy, nz = 1;
       const len = Math.hypot(nx, ny, nz);
       const lit = clamp01(0.5 + 0.5 * ((nx * L.x + ny * L.y + nz * L.z) / len));
-      const a = Math.pow(dens[i], 1.0);
+      const a = Math.pow(dens[i], 0.72); // miolo opaco: puffs sobrepostos formam massa sólida
       const o = i * 4;
       img.data[o] = Math.round(255 * lit);
       img.data[o + 1] = Math.round(255 * dens[i]);
@@ -192,13 +192,14 @@ void main() {
   vec2 cell = vec2(mod(cellIdx, 2.0), floor(cellIdx / 2.0));
   vec2 uv = (vUv + cell) * 0.5;
   vec4 tx = texture2D(uMap, uv);
-  float alpha = tx.a * vFade * smoothstep(0.5, 0.28, length(vUv - 0.5));
+  float alpha = tx.a * vFade * smoothstep(0.5, 0.34, length(vUv - 0.5));
   if (alpha < 0.006) discard;
   float lit = tx.r;
-  // topo branco iluminado, base azul-cinza: altura dentro da nuvem (vShade) + relevo assado + lado do sol
-  float light = vShade * 0.72 + (lit - 0.5) * 0.45 + 0.22 + (vUv.y - 0.5) * 0.32 + (vUv.x - 0.5) * vSunSide * 0.22;
+  // topo branco iluminado, base azul-cinza: altura dentro da nuvem (vShade) + relevo assado forte
+  // (cada puff lê como uma cúpula) + lado do sol
+  float light = vShade * 0.70 + (lit - 0.5) * 0.95 + 0.12 + (vUv.y - 0.5) * 0.30 + (vUv.x - 0.5) * vSunSide * 0.30;
   // as partes densas do miolo ficam um pouco mais sombreadas (volume)
-  light -= tx.g * 0.12 * (1.0 - vShade);
+  light -= tx.g * 0.22 * (1.0 - vShade);
   vec3 col = mix(uShade, uLit, clamp(light, 0.0, 1.0));
   gl_FragColor = vec4(col, alpha);
   #include <tonemapping_fragment>
@@ -370,7 +371,7 @@ function generatePuffs(worldData, scale, clusters) {
     for (let i = 0; i < nBig; i++) {
       const ang = (i / nBig) * Math.PI * 2 + rng.range(-0.15, 0.15);
       const rad = R * rng.range(0.78, 1.08);
-      const size = rng.range(1050, 1350);
+      const size = rng.range(850, 1050);
       out.push({ x: Math.cos(ang) * rad, y: size * 0.40, z: Math.sin(ang) * rad, size, shade: 0.45, rot: rng.range(-0.3, 0.3), variant: Math.floor(rng() * 8), group: e });
     }
     for (let i = 0; i < nFoot; i++) {
@@ -379,7 +380,7 @@ function generatePuffs(worldData, scale, clusters) {
       const rad = Math.min(2.2 * R, Math.max(0.25 * R, R * (0.95 + rng.gauss() * 0.42)));
       const outer = clamp01((rad / R - 1.2) / 1.0);             // 0 dentro do anel, 1 na borda externa
       const yt = Math.pow(rng(), 1.1) * (1 - 0.6 * outer);
-      const size = (480 + 760 * rng()) * (1 - 0.3 * yt);
+      const size = (300 + 420 * rng()) * (1 - 0.3 * yt);
       const y = Math.max(size * 0.40, yt * bankTop);
       const shade = 0.30 + 0.70 * clamp01(y / bankTop);
       out.push({ x: Math.cos(ang) * rad, y, z: Math.sin(ang) * rad, size, shade, rot: rng.range(-0.4, 0.4), variant: Math.floor(rng() * 8), group: e });
@@ -393,7 +394,7 @@ function generatePuffs(worldData, scale, clusters) {
         const ang = rng.range(0, Math.PI * 2), rr = Math.pow(rng(), 0.6) * hr;
         const edgeT = rr / hr;
         const yrel = top * (1 - edgeT * edgeT * 0.8) * Math.pow(rng(), 0.6);
-        const size = (380 + 420 * rng()) * (1 - 0.3 * yrel / top);
+        const size = (260 + 320 * rng()) * (1 - 0.3 * yrel / top);
         const y = Math.max(size * 0.4, yrel);
         const shade = 0.35 + 0.65 * clamp01(y / top);
         out.push({ x: hx + Math.cos(ang) * rr, y, z: hz + Math.sin(ang) * rr, size, shade, rot: rng.range(-0.4, 0.4), variant: Math.floor(rng() * 8), group: e });
@@ -449,7 +450,7 @@ export function createClouds(scene, worldData, opts = {}) {
     THREE.UniformsLib.fog,
     {
       uMap: { value: null },
-      uLit: { value: new THREE.Color(COLORS.cloudLit).multiplyScalar(1.3) },
+      uLit: { value: new THREE.Color(COLORS.cloudLit).multiplyScalar(1.1) },
       uShade: { value: new THREE.Color(COLORS.cloudShade) },
       uAnchors: { value: anchorVals },
       uWind: { value: WIND.clone() },
