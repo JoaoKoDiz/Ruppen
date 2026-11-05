@@ -85,7 +85,7 @@ export const DOVE = {
   PITCH_RATE: 1.1,
   MAX_BANK: 1.05,           // inclinação visual máxima (rad)
   MAX_PITCH: 0.85,
-  SPAWN: { x: 0, y: 160, z: 0, heading: 0 },
+  SPAWN: { x: -6000, y: 220, z: 2200, heading: 0 }, // ~9 km de Zamurra: o elefante inteiro cabe na vista inicial
   ROPE_LENGTH: 11,          // comprimento da corda até a cesta da encomenda
 };
 

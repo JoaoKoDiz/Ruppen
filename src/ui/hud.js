@@ -141,6 +141,7 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
       case 'notInZone':
         if (ev.reason === 'noPackage') flash('Aguarde a próxima encomenda');
         else if (ev.reason === 'tooHigh') flash('Alto demais: desça até perto da cidade');
+        else if (ev.reason === 'tooLow') flash('Suba até a altura da cidade');
         else flash('Você precisa estar sobre a cidade de ' + (delivery.target?.name || ''));
         break;
       default: break;
@@ -149,7 +150,7 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
 
   // --------------------------- projeção do alvo -----------------------
   const vCam = new THREE.Vector3(), vNdc = new THREE.Vector3();
-  function updateMarker() {
+  function updateMarker(zs) {
     const t = delivery.target;
     if (!t || !t.deliveryMarker || !camera || mapOpen) { marker.style.display = 'none'; edge.style.display = 'none'; return; }
     const W = window.innerWidth, Hh = window.innerHeight;
@@ -161,13 +162,12 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
     let nx = vNdc.x, ny = vNdc.y;
     if (behind) { nx = -nx; ny = -ny; }
     const onScreen = !behind && nx > -1 && nx < 1 && ny > -1 && ny < 1;
-    const zs = delivery.zoneStatus();
+    const tr = topRect();
     if (onScreen) {
       edge.style.display = 'none';
       if (zs.distance < H.MARKER_MIN_DIST || zs.overCity) { marker.style.display = 'none'; return; }
       const sx = ((nx + 1) / 2) * W, sy = ((1 - ny) / 2) * Hh;
       // não sobrepor o bloco de texto do topo (que já diz nome e distância)
-      const tr = top.getBoundingClientRect();
       if (sy < tr.bottom + 40 && sx > tr.left + tr.width * 0.5 - 240 && sx < tr.left + tr.width * 0.5 + 240) { marker.style.display = 'none'; return; }
       marker.style.display = '';
       marker.style.transform = `translate(${sx}px, ${sy}px)`;
@@ -188,7 +188,6 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
     const s = Math.min(sx, sy);
     let ex = cx + dx * s, ey = cy + dy * s;
     // não sobrepor o bloco de texto do topo: desce a seta para logo abaixo dele
-    const tr = top.getBoundingClientRect();
     let underCaption = false;
     if (ey < tr.bottom + 28 && Math.abs(ex - W / 2) < 300) { ey = tr.bottom + 28; underCaption = true; }
     const ang = Math.atan2(dy, dx) * 180 / Math.PI;     // 0° = direita
@@ -202,16 +201,26 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
   }
 
   // ------------------------------ update ------------------------------
+  // ---- utilitários de DOM: evita escrever o mesmo texto/layout a cada quadro
+  const setText = (el, s) => { if (el.textContent !== s) { el.textContent = s; if (el === city || el === dist || el === hint) topRectDirty = true; } };
+  let topRectDirty = true, topRectCache = null, topRectTimer = 0, lastZs = null;
+  function topRect() {
+    if (topRectDirty || !topRectCache || topRectTimer > 0.5) { topRectCache = top.getBoundingClientRect(); topRectDirty = false; topRectTimer = 0; }
+    return topRectCache;
+  }
+  window.addEventListener('resize', () => { topRectDirty = true; });
+
   function update(dt) {
     dt = dt > 0 ? Math.min(dt, 0.1) : 0;
-    pulseT += dt;
+    pulseT += dt; topRectTimer += dt;
     const t = delivery.target;
     const zs = delivery.zoneStatus();
+    lastZs = zs;
 
-    // topo
-    city.textContent = t ? t.name : '—';
-    dist.textContent = formatDistance(zs.distance);
-    count.textContent = `Entregas: ${delivery.count}`;
+    // topo (só escreve no DOM quando muda)
+    setText(city, t ? t.name : '—');
+    setText(dist, formatDistance(zs.distance));
+    setText(count, `Entregas: ${delivery.count}`);
 
     // dica contextual
     let text = '', cls = '';
@@ -221,8 +230,9 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
     else if (zs.inZone) { text = 'Pressione ESPAÇO para soltar a encomenda'; cls = 'pulse'; }
     else if (zs.overCity && zs.tooHigh) text = 'Desça até a cidade para entregar';
     else if (zs.distance < H.HINT_NEAR_DIST) text = 'Aproxime-se da cidade';
-    if (hint.textContent !== text) hint.textContent = text;
-    hint.className = 'hud-hint' + (cls ? ' ' + cls : '') + (text ? ' show' : '');
+    setText(hint, text);
+    const hintCls = 'hud-hint' + (cls ? ' ' + cls : '') + (text ? ' show' : '');
+    if (hint.className !== hintCls) { hint.className = hintCls; topRectDirty = true; }
 
     // ajuda dos controles
     if (input && input.justPressed('KeyH')) helpTimer = helpTimer > 0 ? 0 : H.HELP_RECALL_TIME;
@@ -231,8 +241,8 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
 
     // telemetria
     const st = flight.state;
-    teleAlt.textContent = `alt ${Math.round(st.position.y)} m`;
-    teleSpd.textContent = `${Math.round(st.speed)} m/s`;
+    setText(teleAlt, `alt ${Math.round(st.position.y)} m`);
+    setText(teleSpd, `${Math.round(st.speed)} m/s`);
 
     // toast
     if (toastTimer > 0) {
@@ -241,7 +251,7 @@ export function createHUD({ root, delivery, flight, elephants = [], input, camer
       else styleToast();
     }
 
-    updateMarker();
+    updateMarker(zs);
   }
 
   return { update, toast, get element() { return hud; }, setMapOpen };

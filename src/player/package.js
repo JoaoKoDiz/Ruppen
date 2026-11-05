@@ -264,7 +264,7 @@ export function createPackageSystem({ scene, dove, flight, elephants = [], islan
     cage.quaternion.copy(qYaw);
     cage.scale.setScalar(1);
     cage.updateMatrixWorld(true);
-    if (elephant.group) elephant.group.attach(cage);
+    const holder = elephant.body || elephant.group; if (holder) holder.attach(cage);
     landedList.push({ cage, elephant });
     landedTotal++;
     while (landedList.length > P.MAX_LANDED) {
@@ -334,7 +334,7 @@ export function createPackageSystem({ scene, dove, flight, elephants = [], islan
       }
       if (fx.t >= T) {
         scene.remove(fx.grp);
-        for (const it of fx.items) { it.obj.material.dispose(); it.obj.geometry?.dispose?.(); }
+        for (const it of fx.items) { it.obj.material.dispose(); if (!it.obj.isSprite) it.obj.geometry?.dispose?.(); }
         effects.splice(i, 1);
       }
     }
@@ -345,13 +345,15 @@ export function createPackageSystem({ scene, dove, flight, elephants = [], islan
     const cage = state.cage;
     getAnchorWorld(state.anchor);
     // primeira vez ou teleporte da pomba: pendura reta abaixo da âncora
-    if (!state.initialized || state.anchor.distanceToSquared(state.anchorPrev) > 60 * 60) {
+    if (!state.initialized || state.anchor.distanceToSquared(state.anchorPrev) > (DOVE.SPEED_BOOST * dt * 4 + 5) ** 2) {
       state.p.copy(state.anchor); state.p.y -= L;
       state.v.copy(flight.state.velocity);
       state.anchorPrev.copy(state.anchor);
       state.initialized = true;
     }
     state.anchorVel.subVectors(state.anchor, state.anchorPrev).divideScalar(dt);
+    const vmax = DOVE.SPEED_BOOST * 1.5;
+    if (state.anchorVel.lengthSq() > vmax * vmax) state.anchorVel.setLength(vmax);
     state.anchorPrev.copy(state.anchor);
 
     // gravidade, arrasto do ar e amortecimento do balanço (relativo à âncora)
@@ -413,7 +415,16 @@ export function createPackageSystem({ scene, dove, flight, elephants = [], islan
       if (dx * dx + dz * dz > broad2) continue;
       const h = e.getSurfaceHeight(state.p.x, state.p.z);
       if (h === null || h === undefined || !Number.isFinite(h)) continue;
-      if (bottom <= h && bottom > h - P.LAND_DEPTH_TOLERANCE) { land(e, h); return; }
+      if (bottom > h) continue;
+      // estava fora da superfície no quadro anterior? (vindo de cima ou entrando de lado num degrau da cidade)
+      const hPrev = e.getSurfaceHeight(state.pPrev.x, state.pPrev.z);
+      const prevBottom = state.pPrev.y - CAGE_HEIGHT;
+      const wasOutside = hPrev === null || hPrev === undefined || !Number.isFinite(hPrev) || prevBottom > hPrev;
+      if (wasOutside) {
+        // entrou de lado numa parede (muito abaixo do novo topo): pousa no pé da parede, na posição anterior
+        if (bottom < h - P.LAND_DEPTH_TOLERANCE && hPrev !== null && Number.isFinite(hPrev)) { state.p.x = state.pPrev.x; state.p.z = state.pPrev.z; land(e, hPrev); return; }
+        land(e, h); return;
+      }
     }
     // mar ou ilha?
     const g = groundAt(state.p.x, state.p.z);

@@ -89,8 +89,11 @@ export function createAudio() {
   }
 
   // Vento contínuo: 0 = velocidade mínima, 1 = boost.
+  let lastWind = -1;
   function setWind(speed01) {
-    windLevel = clamp01(Number(speed01) || 0);
+    const l = clamp01(Number(speed01) || 0);
+    if (Math.abs(l - lastWind) < 0.01) return; // evita 2 eventos de automação por quadro
+    lastWind = l; windLevel = l;
     safe(() => applyWind(windLevel, false));
   }
 

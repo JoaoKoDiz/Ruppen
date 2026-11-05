@@ -50,7 +50,7 @@ export function createDelivery({ elephants = [], flight, pkg, input, audio }) {
   function zoneStatus() {
     const t = api.target, p = flight.state.position;
     if (!t) return { overCity: false, tooHigh: false, inZone: false, distance: Infinity, heightAbove: 0 };
-    const overCity = t.isOverCity(p.x, p.z);
+    const overCity = t.isOverCity(p.x, p.z) && (typeof t.getSurfaceHeight !== 'function' || t.getSurfaceHeight(p.x, p.z) !== null);
     const heightAbove = p.y - t.cityTop;
     const inZone = overCity && heightAbove > 0 && heightAbove <= ELEPHANT.DELIVERY_ABOVE_MAX;
     const tooHigh = overCity && heightAbove > ELEPHANT.DELIVERY_ABOVE_MAX;

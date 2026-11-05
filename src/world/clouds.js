@@ -137,7 +137,9 @@ void main() {
   float grp = aParams.w;
   vec3 center;
   if (grp < -0.5) {
-    center = aOffset + uWind * uTime;
+    // deriva com o vento, enrolando nos limites do mundo (nunca esvazia um lado do mapa)
+    vec2 w = mod(aOffset.xz + uWind.xz * uTime + 30000.0, 60000.0) - 30000.0;
+    center = vec3(w.x, aOffset.y, w.y);
   } else {
     int gi = int(grp + 0.5);
     float a = uTime * uRingSpin;
@@ -146,8 +148,10 @@ void main() {
   }
   center.y += sin(uTime * 0.15 + aParams.z * 9.0) * 3.0;
 
-  vec3 right = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
-  vec3 up = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+  // billboard esférico sem rolagem: as bases das nuvens ficam niveladas mesmo com a câmera inclinada
+  vec3 vd = normalize(center - cameraPosition);
+  vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), vd));
+  vec3 up = cross(vd, right);
   float mirror = aVar >= 4.0 ? -1.0 : 1.0;
   float cr = cos(aParams.z), sr = sin(aParams.z);
   vec2 q = vec2(position.x * mirror, position.y);
@@ -444,6 +448,7 @@ export function createClouds(scene, worldData, opts = {}) {
   // ----------------------------- ordenação -------------------------------
   const keys = new Float32Array(N);
   const order = new Uint32Array(N);
+  const packed = new Float64Array(N);
   for (let i = 0; i < N; i++) order[i] = i;
   const tmp = new THREE.Vector3();
   function resort(camera, time) {
@@ -453,7 +458,7 @@ export function createClouds(scene, worldData, opts = {}) {
     for (let i = 0; i < N; i++) {
       const g = srcParams[i * 4 + 3];
       let x = srcOffset[i * 3], y = srcOffset[i * 3 + 1], z = srcOffset[i * 3 + 2];
-      if (g < 0) { x += wx; z += wz; }
+      if (g < 0) { x = ((x + wx + 30000) % 60000 + 60000) % 60000 - 30000; z = ((z + wz + 30000) % 60000 + 60000) % 60000 - 30000; }
       else {
         const an = anchorVals[g | 0];
         const rx = x * ca - z * sa, rz = x * sa + z * ca;
@@ -462,7 +467,10 @@ export function createClouds(scene, worldData, opts = {}) {
       const dx = x - cx, dy = y - cy, dz = z - cz;
       keys[i] = dx * dx + dy * dy + dz * dz;
     }
-    order.sort((p, q) => keys[q] - keys[p]); // mais longe primeiro
+    // ordenação sem comparador (bem mais rápida): chave e índice empacotados num Float64
+    for (let i = 0; i < N; i++) packed[i] = -(Math.min(keys[i], 1e13) * 1048576 + i);
+    packed.sort();
+    for (let k = 0; k < N; k++) order[k] = (-packed[k]) % 1048576;
     const oA = offAttr.array, pA = parAttr.array, vA = varAttr.array;
     for (let k = 0; k < N; k++) {
       const i = order[k];

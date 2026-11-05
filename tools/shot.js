@@ -31,7 +31,7 @@ page.on('pageerror', (e) => { console.log('[pageerror] ' + e.message); logs.push
 const t0 = Date.now();
 try {
   await page.goto(url, { waitUntil: 'load', timeout });
-  await page.waitForFunction(() => window.__ready === undefined || window.__ready === true, null, { timeout }).catch((e) => console.log('[shot] timeout esperando __ready: ' + e.message));
+  await page.waitForFunction(() => window.__ready === true, null, { timeout }).catch((e) => console.log('[shot] timeout esperando __ready: ' + e.message));
   if (args.eval) { try { const r = await page.evaluate(args.eval); if (r !== undefined) console.log('[eval]', JSON.stringify(r)); } catch (e) { console.log('[eval error] ' + e.message); } }
   await page.evaluate(async (n) => { if (typeof window.__step === 'function') await window.__step(n); }, frames);
   await page.waitForTimeout(wait);

@@ -77,6 +77,9 @@ clouds.attachTo?.(elephants);
   if (params.speed !== undefined) flight.state.speed = num('speed', DOVE.SPEED_CRUISE);
 }
 input.onFirstInteraction(() => audio.unlock());
+// Esc não conta como gesto de ativação no Chrome; garante o desbloqueio do áudio em qualquer gesto real
+for (const ev of ['keydown', 'pointerdown', 'touchstart']) window.addEventListener(ev, () => audio.unlock(), { passive: true });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') audio.unlock(); });
 
 // ------------------------------ laço ------------------------------------
 const clock = new THREE.Timer();
@@ -118,8 +121,11 @@ function frame() {
 frame();
 
 window.addEventListener('resize', () => {
-  renderer.setSize(window.innerWidth, window.innerHeight, false);
-  camera.aspect = window.innerWidth / window.innerHeight;
+  const w = window.innerWidth, h = window.innerHeight;
+  if (!w || !h) return; // janela minimizada
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality === 'low' ? 1 : 1.5));
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
 });
 

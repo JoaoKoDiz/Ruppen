@@ -1150,6 +1150,7 @@ export function createElephant(route, index, opts = {}) {
     cityFootprint: { rx: (B.rx * BODY_SX + 150) * SCALE, rz: (B.rz + 150) * SCALE },
     deliveryMarker: new THREE.Vector3(),
     bones: B2,
+    body: rig,                 // nó que balança com o passo (cestas pousadas são presas aqui)
     update(dt, time) {
       state.u = (state.u + (route.speed * dt) / route.length) % 1;
       const pose = route.poseAt(state.u);

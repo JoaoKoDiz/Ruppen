@@ -46,6 +46,7 @@ export function createFlightController({ input, islandHeightAt, elephants = [] }
   const prev = new THREE.Vector3();
   const tmp = new THREE.Vector3();
   const nrm = new THREE.Vector3();
+  const hitN = new THREE.Vector3(0, 1, 0); // normal do último toque num elefante
 
   // --------------------------- leitura das teclas ------------------------
   function readInput() {
@@ -86,6 +87,7 @@ export function createFlightController({ input, islandHeightAt, elephants = [] }
         const minD = c.radius + FLIGHT.COLLIDER_RADIUS;
         if (dist >= minD) continue;
         if (dist < 1e-4) nrm.set(0, 1, 0); else nrm.divideScalar(dist);
+        hitN.copy(nrm);
         // empurra para fora pela normal da esfera
         state.position.copy(c.center).addScaledVector(nrm, minD);
         state.colliding = true;
@@ -183,9 +185,12 @@ export function createFlightController({ input, islandHeightAt, elephants = [] }
     state.velocity.copy(p).sub(prev).divideScalar(dt);
     if (state.colliding) {
       // remove a componente da velocidade que aponta para dentro do elefante
-      const vn = state.velocity.dot(nrm);
-      if (vn < 0) state.velocity.addScaledVector(nrm, -vn);
+      const vn = state.velocity.dot(hitN);
+      if (vn < 0) state.velocity.addScaledVector(hitN, -vn);
     }
+    // empurrões/pisos podem gerar picos num único quadro: limita a velocidade informada
+    const vmax = DOVE.SPEED_BOOST * 3;
+    if (state.velocity.lengthSq() > vmax * vmax) state.velocity.setLength(vmax);
     state.groundHeight = groundAt(p.x, p.z);
     state.altitude = p.y - state.groundHeight;
   }

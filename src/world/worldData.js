@@ -100,6 +100,7 @@ const ROUTE_DEFS = [
 ];
 
 export const routes = ROUTE_DEFS.map((d, i) => {
+  const _pose = { position: new THREE.Vector3(), tangent: new THREE.Vector3(), heading: 0 };
   const rng = createRng(SEED + 101 * (i + 1));
   const p1 = rng.range(0, Math.PI * 2), p2 = rng.range(0, Math.PI * 2);
   const N = 14;
@@ -125,11 +126,12 @@ export const routes = ROUTE_DEFS.map((d, i) => {
     // posição/orientação para um u qualquer (u é normalizado por comprimento de arco)
     poseAt(u) {
       const uu = ((u % 1) + 1) % 1;
-      const position = curve.getPointAt(uu);
-      const tangent = curve.getTangentAt(uu).normalize();
+      // objetos reutilizados (chamado a cada quadro por elefante — sem alocação)
+      curve.getPointAt(uu, _pose.position);
+      curve.getTangentAt(uu, _pose.tangent).normalize();
       // o elefante tem +X local = frente; rotation.y leva +X local para (cos, 0, -sin)
-      const heading = Math.atan2(-tangent.z, tangent.x);
-      return { position, tangent, heading };
+      _pose.heading = Math.atan2(-_pose.tangent.z, _pose.tangent.x);
+      return _pose;
     },
     // pontos do trecho à frente (para o tracejado no mapa): de u até u + metros/length
     aheadPoints(u, meters = 2500, n = 10) {

@@ -24,7 +24,7 @@ const S = () => page.evaluate(() => { const f = window.__ruppen.flight.state; co
 const finite = (s) => s.p.every(Number.isFinite) && Number.isFinite(s.speed) && Number.isFinite(s.heading);
 
 // 1) spawn e voo reto
-await load('x=0&y=200&z=0');
+await load('t=0');
 let s0 = await S(); await step(60); let s1 = await S();
 check('voo reto avança', Math.hypot(s1.p[0] - s0.p[0], s1.p[2] - s0.p[2]) > 60, `dist ${Math.hypot(s1.p[0] - s0.p[0], s1.p[2] - s0.p[2]).toFixed(0)} m em 2 s`);
 check('estado finito', finite(s1));
@@ -51,7 +51,7 @@ check('nunca entra na água', minAlt >= 5, `altitude mínima ${minAlt.toFixed(1)
 await load('x=0&y=3500&z=0'); await key('KeyW', true); let maxY = 0; for (let i = 0; i < 10; i++) { await step(20); const s = await S(); maxY = Math.max(maxY, s.p[1]); } await key('KeyW', false);
 check('respeita o teto', maxY <= 3700, `y máx ${maxY.toFixed(0)}`);
 // 7) mapa: M abre, Esc fecha
-await load('x=0&y=200&z=0'); await key('KeyM', true); await step(2); await key('KeyM', false); let m1 = await S();
+await load('t=0'); await key('KeyM', true); await step(2); await key('KeyM', false); let m1 = await S();
 check('M abre o mapa', m1.mapOpen === true);
 await key('Escape', true); await step(2); await key('Escape', false); let m2 = await S();
 check('Esc fecha o mapa', m2.mapOpen === false);
@@ -80,7 +80,7 @@ let inside = false, minDist = Infinity;
 for (let i = 0; i < 75; i++) { await step(10, 1 / 30); const r = await page.evaluate(() => { const f = window.__ruppen.flight.state.position; const e = window.__ruppen.delivery.target; let md = Infinity; for (const c of e.colliders) { md = Math.min(md, f.distanceTo(c.center) - c.radius); } return md; }); minDist = Math.min(minDist, r); if (r < -40) inside = true; }
 check('não atravessa o elefante', !inside, `penetração mínima ${minDist.toFixed(0)} m`);
 // 11) estatísticas
-await load('x=0&y=200&z=0'); await step(5); const st = await page.evaluate(() => window.__stats());
+await load('t=0'); await step(5); const st = await page.evaluate(() => window.__stats());
 check('orçamento de triângulos', st.triangles < 2500000 && st.calls < 350, `${st.triangles} tris, ${st.calls} calls`);
 check('sem erros de console', errors.length === 0, errors.slice(0, 5).join(' | '));
 await browser.close();
