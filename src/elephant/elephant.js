@@ -9,7 +9,10 @@
 //  tijolos; prédio alto de tijolos com arcos; praça de mercado no centro
 //  (ponto da entrega); cidades e torres nas presas; placa dourada com tachas,
 //  guirlanda de pompons, borla rosa, anéis de ouro, faixas nos tornozelos.
-//  Medidas extras em config.js → ELEPHANT_MODEL.
+//  Medidas extras em config.js → ELEPHANT_MODEL e ELEPHANT_POLISH (olho, perfil das patas).
+//  Polimento: patas em perfil de revolução (pé alargado, joelho com pregas, coxa que entra na
+//  barriga), corpo com polos no eixo da espinha (sem "estrela" na barriga), olho com íris e brilho,
+//  presas que sobem pouco, pompons de lã fosca e janelas cinza-quentes com moldura clara.
 //
 //  Estrutura: UM SkinnedMesh com 9 ossos (raiz, 4 patas, 2 orelhas,
 //  tromba, cauda) e grupos de material (pele, tecido da tromba, panos,
@@ -22,7 +25,7 @@
 // =====================================================================
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { ELEPHANT, ELEPHANT_MODEL, COLORS, SEED } from '../config.js';
+import { ELEPHANT, ELEPHANT_MODEL, ELEPHANT_POLISH, COLORS, SEED } from '../config.js';
 import { createRng, hashInt } from '../util/rng.js';
 import { createNoise } from '../util/noise.js';
 
@@ -32,7 +35,7 @@ const V3 = THREE.Vector3;
 const noise = createNoise(SEED + 331);
 
 // Alturas da cidade (locais a este modelo)
-const EM = ELEPHANT_MODEL;
+const EM = { ...ELEPHANT_MODEL, ...ELEPHANT_POLISH };
 const HOUSE_AVG = 42;            // altura média das casas usada em getSurfaceHeight
 const PALACE_X = EM.PALACE_X, PZ = EM.PLAZA;
 const PALACE_BASE_TOP = 1650;    // topo do bloco principal do palácio
@@ -263,8 +266,13 @@ function drawArchWindows(ctx, x0, y0, w, h, cols, rows, { wall, win, frame, ledg
       const ww = cw * winW, hh = ch * winH;
       const isDoor = door && r === rows - 1 && cI === Math.floor(cols / 2);
       const wwF = isDoor ? ww * 1.3 : ww, hhF = isDoor ? ch * 0.8 : hh, topF = isDoor ? y0 + (r + 1) * ch - hhF : top;
-      if (frame) { ctx.fillStyle = frame; ctx.beginPath(); ctx.moveTo(cx - wwF / 2 - 2, topF + hhF + 2); ctx.lineTo(cx - wwF / 2 - 2, topF + wwF / 2); ctx.arc(cx, topF + wwF / 2, wwF / 2 + 2, Math.PI, 0); ctx.lineTo(cx + wwF / 2 + 2, topF + hhF + 2); ctx.closePath(); ctx.fill(); }
+      // moldura clara fina (arco), vidro cinza-quente escuro, leve reflexo no alto e peitoril
+      if (frame) { ctx.fillStyle = frame; ctx.beginPath(); ctx.moveTo(cx - wwF / 2 - 2.5, topF + hhF + 2.5); ctx.lineTo(cx - wwF / 2 - 2.5, topF + wwF / 2); ctx.arc(cx, topF + wwF / 2, wwF / 2 + 2.5, Math.PI, 0); ctx.lineTo(cx + wwF / 2 + 2.5, topF + hhF + 2.5); ctx.closePath(); ctx.fill(); }
       ctx.fillStyle = win; ctx.beginPath(); ctx.moveTo(cx - wwF / 2, topF + hhF); ctx.lineTo(cx - wwF / 2, topF + wwF / 2); ctx.arc(cx, topF + wwF / 2, wwF / 2, Math.PI, 0); ctx.lineTo(cx + wwF / 2, topF + hhF); ctx.closePath(); ctx.fill();
+      if (!isDoor) {
+        ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.beginPath(); ctx.arc(cx, topF + wwF / 2, wwF / 2 - 1.5, Math.PI * 1.05, Math.PI * 1.75); ctx.lineTo(cx, topF + wwF / 2); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(cx - wwF / 2 - 3, topF + hhF + 1, wwF + 6, Math.max(1.5, wwF * 0.08));
+      }
     }
   }
 }
@@ -272,28 +280,28 @@ function makeCityAtlas() {
   const S = 1024, c = makeCanvas(S, S), ctx = c.getContext('2d');
   ctx.fillStyle = '#f4f1ea'; ctx.fillRect(0, 0, S, S);
   // PAL: fileiras de janelas em arco (palácio branco)
-  drawArchWindows(ctx, 0, 0, 512, 512, 18, 6, { wall: '#f3efe7', win: '#2c2e3c', frame: '#dcd6cb', ledge: '#d3cdc2', winW: 0.44, winH: 0.62 });
+  drawArchWindows(ctx, 0, 0, 512, 512, 18, 6, { wall: '#f3efe7', win: '#3a3230', frame: '#dcd6cb', ledge: '#d3cdc2', winW: 0.44, winH: 0.62 });
   ctx.fillStyle = 'rgba(0,0,0,0.06)'; for (let i = 1; i < 18; i++) ctx.fillRect(i * 512 / 18 - 1, 0, 2, 512);
   // BRK: tijolo vermelho com arcos creme
   ctx.fillStyle = '#a84b3b'; ctx.fillRect(512, 0, 512, 512);
   ctx.fillStyle = 'rgba(70,25,20,0.45)';
   for (let yy = 0; yy < 512; yy += 8) { ctx.fillRect(512, yy, 512, 1); const off = (yy / 8) % 2 ? 10 : 0; for (let xx = off; xx < 512; xx += 20) ctx.fillRect(512 + xx, yy, 1, 8); }
-  drawArchWindows(ctx, 512, 0, 512, 512, 13, 5, { wall: 'rgba(0,0,0,0)', win: '#3a2624', frame: '#eadbc6', winW: 0.4, winH: 0.6 });
+  drawArchWindows(ctx, 512, 0, 512, 512, 13, 5, { wall: 'rgba(0,0,0,0)', win: '#3f322d', frame: '#eadbc6', winW: 0.4, winH: 0.6 });
   // PLAIN: creme com leve ruído
   ctx.fillStyle = '#f5f2ec'; ctx.fillRect(0, 512, 256, 256);
   const grain = noiseCanvas(128, 51, 6, 3, 200, 255);
   ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.5; ctx.drawImage(grain, 0, 512, 256, 256); ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
   // TOWER: janelas estreitas
-  drawArchWindows(ctx, 256, 512, 256, 256, 3, 6, { wall: '#f3efe7', win: '#2c2e3c', frame: '#d8d2c6', winW: 0.3, winH: 0.62 });
+  drawArchWindows(ctx, 256, 512, 256, 256, 3, 6, { wall: '#f3efe7', win: '#3a3230', frame: '#d8d2c6', winW: 0.3, winH: 0.62 });
   // PAVE: calçamento
   ctx.fillStyle = '#d9d0bd'; ctx.fillRect(512, 512, 256, 256);
   const prng = createRng(SEED + 77);
   for (let yy = 512; yy < 768; yy += 32) for (let xx = 512; xx < 768; xx += 32) { ctx.fillStyle = `rgba(120,100,80,${0.08 + prng() * 0.18})`; ctx.fillRect(xx + 1, yy + 1, 30, 30); }
   // TALL: prédio de vários andares (3x5 janelas em arco), sem porta
-  drawArchWindows(ctx, 768, 512, 256, 256, 3, 5, { wall: '#ffffff', win: '#33353f', frame: '#e3ddd2', winW: 0.34, winH: 0.56 });
+  drawArchWindows(ctx, 768, 512, 256, 256, 3, 5, { wall: '#ffffff', win: '#3a3230', frame: '#e6e0d5', winW: 0.3, winH: 0.5 });
   ctx.fillStyle = 'rgba(0,0,0,0.07)'; for (let r = 1; r < 5; r++) ctx.fillRect(768, 512 + r * 51.2 - 1, 256, 2);
   // HOUSE: parede branca com 3x2 janelas + porta
-  drawArchWindows(ctx, 0, 768, 512, 256, 3, 2, { wall: '#ffffff', win: '#33353f', frame: '#e3ddd2', winW: 0.3, winH: 0.5, door: true });
+  drawArchWindows(ctx, 0, 768, 512, 256, 3, 2, { wall: '#ffffff', win: '#3a3230', frame: '#e6e0d5', winW: 0.26, winH: 0.44, door: true });
   // ROOF: telhas (claras: a cor do vértice tinge)
   ctx.fillStyle = '#ffffff'; ctx.fillRect(512, 768, 512, 256);
   ctx.strokeStyle = '#b8aea2'; ctx.lineWidth = 2;
@@ -320,20 +328,59 @@ function makeTasselTexture() {
   return canvasTexture(c);
 }
 
+// Olho: globo castanho-escuro, anel de íris âmbar, pupila, brilho branco (também usado como
+// emissiveMap: só o brilho "acende"). Canto inferior-esquerdo = pele escura (anel das pálpebras).
 function makeEyeTexture() {
-  const S = 128, c = makeCanvas(S, S), ctx = c.getContext('2d');
-  const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 70); g.addColorStop(0, '#120e0b'); g.addColorStop(0.55, '#2a1d15'); g.addColorStop(1, '#3d3028');
+  const S = 256, c = makeCanvas(S, S), ctx = c.getContext('2d');
+  ctx.fillStyle = '#2b1d16'; ctx.fillRect(0, 0, S, S);
+  const cx = 128, cy = 128;
+  // esclera escura levemente mais clara nas bordas (globo úmido)
+  let g = ctx.createRadialGradient(cx, cy, 30, cx, cy, 128); g.addColorStop(0, '#2b1d16'); g.addColorStop(0.5, '#34241b'); g.addColorStop(1, '#4a3a30');
   ctx.fillStyle = g; ctx.fillRect(0, 0, S, S);
-  ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.beginPath(); ctx.arc(64, 42, 9, 0, TAU); ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.beginPath(); ctx.arc(78, 60, 4, 0, TAU); ctx.fill();
-  return canvasTexture(c);
+  // íris: anel âmbar com estrias radiais
+  g = ctx.createRadialGradient(cx, cy, 22, cx, cy, 60); g.addColorStop(0, '#5a3618'); g.addColorStop(0.55, '#8a5a26'); g.addColorStop(0.85, '#6a4420'); g.addColorStop(1, '#2e1e12');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, 60, 0, TAU); ctx.fill();
+  ctx.strokeStyle = 'rgba(40,22,10,0.45)'; ctx.lineWidth = 1.5;
+  for (let i = 0; i < 48; i++) { const a = (i / 48) * TAU; ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * 26, cy + Math.sin(a) * 26); ctx.lineTo(cx + Math.cos(a + 0.05) * 58, cy + Math.sin(a + 0.05) * 58); ctx.stroke(); }
+  ctx.strokeStyle = 'rgba(20,12,6,0.9)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(cx, cy, 60, 0, TAU); ctx.stroke(); // limbo
+  // pupila
+  g = ctx.createRadialGradient(cx, cy, 2, cx, cy, 30); g.addColorStop(0, '#000000'); g.addColorStop(0.85, '#050302'); g.addColorStop(1, '#2a1a0c');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, 30, 0, TAU); ctx.fill();
+  // brilhos (branco puro: o emissivo acende só aqui)
+  ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(cx - 22, cy - 26, 13, 0, TAU); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.beginPath(); ctx.arc(cx + 24, cy + 20, 6, 0, TAU); ctx.fill();
+  // canto escuro para o anel das pálpebras (uv 0..0.06)
+  ctx.fillStyle = '#3a373c'; ctx.fillRect(0, S - 20, 20, 20);
+  const t = canvasTexture(c); t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  return t;
+}
+
+// Pompom: lã felpuda — manchas de ruído + fios curtos aleatórios (cinza claro: a cor da instância tinge).
+function makePompomTextures() {
+  const S = 256, c = makeCanvas(S, S), ctx = c.getContext('2d');
+  ctx.fillStyle = '#d8d8d8'; ctx.fillRect(0, 0, S, S);
+  const blot = noiseCanvas(128, 61, 9, 3, 150, 255);
+  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.9; ctx.drawImage(blot, 0, 0, S, S);
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  const rng = createRng(SEED + 606);
+  const b = makeCanvas(S, S), bctx = b.getContext('2d');
+  bctx.fillStyle = '#808080'; bctx.fillRect(0, 0, S, S);
+  for (let i = 0; i < 2600; i++) {
+    const x = rng() * S, y = rng() * S, a = rng() * TAU, L = 4 + rng() * 9, w = 0.8 + rng() * 1.4;
+    const light = rng() < 0.5;
+    ctx.strokeStyle = light ? `rgba(255,255,255,${0.25 + rng() * 0.35})` : `rgba(40,40,40,${0.15 + rng() * 0.3})`;
+    ctx.lineWidth = w; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(a) * L, y + Math.sin(a) * L); ctx.stroke();
+    bctx.strokeStyle = light ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)'; bctx.lineWidth = w; bctx.lineCap = 'round';
+    bctx.beginPath(); bctx.moveTo(x, y); bctx.lineTo(x + Math.cos(a) * L, y + Math.sin(a) * L); bctx.stroke();
+  }
+  return { map: canvasTexture(c), bump: canvasTexture(b, false) };
 }
 
 let shared = null;
 function getShared() {
   if (shared) return shared;
   const skin = makeSkinTextures(), trunk = makeTrunkTextures(), cloth = makeClothTextures();
-  const city = makeCityAtlas(), tassel = makeTasselTexture(), eye = makeEyeTexture();
+  const city = makeCityAtlas(), tassel = makeTasselTexture(), eye = makeEyeTexture(), pom = makePompomTextures();
   const mat = {
     skin: new THREE.MeshStandardMaterial({ map: skin.map, bumpMap: skin.bump, bumpScale: 4, roughness: 0.86, metalness: 0 }),
     trunk: new THREE.MeshStandardMaterial({ map: trunk.map, bumpMap: trunk.bump, bumpScale: 3.5, roughness: 0.88, metalness: 0 }),
@@ -343,9 +390,11 @@ function getShared() {
     gold: new THREE.MeshStandardMaterial({ color: COLORS.gold, metalness: 0.65, roughness: 0.36, emissive: COLORS.goldDark, emissiveIntensity: 0.22 }),
     city: new THREE.MeshStandardMaterial({ map: city, vertexColors: true, roughness: 0.8, metalness: 0 }),
     pink: new THREE.MeshStandardMaterial({ map: tassel, roughness: 0.9, metalness: 0 }),
-    eye: new THREE.MeshStandardMaterial({ map: eye, roughness: 0.25, metalness: 0.1 }),
+    // olho: brilho branco acende via emissiveMap (as partes escuras do mapa quase não emitem)
+    eye: new THREE.MeshStandardMaterial({ map: eye, emissiveMap: eye, emissive: 0xffffff, emissiveIntensity: 0.55, roughness: 0.22, metalness: 0.05 }),
     silver: new THREE.MeshStandardMaterial({ color: 0xd9dee5, metalness: 0.6, roughness: 0.3, emissive: 0x2a3038, emissiveIntensity: 0.4 }),
-    pompom: new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0 }),
+    // lã: sem brilho algum + textura felpuda (a cor vem da instância)
+    pompom: new THREE.MeshStandardMaterial({ map: pom.map, bumpMap: pom.bump, bumpScale: 1.2, roughness: 1.0, metalness: 0 }),
   };
   shared = { mat };
   return shared;
@@ -480,7 +529,10 @@ function pointInPolygon(x, y, poly) {
 }
 function fuzzySphere(r, ws, hs, amount) {
   const g = new THREE.SphereGeometry(r, ws, hs);
-  return mapVertices(g, (v) => { const n = hashInt(Math.round(v.x * 7), Math.round(v.y * 7), Math.round(v.z * 7)); v.multiplyScalar(1 + amount * (n - 0.5)); });
+  // deslocamento radial por hash do vértice (tufos); mergeVertices antes para o polo deslocar junto
+  const m = mergeVertices(g);
+  mapVertices(m, (v) => { const k = 9 / r; const n = hashInt(Math.round(v.x * k * 1.31), Math.round(v.y * k * 1.07), Math.round(v.z * k * 1.19)); v.multiplyScalar(1 + amount * (n - 0.5)); });
+  return m;
 }
 
 // Casa em caixa: paredes com janelas (atlas HOUSE), telhado tingido (ROOF), base lisa.
@@ -607,9 +659,14 @@ export function createElephant(route, index, opts = {}) {
 
   // ============================ CORPO ==============================
   {
+    // Esfera com os polos ao longo do eixo da espinha (+X/−X): assim o leque de triângulos do polo
+    // fica escondido no pescoço e na garupa, e a barriga (vista de baixo) não mostra "estrela".
     const g = new THREE.SphereGeometry(1, low ? 56 : 80, low ? 36 : 52);
+    g.rotateZ(-Math.PI / 2); // polo +Y → +X
+    // uv: u ao longo do corpo (latitude da esfera girada), v ao redor do eixo X → as rugas correm
+    // horizontais nos flancos, como nas referências
+    { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) { const u = uv.getX(i), v = uv.getY(i); uv.setXY(i, v * 2.5, u * 2 + 0.25); } }
     mapVertices(g, (v) => { tmp.copy(v).normalize(); bodyPoint(tmp, v); });
-    scaleUV(g, 3, 1);
     add('skin', g);
   }
   // pescoço (une corpo e cabeça)
@@ -626,48 +683,78 @@ export function createElephant(route, index, opts = {}) {
     scaleUV(g, 2, 0.8);
     add('skin', g);
   }
-  // olhos
+  // olhos: globo castanho-escuro com íris âmbar e brilho (textura + emissivo), pouco afundado;
+  // anel de pele escura ao redor (pálpebra) + dobra de pele por cima
   for (const side of [-1, 1]) {
     const d = new V3(0.56, 0.1, side * 0.82).normalize();
-    const g = new THREE.SphereGeometry(27, 16, 12);
-    const q = new THREE.Quaternion().setFromAxisAngle(_up, -side * 0.65);
-    placeGeom(g, headPoint(d, tmp).addScaledVector(d, -9), q);
+    const g = new THREE.SphereGeometry(EM.EYE_RADIUS, 20, 14);
+    // o centro da textura (u=v=0.5) fica em +X da esfera → aponta na direção d (para fora da cabeça)
+    const q = new THREE.Quaternion().setFromUnitVectors(new V3(1, 0, 0), d);
+    // u cobre 360° e v 180°: comprime u ×2 para a íris ficar redonda (a borda da textura é esclera escura, clamp)
+    { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) - 0.5) * 2 + 0.5, uv.getY(i)); }
+    placeGeom(g, headPoint(d, tmp).addScaledVector(d, -EM.EYE_SINK), q);
     add('eye', g);
-    // pálpebra: dobra de pele por cima (meia-casca)
-    const lid = new THREE.SphereGeometry(33, 14, 8, 0, TAU, 0, Math.PI * 0.42);
-    placeGeom(lid, headPoint(d, tmp).addScaledVector(d, -12), quatFromUp(new V3(0.2, 0.75, side * 0.55).normalize()));
+    // anel de pele escura (pálpebras) rente à pele, mapeado no canto escuro da textura do olho
+    const ring = new THREE.TorusGeometry(EM.EYE_RADIUS + 3, 9, 8, 24);
+    placeGeom(ring, headPoint(d, tmp).addScaledVector(d, -4), new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), d));
+    remapUV(ring, [0.01, 0.05, 0.01, 0.05]);
+    add('eye', ring);
+    // pálpebra superior: dobra de pele por cima (meia-casca), ligeiramente acima do globo
+    const lid = new THREE.SphereGeometry(EM.EYE_RADIUS + 6, 14, 8, 0, TAU, 0, Math.PI * 0.27);
+    placeGeom(lid, headPoint(d, tmp).addScaledVector(d, -9), quatFromUp(new V3(0.0, 0.92, side * 0.38).normalize()));
     scaleUV(lid, 0.3, 0.1);
     add('skin', lid);
   }
   // ============================ PATAS ==============================
-  const legProfile = [[0, -90], [138, -90], [157, -74], [156, -42], [147, 0], [140, 60], [137, 140], [137, 230], [139, 320], [144, 400], [149, 470], [150, 560], [158, 650], [172, 740], [190, 820], [205, 900], [215, 960], [0, 960]];
+  // Perfil de revolução (raio, y): pé alargado e arredondado embaixo (flare ≈ 1.12), tornozelo,
+  // leve estreitamento no joelho (≈ 0.88 do quadril, a ~45% da altura) com duas pregas de pele,
+  // coxa/quadril mais largos e topo FECHADO e arredondado (afunda na barriga sem aresta visível).
+  const LR = EM.LEG_HIP_RADIUS;  // raio de referência (quadril)
+  const legProfile = [
+    [0, -90], [0.72 * LR, -90], [0.98 * LR, -80], [1.09 * LR, -62], [1.12 * LR, -30], [1.08 * LR, 10], [1.02 * LR, 60], [0.97 * LR, 120],
+    [0.945 * LR, 190], [0.92 * LR, 260], [0.9 * LR, 320], [0.88 * LR, 360], [0.92 * LR, 400], [0.885 * LR, 430], [0.925 * LR, 470], [0.9 * LR, 510],
+    [0.92 * LR, 580], [0.945 * LR, 650], [0.97 * LR, 720], [1.0 * LR, 790], [1.04 * LR, 850], [1.07 * LR, 900], [1.03 * LR, 935], [0.9 * LR, 955], [0.62 * LR, 966], [0, 968],
+  ];
   const legPts = legProfile.map(([r, y]) => new THREE.Vector2(r, y));
+  const legR = (y) => { // raio do perfil na altura y (interpolação linear)
+    for (let i = 1; i < legProfile.length; i++) { const [r0, y0] = legProfile[i - 1], [r1, y1] = legProfile[i]; if (y <= y1) return lerp(r0, r1, (y - y0) / (y1 - y0)); }
+    return 0;
+  };
   const legIdx = { '1,-1': BONE.legFL, '1,1': BONE.legFR, '-1,-1': BONE.legBL, '-1,1': BONE.legBR };
   for (const sx of [1, -1]) for (const sz of [-1, 1]) {
     const bone = legIdx[sx + ',' + sz];
     const cx = sx * LG.offsetX, cz = sz * LG.offsetZ;
-    const g = new THREE.LatheGeometry(legPts, low ? 22 : 30);
-    // leve dobra do joelho: parte de baixo da pata ligeiramente deslocada (frente: joelho à frente; trás: jarrete atrás)
-    mapVertices(g, (v) => {
+    const g = new THREE.LatheGeometry(legPts, low ? 24 : 32);
+    // deformação da pata (também aplicada à faixa do tornozelo, para ela seguir a pele)
+    const legDeform = (v, lift = 0) => {
+      // ruído RADIAL (sem descontinuidade nos planos x=0 / z=0, que criava uma "costura" vertical)
+      const rl = Math.hypot(v.x, v.z);
+      const n = noise.fbm3(v.x / 220 + cx, v.y / 220, v.z / 220 + cz, 2) * 6 + lift;
+      if (rl > 1e-3) { v.x += (n * v.x) / rl; v.z += (n * v.z) / rl; }
+      // leve dobra do joelho (frente: joelho à frente; trás: jarrete atrás) e coxa inclinada para dentro,
+      // de modo que o topo da pata entre na barriga em vez de sair pelo flanco
       const k = smooth(560, 320, v.y) * (1 - smooth(140, -40, v.y));   // 1 na altura do joelho
       v.x += sx * 18 * k + sx * 10 * smooth(560, 900, v.y);
-      const n = noise.fbm3(v.x / 220 + cx, v.y / 220, v.z / 220 + cz, 2) * 6; v.x += n * (v.x > 0 ? 1 : -1) * 0.5; v.z += n * (v.z > 0 ? 1 : -1) * 0.5;
+      v.z -= sz * EM.LEG_HIP_LEAN * smooth(600, 968, v.y);
       v.x += cx; v.z += cz;
-    });
+    };
+    mapVertices(g, (v) => legDeform(v));
     scaleUV(g, 1, 1);
     add('skin', g, bone);
-    // unhas (frente da pata)
-    for (const a of [-0.78, -0.26, 0.26, 0.78]) {
+    // unhas: 5 esferas achatadas de marfim meio enterradas na borda do pé, da frente para os lados
+    const rNail = legR(-14);
+    for (const a of [-1.05, -0.52, 0, 0.52, 1.05]) {
       const ux = sx * Math.cos(a), uz = Math.sin(a);  // frente da pata = +X (lado sx)
       const n = new THREE.SphereGeometry(1, 10, 7);
-      n.scale(30, 24, 20);
+      n.scale(36, 24, 22);
       const q = new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), new V3(ux, 0, uz));
-      placeGeom(n, new V3(cx + ux * 150, -12, cz + uz * 150), q);
+      placeGeom(n, new V3(cx + ux * (rNail - 6), -16, cz + uz * (rNail - 6)), q);
       add('ivory', n, bone);
     }
-    // faixa listrada no tornozelo
-    const band = new THREE.CylinderGeometry(150, 153, 118, 28, 1, true);
-    band.translate(cx, 128, cz);
+    // faixa listrada no tornozelo (segue o perfil: um pouco mais larga embaixo)
+    const band = new THREE.CylinderGeometry(legR(187), legR(69), 118, 28, 1, true);
+    band.translate(0, 128, 0);
+    mapVertices(band, (v) => legDeform(v, 9));   // segue a pele, 9 m acima dela
     remapUV(band, [0, 1, 0.255, 0.495]);
     add('cloth', band, bone);
   }
@@ -701,9 +788,11 @@ export function createElephant(route, index, opts = {}) {
   // ============================ PRESAS =============================
   const tuskCurves = [];
   for (const side of [-1, 1]) {
+    // presas: descem da boca, curvam para fora e para a frente e sobem só de leve na ponta
+    // (subida reduzida ~40% em relação ao desenho anterior, que lembrava um mamute)
     const curve = new THREE.CatmullRomCurve3([
       new V3(940, 880, side * 115), new V3(1080, 800, side * 210), new V3(1240, 715, side * 300), new V3(1420, 665, side * 365),
-      new V3(1590, 680, side * 405), new V3(1720, 770, side * 415), new V3(1790, 905, side * 400), new V3(1800, 1000, side * 380)]);
+      new V3(1600, 674, side * 405), new V3(1750, 728, side * 415), new V3(1850, 809, side * 400), new V3(1890, 866, side * 380)]);
     curve.arcLengthDivisions = 300;
     tuskCurves.push(curve);
     const rAt = (t) => (t < 0.06 ? lerp(92, 72, t / 0.06) : t < 0.97 ? lerp(72, TK.tipRadius, (t - 0.06) / 0.91) : TK.tipRadius * Math.sqrt(Math.max(0, 1 - ((t - 0.97) / 0.03) ** 2)) + 0.5);
@@ -839,7 +928,7 @@ export function createElephant(route, index, opts = {}) {
     const mid = tasselTop.clone().add(new V3(ax.x, yTop, 0)).multiplyScalar(0.5);
     placeGeom(strap, mid, quatFromUp(new V3(ax.x, yTop, 0).sub(tasselTop).normalize())); add('gold', strap);
     // pompom vermelho no alto
-    const pom = fuzzySphere(52, 14, 10, 0.12); pom.translate(ax.x, yTop - 40, 0); setColorRange(pom, 0xc9303a); parts.city; // (cor via vértice não se aplica ao material pompom; usamos ouro-rosa abaixo)
+    const pom = fuzzySphere(52, 16, 12, 0.2); pom.translate(ax.x, yTop - 40, 0);
     add('pink', remapUV(pom, [0.02, 0.98, 0.52, 0.98]));
     // sino dourado (cone) abaixo do pompom
     const bell = new THREE.ConeGeometry(44, 95, 24); bell.rotateX(Math.PI); bell.translate(ax.x, yTop - 92 - 47, 0); add('gold', bell);
@@ -1110,7 +1199,8 @@ export function createElephant(route, index, opts = {}) {
   }
   // ---- pompons (instâncias com cor) ----
   {
-    const pomGeo = fuzzySphere(1, low ? 9 : 13, low ? 6 : 9, 0.14);
+    const pomGeo = fuzzySphere(1, low ? 10 : 14, low ? 7 : 10, 0.22);
+    scaleUV(pomGeo, 2, 1);
     const inst = new THREE.InstancedMesh(pomGeo, S.mat.pompom, garland.length);
     const dummy = new THREE.Object3D(); const col = new THREE.Color();
     garland.forEach((gp, i) => {

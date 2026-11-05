@@ -145,7 +145,7 @@
 
 .map-panel {
   position: absolute; left: 50%; top: 50%; z-index: 6;
-  width: min(86vw, 1100px); height: min(86vh, 760px);
+  width: min(86vw, 1100px, calc(min(86vh, 760px) * 1.18)); height: min(86vh, 760px); /* quase quadrado: o mundo preenche o painel */
   transform: translate(calc(-50% - 110vw), -50%);
   transition: transform 0.42s ease-out;
   display: flex; flex-direction: column;
