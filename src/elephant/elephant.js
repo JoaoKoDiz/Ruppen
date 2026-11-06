@@ -40,7 +40,7 @@
 // =====================================================================
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { ELEPHANT, ELEPHANT_MODEL, ELEPHANT_POLISH, COLORS, SEED } from '../config.js';
+import { ELEPHANT, ELEPHANT_MODEL, ELEPHANT_POLISH, ELEPHANT_MATERIALS, COLORS, SEED } from '../config.js';
 import { createRng, hashInt } from '../util/rng.js';
 import { createNoise } from '../util/noise.js';
 
@@ -51,6 +51,7 @@ const noise = createNoise(SEED + 331);
 
 // Alturas da cidade (locais a este modelo)
 const EM = { ...ELEPHANT_MODEL, ...ELEPHANT_POLISH };
+const MT = ELEPHANT_MATERIALS;
 const HOUSE_AVG = 6;             // altura média das casas usada em getSurfaceHeight
 const HR = HD.radius * EM.HEAD_SCALE;   // raio efetivo da cabeça
 const PALACE_X = EM.PALACE_X, PZ = EM.PLAZA, PS = EM.PALACE_SIZE;
@@ -118,6 +119,73 @@ function noiseCanvas(size, seedOff, scale, octaves, lo, hi) {
 }
 
 // ------------------------------------------------------------------
+//  campos tileáveis e mapas PBR (normal / roughness) gerados em canvas
+// ------------------------------------------------------------------
+// Campo escalar size×size com amostragem bilinear periódica (u,v em voltas).
+class Field {
+  constructor(size, data = null) { this.size = size; this.data = data || new Float32Array(size * size); }
+  sample(u, v) {
+    const S = this.size, d = this.data;
+    let x = (u - Math.floor(u)) * S, y = (v - Math.floor(v)) * S;
+    const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+    const x1 = (x0 + 1) % S, y1 = (y0 + 1) % S;
+    return d[y0 * S + x0] * (1 - fx) * (1 - fy) + d[y0 * S + x1] * fx * (1 - fy) + d[y1 * S + x0] * (1 - fx) * fy + d[y1 * S + x1] * fx * fy;
+  }
+}
+// Ruído fbm tileável (mistura dos 4 cantos) com escalas independentes em u e v → [-1,1].
+function tileNoise(n, u, v, su, sv, oct = 3) {
+  const a = n.fbm2(u * su, v * sv, oct), b = n.fbm2((u + 1) * su, v * sv, oct), c = n.fbm2(u * su, (v + 1) * sv, oct), d = n.fbm2((u + 1) * su, (v + 1) * sv, oct);
+  return a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
+}
+// Campo de ruído tileável de baixa frequência pré-calculado (barato de amostrar em 1024²).
+function noiseField(size, seedOff, su, sv, oct = 3) {
+  const n = createNoise(SEED + seedOff), f = new Field(size);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) f.data[y * size + x] = tileNoise(n, x / size, y / size, su, sv, oct);
+  return f;
+}
+// Células de Worley periódicas (cells × cells por ladrilho): devolve [F1, F2] em unidades de célula.
+const _wo = [0, 0];
+function worley(u, v, cells, seedOff) {
+  const px = u * cells, py = v * cells, ix = Math.floor(px), iy = Math.floor(py);
+  let f1 = 9, f2 = 9;
+  for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+    const cx = ix + i, cy = iy + j, wx = ((cx % cells) + cells) % cells, wy = ((cy % cells) + cells) % cells;
+    const h1 = hashInt(wx + 1, wy + 7, seedOff), h2 = hashInt(wx + 3, wy + 11, seedOff + 1);
+    const dx = cx + h1 - px, dy = cy + h2 - py, d = Math.sqrt(dx * dx + dy * dy);
+    if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
+  }
+  _wo[0] = f1; _wo[1] = f2; return _wo;
+}
+// Mapa de normais (espaço tangente, convenção OpenGL/three.js: R = +u, G = +v) a partir de um campo de altura
+// periódico (0..1). strength = altura relativa à largura do texel.
+function normalCanvas(h, strength) {
+  const S = h.size, d = h.data, c = makeCanvas(S, S), ctx = c.getContext('2d'), img = ctx.createImageData(S, S);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const xl = (x + S - 1) % S, xr = (x + 1) % S, yu = (y + S - 1) % S, yd = (y + 1) % S;   // yu = linha de cima do canvas = +v
+    const dhdu = (d[y * S + xr] - d[y * S + xl]) * 0.5 * strength, dhdv = (d[yu * S + x] - d[yd * S + x]) * 0.5 * strength;
+    const inv = 1 / Math.sqrt(dhdu * dhdu + dhdv * dhdv + 1);
+    const k = (y * S + x) * 4;
+    img.data[k] = (-dhdu * inv * 0.5 + 0.5) * 255; img.data[k + 1] = (-dhdv * inv * 0.5 + 0.5) * 255; img.data[k + 2] = (inv * 0.5 + 0.5) * 255; img.data[k + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0); return c;
+}
+// Canvas cinza a partir de um campo (0..1) — roughnessMap lê o canal G (todos iguais aqui).
+function grayCanvas(f) {
+  const S = f.size, c = makeCanvas(S, S), ctx = c.getContext('2d'), img = ctx.createImageData(S, S);
+  for (let i = 0; i < S * S; i++) { const g = Math.max(0, Math.min(255, f.data[i] * 255)), k = i * 4; img.data[k] = img.data[k + 1] = img.data[k + 2] = g; img.data[k + 3] = 255; }
+  ctx.putImageData(img, 0, 0); return c;
+}
+// Lê o canal R de um canvas quadrado como campo 0..1 (para converter desenhos 2D em altura).
+function canvasField(c) {
+  const S = c.width, f = new Field(S), d = c.getContext('2d').getImageData(0, 0, S, S).data;
+  for (let i = 0; i < S * S; i++) f.data[i] = d[i * 4] / 255;
+  return f;
+}
+// Textura linear (normal/roughness) com repetição própria (cada mapa tem sua transformação no three.js).
+function linearTexture(canvas, ru = 1, rv = ru) { const t = canvasTexture(canvas, false); t.repeat.set(ru, rv); return t; }
+const sstep = (a, b, x) => smooth(a, b, x);
+
+// ------------------------------------------------------------------
 //  texturas (compartilhadas entre todos os elefantes)
 // ------------------------------------------------------------------
 // Campo de VINCOS orgânicos (barro/tecido amassado): |ruído| com deformação de domínio → cristas
@@ -157,27 +225,111 @@ function getCrease() {
   creaseCache = { col, bump };
   return creaseCache;
 }
+// Camada RGBA de ruído tileável tingido: alfa = smooth(lo, hi, ruído) × maxA (manchas de cor).
+function tintedNoise(size, seedOff, scale, oct, color, lo, hi, maxA) {
+  const c = makeCanvas(size, size), ctx = c.getContext('2d'), img = ctx.createImageData(size, size), n = createNoise(SEED + seedOff);
+  const r = (color >> 16) & 255, g = (color >> 8) & 255, b = color & 255;
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const val = tileNoise(n, x / size, y / size, scale, scale, oct) * 0.5 + 0.5, k = (y * size + x) * 4;
+    img.data[k] = r; img.data[k + 1] = g; img.data[k + 2] = b; img.data[k + 3] = smooth(lo, hi, val) * maxA * 255;
+  }
+  ctx.putImageData(img, 0, 0); return c;
+}
+// Pele: cor (cinza quente com manchas rosadas/castanhas, poeira clara e escurecimento AO nos vincos) +
+// mapa de NORMAIS micro (rugas anisotrópicas finas, rede de fendas em duas escalas — células de Worley
+// deformadas — e poros) + roughnessMap (fosca/empoeirada; um pouco mais lisa nos vincos). O mapa de
+// normais e o de rugosidade repetem SKIN_NORMAL_REPEAT vezes por ladrilho do mapa de cor (≈ 425 m no
+// mundo → fendas de 1–3 m e poros de ~1 m).
 function makeSkinTextures() {
   const W = 1024, H = 1024;
   const c = makeCanvas(W, H), ctx = c.getContext('2d');
-  // base: cinza-castanho QUENTE (refs.: ~#6b625f ao sol), sem tinta azul; as sombras ficam um pouco
-  // mais frias só pelas manchas
-  ctx.fillStyle = '#71655e'; ctx.fillRect(0, 0, W, H);
+  // base: cinza-castanho QUENTE (refs.: ~#6b625f ao sol), sem tinta azul
+  ctx.fillStyle = '#7d726c'; ctx.fillRect(0, 0, W, H);
   const blot = noiseCanvas(128, 17, 3, 4, 170, 255);
-  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.4; ctx.drawImage(blot, 0, 0, W, H);
-  ctx.globalAlpha = 0.25; ctx.drawImage(getCrease().col, 0, 0, W, H);   // vincos orgânicos suaves (cor)
+  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.35; ctx.drawImage(blot, 0, 0, W, H);
+  ctx.globalAlpha = 0.3; ctx.drawImage(getCrease().col, 0, 0, W, H);   // AO dos vincos orgânicos (vales escuros)
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  // manchas (mottling): rosado nas zonas finas da pele, castanho em placas, poeira clara por cima
+  ctx.drawImage(tintedNoise(256, 121, 5, 3, 0x8d6f69, 0.55, 0.8, 0.45), 0, 0, W, H);
+  ctx.drawImage(tintedNoise(256, 122, 7, 3, 0x5a4b44, 0.56, 0.82, 0.28), 0, 0, W, H);
+  ctx.drawImage(tintedNoise(256, 123, 3.5, 3, 0x9c9287, 0.58, 0.85, 0.32), 0, 0, W, H);
   // poros/granulado fino
   ctx.globalAlpha = 0.1; const grain = noiseCanvas(256, 23, 24, 2, 120, 255);
   ctx.globalCompositeOperation = 'multiply'; for (let y = 0; y < H; y += 256) for (let x = 0; x < W; x += 256) ctx.drawImage(grain, x, y, 256, 256);
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
-  // bump: cinza médio = neutro; vincos = vales, cristas = planaltos; poros finos por cima
-  const b = makeCanvas(W, H), bctx = b.getContext('2d');
-  bctx.drawImage(getCrease().bump, 0, 0, W, H);
-  bctx.globalAlpha = 0.22; bctx.drawImage(blot, 0, 0, W, H);
-  bctx.globalAlpha = 0.12; for (let y = 0; y < H; y += 256) for (let x = 0; x < W; x += 256) bctx.drawImage(grain, x, y, 256, 256);
-  bctx.globalAlpha = 1;
-  return { map: canvasTexture(c), bump: canvasTexture(b, false) };
+  // --- micro-relevo (altura) e máscara de vincos → normal + roughness ---
+  const S = 1024;
+  const wr = noiseField(256, 71, 2.5, 7, 3);                    // rugas alongadas em u (anisotrópicas)
+  const wr2 = noiseField(256, 74, 6, 14, 2);                    // rugas finas secundárias
+  const warpU = noiseField(256, 72, 4, 4, 2), warpV = noiseField(256, 73, 4, 4, 2);
+  const h = new Field(S), rf = new Field(S);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S;
+    const wrinkle = 1 - sstep(0, 0.16, Math.abs(wr.sample(u, v)));
+    const wrinkle2 = 1 - sstep(0, 0.1, Math.abs(wr2.sample(u, v)));
+    const wu = u + 0.025 * warpU.sample(u, v), wv = v + 0.025 * warpV.sample(u, v);
+    const cz = worley(wu, wv, 12, 5); const crack = 1 - sstep(0, 0.05, cz[1] - cz[0]), dome = 1 - Math.min(1, cz[0] * 1.5);
+    const fz = worley(wu + 0.37, wv + 0.11, 44, 9); const fine = 1 - sstep(0, 0.11, fz[1] - fz[0]), pore = 1 - sstep(0, 0.16, fz[0]);
+    const k = y * S + x;
+    h.data[k] = 0.6 - 0.2 * wrinkle - 0.1 * wrinkle2 - 0.2 * crack - 0.1 * fine - 0.1 * pore + 0.06 * dome;
+    const groove = Math.max(wrinkle, crack, fine * 0.6, pore * 0.5);
+    rf.data[k] = MT.SKIN_ROUGHNESS + 0.04 * warpU.sample(u * 3, v * 3) - 0.24 * groove;
+  }
+  const R = MT.SKIN_NORMAL_REPEAT;
+  return { map: canvasTexture(c), normal: linearTexture(normalCanvas(h, 6), R, R), rough: linearTexture(grayCanvas(rf), R, R) };
+}
+// Trama tecida (fios por cima/por baixo em xadrez + fibras): campo de altura tileável 256².
+function makeWeaveField(S = 256, N = 16) {
+  const f = new Field(S), n = createNoise(SEED + 81);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const fu = (x / S) * N, fv = (y / S) * N, iu = Math.floor(fu), iv = Math.floor(fv), pu = fu - iu, pv = fv - iv;
+    const over = (iu + iv) & 1, warpH = Math.sin(Math.PI * pu), weftH = Math.sin(Math.PI * pv);
+    const fiber = 0.04 * n.noise2(x * 0.9, y * 0.15) + 0.04 * n.noise2(x * 0.15, y * 0.9);
+    f.data[y * S + x] = 0.45 + 0.22 * (over ? warpH : weftH) + 0.08 * (over ? weftH : warpH) + fiber;
+  }
+  return f;
+}
+// Ouro escovado: riscos longos ao longo de u (leves) + alguns arranhões cruzados → roughness 0.28–0.42 e
+// normal fraca. Tileável em u (as linhas atravessam a borda) e em v (linhas horizontais).
+function makeGoldTextures() {
+  const S = 512, c = makeCanvas(S, S), ctx = c.getContext('2d');
+  ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, S, S);
+  const rng = createRng(SEED + 404);
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 1400; i++) {
+    const y = rng() * S, len = 30 + rng() * 300, x0 = rng() * S - S * 0.5, light = rng() < 0.5;
+    ctx.strokeStyle = light ? `rgba(255,255,255,${0.05 + rng() * 0.16})` : `rgba(0,0,0,${0.05 + rng() * 0.16})`;
+    ctx.lineWidth = 0.8 + rng() * 1.6; ctx.beginPath();
+    for (const off of [0, S]) { ctx.moveTo(x0 + off, y); ctx.lineTo(x0 + len + off, y + (rng() - 0.5) * 1.5); }
+    ctx.stroke();
+  }
+  for (let i = 0; i < 60; i++) {   // arranhões finos cruzados
+    const x = rng() * S, y = rng() * S, a = rng() * TAU, L = 10 + rng() * 60;
+    ctx.strokeStyle = `rgba(0,0,0,${0.15 + rng() * 0.2})`; ctx.lineWidth = 0.8; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(a) * L, y + Math.sin(a) * L); ctx.stroke();
+  }
+  const hf = canvasField(c), wear = noiseField(128, 405, 3, 3, 2), rf = new Field(S);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) { const k = y * S + x; rf.data[k] = MT.GOLD_ROUGHNESS + (hf.data[k] - 0.5) * 0.55 + 0.05 * wear.sample(x / S, y / S); }
+  return { normal: linearTexture(normalCanvas(hf, 4), 4, 4), rough: linearTexture(grayCanvas(rf), 4, 4) };
+}
+// Marfim: creme com veios finos ao longo de v (o comprimento da presa) na cor e numa normal muito fraca.
+function makeIvoryTextures() {
+  const S = 256, g = makeCanvas(S, S), gctx = g.getContext('2d');
+  gctx.fillStyle = '#808080'; gctx.fillRect(0, 0, S, S);
+  const rng = createRng(SEED + 505);
+  for (let i = 0; i < 140; i++) {
+    const x = rng() * S, kk = rng.int(1, 3), amp = 1 + rng() * 3, ph = rng() * TAU, light = rng() < 0.5;
+    gctx.strokeStyle = light ? `rgba(255,255,255,${0.08 + rng() * 0.2})` : `rgba(0,0,0,${0.08 + rng() * 0.2})`; gctx.lineWidth = 0.8 + rng() * 2.2;
+    gctx.beginPath();
+    for (let y = 0; y <= S; y += 8) { const xx = x + amp * Math.sin(TAU * kk * y / S + ph); if (y === 0) gctx.moveTo(xx, y); else gctx.lineTo(xx, y); }
+    gctx.stroke();
+  }
+  const hf = canvasField(g);
+  const c = makeCanvas(S, S), ctx = c.getContext('2d'), img = ctx.createImageData(S, S);
+  const cr = (MT.IVORY_COLOR >> 16) & 255, cg = (MT.IVORY_COLOR >> 8) & 255, cb = MT.IVORY_COLOR & 255;   // bytes sRGB (o canvas é sRGB)
+  for (let i = 0; i < S * S; i++) { const f = 0.9 + 0.2 * (hf.data[i] - 0.5), k = i * 4; img.data[k] = Math.min(255, cr * f); img.data[k + 1] = Math.min(255, cg * f); img.data[k + 2] = Math.min(255, cb * f * 0.98); img.data[k + 3] = 255; }
+  ctx.putImageData(img, 0, 0);
+  const map = canvasTexture(c); map.repeat.set(3, 12);
+  return { map, normal: linearTexture(normalCanvas(hf, 3), 3, 12) };
 }
 
 const TRUNK_FABRIC_END = 0.76; // fração do comprimento da tromba coberta pelo tecido listrado
@@ -217,13 +369,16 @@ function makeTrunkTextures() {
     bctx.stroke();
     y += h; k++;
   }
-  // trama do tecido
+  // trama do tecido (cor) + desgaste: mais claro nas cristas das dobras (campo de vincos em "screen")
   const weave = noiseCanvas(256, 31, 40, 2, 150, 255);
-  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.35; ctx.drawImage(weave, 0, ySplit, W, H - ySplit);
+  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.3; ctx.drawImage(weave, 0, ySplit, W, H - ySplit);
+  ctx.globalCompositeOperation = 'screen'; ctx.globalAlpha = 0.16; ctx.drawImage(getCrease().col, 0, 0, 512, 512, 0, ySplit, W, H - ySplit);
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
-  bctx.globalAlpha = 0.3; bctx.drawImage(weave, 0, ySplit, W, H - ySplit); bctx.globalAlpha = 1;
-  return { map: canvasTexture(c), bump: canvasTexture(b, false) };
+  const wn = MT.TRUNK_WEAVE_REPEAT;
+  return { map: canvasTexture(c), normal: linearTexture(normalCanvas(getWeave(), 8), wn.u, wn.v) };
 }
+let weaveCache = null;
+function getWeave() { if (!weaveCache) weaveCache = makeWeaveField(256, 16); return weaveCache; }
 
 // Atlas de panos: v∈[0.5,1] manto das orelhas; v∈[0.25,0.5] faixas de tornozelo; v∈[0,0.25] trama da barriga.
 function makeClothTextures() {
@@ -286,12 +441,13 @@ function makeClothTextures() {
     ctx.stroke();
   }
   ctx.strokeStyle = hex(COLORS.goldDark); ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(0, 772); ctx.lineTo(S, 772); ctx.moveTo(0, 1020); ctx.lineTo(S, 1020); ctx.stroke();
-  // trama fina em tudo
+  // trama fina em tudo (cor) + desgaste do tecido: cristas das dobras mais claras (manto e faixas)
   const weave = noiseCanvas(256, 31, 40, 2, 150, 255);
   ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.3; ctx.drawImage(weave, 0, 0, S, S);
+  ctx.globalCompositeOperation = 'screen'; ctx.globalAlpha = 0.14; ctx.drawImage(getCrease().col, 0, 0, 512, 512, 0, 0, S, 768);
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
-  bctx.globalAlpha = 0.35; bctx.drawImage(weave, 0, 0, S, S); bctx.globalAlpha = 1;
-  return { map: canvasTexture(c), bump: canvasTexture(b, false) };
+  const R = MT.CLOTH_WEAVE_REPEAT;
+  return { map: canvasTexture(c), normal: linearTexture(normalCanvas(getWeave(), 8), R, R) };
 }
 
 // Regiões do atlas da cidade (u0,u1,v0,v1) com pequena margem contra sangria
@@ -307,63 +463,102 @@ const REG = {
   ROOF: [0.5 + INSET, 0.75 - INSET, 0 + INSET, 0.25 - INSET],
   ROOFT: [0.75 + INSET, 1 - INSET, 0 + INSET, 0.25 - INSET],   // telhas rosa/terracota já coloridas (instâncias do tapete)
 };
-function drawArchWindows(ctx, x0, y0, w, h, cols, rows, { wall, win, frame, ledge, winW = 0.42, winH = 0.6, door = false }) {
-  ctx.fillStyle = wall; ctx.fillRect(x0, y0, w, h);
+// Janelas em arco desenhadas nas 3 camadas do atlas: L = { c: cor, h: altura (128 = plano; janela
+// rebaixada, moldura/peitoril salientes), r: rugosidade (vidro liso, parede fosca) }.
+function drawArchWindows(L, x0, y0, w, h, cols, rows, { wall, win, frame, ledge, winW = 0.42, winH = 0.6, door = false }) {
+  const layers = [
+    { ctx: L.c, wall, win, frame, ledge, extras: true },
+    { ctx: L.h, wall: wall ? '#808080' : null, win: '#3a3a3a', frame: frame ? '#9c9c9c' : null, ledge: ledge ? '#b4b4b4' : null, sill: '#a8a8a8' },
+    { ctx: L.r, wall: wall ? '#c8c8c8' : null, win: '#404040', frame: frame ? '#c0c0c0' : null, ledge: ledge ? '#c8c8c8' : null },
+  ];
   const cw = w / cols, ch = h / rows;
-  for (let r = 0; r < rows; r++) {
-    if (ledge) { ctx.fillStyle = ledge; ctx.fillRect(x0, y0 + r * ch, w, Math.max(2, ch * 0.06)); }
-    for (let cI = 0; cI < cols; cI++) {
-      const cx = x0 + (cI + 0.5) * cw, top = y0 + r * ch + ch * (1 - winH) * 0.55;
-      const ww = cw * winW, hh = ch * winH;
-      const isDoor = door && r === rows - 1 && cI === Math.floor(cols / 2);
-      const wwF = isDoor ? ww * 1.3 : ww, hhF = isDoor ? ch * 0.8 : hh, topF = isDoor ? y0 + (r + 1) * ch - hhF : top;
-      // moldura clara fina (arco), vidro cinza-quente escuro, leve reflexo no alto e peitoril
-      if (frame) { ctx.fillStyle = frame; ctx.beginPath(); ctx.moveTo(cx - wwF / 2 - 2.5, topF + hhF + 2.5); ctx.lineTo(cx - wwF / 2 - 2.5, topF + wwF / 2); ctx.arc(cx, topF + wwF / 2, wwF / 2 + 2.5, Math.PI, 0); ctx.lineTo(cx + wwF / 2 + 2.5, topF + hhF + 2.5); ctx.closePath(); ctx.fill(); }
-      ctx.fillStyle = win; ctx.beginPath(); ctx.moveTo(cx - wwF / 2, topF + hhF); ctx.lineTo(cx - wwF / 2, topF + wwF / 2); ctx.arc(cx, topF + wwF / 2, wwF / 2, Math.PI, 0); ctx.lineTo(cx + wwF / 2, topF + hhF); ctx.closePath(); ctx.fill();
-      if (!isDoor) {
-        ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.beginPath(); ctx.arc(cx, topF + wwF / 2, wwF / 2 - 1.5, Math.PI * 1.05, Math.PI * 1.75); ctx.lineTo(cx, topF + wwF / 2); ctx.closePath(); ctx.fill();
-        ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(cx - wwF / 2 - 3, topF + hhF + 1, wwF + 6, Math.max(1.5, wwF * 0.08));
+  for (const ly of layers) {
+    const ctx = ly.ctx; if (!ctx) continue;
+    if (ly.wall) { ctx.fillStyle = ly.wall; ctx.fillRect(x0, y0, w, h); }
+    for (let r = 0; r < rows; r++) {
+      if (ly.ledge) { ctx.fillStyle = ly.ledge; ctx.fillRect(x0, y0 + r * ch, w, Math.max(2, ch * 0.06)); }
+      for (let cI = 0; cI < cols; cI++) {
+        const cx = x0 + (cI + 0.5) * cw, top = y0 + r * ch + ch * (1 - winH) * 0.55;
+        const ww = cw * winW, hh = ch * winH;
+        const isDoor = door && r === rows - 1 && cI === Math.floor(cols / 2);
+        const wwF = isDoor ? ww * 1.3 : ww, hhF = isDoor ? ch * 0.8 : hh, topF = isDoor ? y0 + (r + 1) * ch - hhF : top;
+        // moldura clara fina (arco), vidro cinza-quente escuro, leve reflexo no alto e peitoril
+        if (ly.frame) { ctx.fillStyle = ly.frame; ctx.beginPath(); ctx.moveTo(cx - wwF / 2 - 2.5, topF + hhF + 2.5); ctx.lineTo(cx - wwF / 2 - 2.5, topF + wwF / 2); ctx.arc(cx, topF + wwF / 2, wwF / 2 + 2.5, Math.PI, 0); ctx.lineTo(cx + wwF / 2 + 2.5, topF + hhF + 2.5); ctx.closePath(); ctx.fill(); }
+        ctx.fillStyle = ly.win; ctx.beginPath(); ctx.moveTo(cx - wwF / 2, topF + hhF); ctx.lineTo(cx - wwF / 2, topF + wwF / 2); ctx.arc(cx, topF + wwF / 2, wwF / 2, Math.PI, 0); ctx.lineTo(cx + wwF / 2, topF + hhF); ctx.closePath(); ctx.fill();
+        if (!isDoor && ly.extras) {
+          ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.beginPath(); ctx.arc(cx, topF + wwF / 2, wwF / 2 - 1.5, Math.PI * 1.05, Math.PI * 1.75); ctx.lineTo(cx, topF + wwF / 2); ctx.closePath(); ctx.fill();
+          ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(cx - wwF / 2 - 3, topF + hhF + 1, wwF + 6, Math.max(1.5, wwF * 0.08));
+        }
+        if (!isDoor && ly.sill) { ctx.fillStyle = ly.sill; ctx.fillRect(cx - wwF / 2 - 3, topF + hhF + 1, wwF + 6, Math.max(1.5, wwF * 0.08)); }
       }
     }
   }
 }
+// Atlas da cidade: cor + ALTURA (→ mapa de normais: janelas rebaixadas, molduras, pilastras do palácio,
+// juntas de argamassa dos tijolos, telhas em relevo, lajes do calçamento) + RUGOSIDADE (vidro liso 0.27,
+// paredes foscas ~0.78, tijolo 0.85, telhas 0.72).
 function makeCityAtlas() {
   const S = 1024, c = makeCanvas(S, S), ctx = c.getContext('2d');
+  const hc = makeCanvas(S, S), hctx = hc.getContext('2d'), rc = makeCanvas(S, S), rctx = rc.getContext('2d');
+  const L = { c: ctx, h: hctx, r: rctx };
   ctx.fillStyle = '#f4f1ea'; ctx.fillRect(0, 0, S, S);
-  // PAL: fileiras de janelas em arco (palácio branco)
-  drawArchWindows(ctx, 0, 0, 512, 512, 22, 12, { wall: '#f3efe7', win: '#3a3230', frame: '#dcd6cb', ledge: '#d3cdc2', winW: 0.46, winH: 0.68 });
-  ctx.fillStyle = 'rgba(0,0,0,0.07)'; for (let i = 1; i < 22; i++) ctx.fillRect(i * 512 / 22 - 1, 0, 2, 512);
-  // BRK: tijolo vermelho com arcos creme
+  hctx.fillStyle = '#808080'; hctx.fillRect(0, 0, S, S);
+  rctx.fillStyle = '#c8c8c8'; rctx.fillRect(0, 0, S, S);
+  // PAL: fileiras de janelas em arco (palácio branco) com pilastras entre as colunas
+  drawArchWindows(L, 0, 0, 512, 512, 22, 12, { wall: '#f6f3ec', win: '#3a3230', frame: '#dcd6cb', ledge: '#d3cdc2', winW: 0.46, winH: 0.68 });
+  ctx.fillStyle = 'rgba(0,0,0,0.07)'; hctx.fillStyle = '#9a9a9a';
+  for (let i = 1; i < 22; i++) { ctx.fillRect(i * 512 / 22 - 1, 0, 2, 512); hctx.fillRect(i * 512 / 22 - 2, 0, 4, 512); }
+  // BRK: tijolo vermelho com arcos creme (argamassa rebaixada)
   ctx.fillStyle = '#a84b3b'; ctx.fillRect(512, 0, 512, 512);
-  ctx.fillStyle = 'rgba(70,25,20,0.45)';
-  for (let yy = 0; yy < 512; yy += 8) { ctx.fillRect(512, yy, 512, 1); const off = (yy / 8) % 2 ? 10 : 0; for (let xx = off; xx < 512; xx += 20) ctx.fillRect(512 + xx, yy, 1, 8); }
-  drawArchWindows(ctx, 512, 0, 512, 512, 16, 8, { wall: 'rgba(0,0,0,0)', win: '#3f322d', frame: '#eadbc6', winW: 0.42, winH: 0.62 });
-  // PLAIN: creme com leve ruído
+  hctx.fillStyle = '#8a8a8a'; hctx.fillRect(512, 0, 512, 512); rctx.fillStyle = '#d8d8d8'; rctx.fillRect(512, 0, 512, 512);
+  ctx.fillStyle = 'rgba(70,25,20,0.45)'; hctx.fillStyle = '#5c5c5c';
+  for (let yy = 0; yy < 512; yy += 8) {
+    ctx.fillRect(512, yy, 512, 1); hctx.fillRect(512, yy, 512, 1.5);
+    const off = (yy / 8) % 2 ? 10 : 0; for (let xx = off; xx < 512; xx += 20) { ctx.fillRect(512 + xx, yy, 1, 8); hctx.fillRect(512 + xx, yy, 1.5, 8); }
+  }
+  drawArchWindows(L, 512, 0, 512, 512, 16, 8, { wall: null, win: '#3f322d', frame: '#eadbc6', winW: 0.42, winH: 0.62 });
+  // PLAIN: creme com leve ruído (relevo quase nulo)
   ctx.fillStyle = '#f5f2ec'; ctx.fillRect(0, 512, 256, 256);
   const grain = noiseCanvas(128, 51, 6, 3, 200, 255);
   ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.5; ctx.drawImage(grain, 0, 512, 256, 256); ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  hctx.globalAlpha = 0.12; hctx.drawImage(grain, 0, 512, 256, 256); hctx.globalAlpha = 1;
   // TOWER: janelas estreitas
-  drawArchWindows(ctx, 256, 512, 256, 256, 3, 6, { wall: '#f3efe7', win: '#3a3230', frame: '#d8d2c6', winW: 0.3, winH: 0.62 });
-  // PAVE: calçamento
+  drawArchWindows(L, 256, 512, 256, 256, 3, 6, { wall: '#f3efe7', win: '#3a3230', frame: '#d8d2c6', winW: 0.3, winH: 0.62 });
+  // PAVE: calçamento (lajes com juntas rebaixadas)
   ctx.fillStyle = '#d9d0bd'; ctx.fillRect(512, 512, 256, 256);
+  hctx.fillStyle = '#5a5a5a'; hctx.fillRect(512, 512, 256, 256); rctx.fillStyle = '#d0d0d0'; rctx.fillRect(512, 512, 256, 256);
   const prng = createRng(SEED + 77);
-  for (let yy = 512; yy < 768; yy += 32) for (let xx = 512; xx < 768; xx += 32) { ctx.fillStyle = `rgba(120,100,80,${0.08 + prng() * 0.18})`; ctx.fillRect(xx + 1, yy + 1, 30, 30); }
+  for (let yy = 512; yy < 768; yy += 32) for (let xx = 512; xx < 768; xx += 32) {
+    ctx.fillStyle = `rgba(120,100,80,${0.08 + prng() * 0.18})`; ctx.fillRect(xx + 1, yy + 1, 30, 30);
+    const lum = 120 + prng() * 20; hctx.fillStyle = `rgb(${lum},${lum},${lum})`; hctx.fillRect(xx + 2, yy + 2, 28, 28);
+  }
   // TALL: prédio de vários andares (3x5 janelas em arco), sem porta
-  drawArchWindows(ctx, 768, 512, 256, 256, 3, 5, { wall: '#ffffff', win: '#3a3230', frame: '#e6e0d5', winW: 0.3, winH: 0.5 });
-  ctx.fillStyle = 'rgba(0,0,0,0.07)'; for (let r = 1; r < 5; r++) ctx.fillRect(768, 512 + r * 51.2 - 1, 256, 2);
+  drawArchWindows(L, 768, 512, 256, 256, 3, 5, { wall: '#ffffff', win: '#3a3230', frame: '#e6e0d5', winW: 0.3, winH: 0.5 });
+  ctx.fillStyle = 'rgba(0,0,0,0.07)'; hctx.fillStyle = '#a0a0a0';
+  for (let r = 1; r < 5; r++) { ctx.fillRect(768, 512 + r * 51.2 - 1, 256, 2); hctx.fillRect(768, 512 + r * 51.2 - 1.5, 256, 3); }
   // HOUSE: parede branca com 3x2 janelas + porta
-  drawArchWindows(ctx, 0, 768, 512, 256, 3, 2, { wall: '#ffffff', win: '#3a3230', frame: '#e6e0d5', winW: 0.26, winH: 0.44, door: true });
-  // ROOF: telhas claras (a cor do vértice tinge); ROOFT: telhas rosa/terracota já coloridas
-  ctx.fillStyle = '#ffffff'; ctx.fillRect(512, 768, 256, 256);
-  ctx.strokeStyle = '#b8aea2'; ctx.lineWidth = 2;
-  for (let row = 0; row < 8; row++) { const yy = 768 + row * 32 + 16; const off = row % 2 ? 16 : 0; for (let xx = 512 + off; xx < 768 + 32; xx += 32) { ctx.beginPath(); ctx.arc(xx, yy, 15, Math.PI, 0); ctx.stroke(); } }
-  ctx.fillStyle = '#c9775f'; ctx.fillRect(768, 768, 256, 256);
-  ctx.strokeStyle = 'rgba(90,40,30,0.5)'; ctx.lineWidth = 2;
-  for (let row = 0; row < 8; row++) { const yy = 768 + row * 32 + 16; const off = row % 2 ? 16 : 0; for (let xx = 768 + off; xx < 1024 + 32; xx += 32) { ctx.beginPath(); ctx.arc(xx, yy, 15, Math.PI, 0); ctx.stroke(); } }
+  drawArchWindows(L, 0, 768, 512, 256, 3, 2, { wall: '#ffffff', win: '#3a3230', frame: '#e6e0d5', winW: 0.26, winH: 0.44, door: true });
+  // ROOF: telhas claras (a cor do vértice tinge); ROOFT: telhas rosa/terracota já coloridas. Altura: cada
+  // telha é um arco saliente sobre fundo rebaixado.
+  const tiles = (x0, strokeCol) => {
+    ctx.strokeStyle = strokeCol; ctx.lineWidth = 2; hctx.strokeStyle = '#b0b0b0'; hctx.lineWidth = 3;
+    hctx.fillStyle = '#6a6a6a'; hctx.fillRect(x0, 768, 256, 256); rctx.fillStyle = '#b8b8b8'; rctx.fillRect(x0, 768, 256, 256);
+    for (let row = 0; row < 8; row++) {
+      const yy = 768 + row * 32 + 16; const off = row % 2 ? 16 : 0;
+      for (let xx = x0 + off; xx < x0 + 256 + 32; xx += 32) {
+        ctx.beginPath(); ctx.arc(xx, yy, 15, Math.PI, 0); ctx.stroke();
+        hctx.save(); hctx.beginPath(); hctx.rect(x0, 768, 256, 256); hctx.clip();
+        const g = hctx.createRadialGradient(xx, yy, 2, xx, yy, 15); g.addColorStop(0, '#b4b4b4'); g.addColorStop(1, '#787878');
+        hctx.fillStyle = g; hctx.beginPath(); hctx.arc(xx, yy, 15, Math.PI, 0); hctx.fill(); hctx.restore();
+      }
+    }
+  };
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(512, 768, 256, 256); tiles(512, '#b8aea2');
+  ctx.fillStyle = '#c9775f'; ctx.fillRect(768, 768, 256, 256); tiles(768, 'rgba(90,40,30,0.5)');
   ctx.save(); ctx.beginPath(); ctx.rect(768, 768, 256, 256); ctx.clip();
   const rt = noiseCanvas(128, 93, 5, 3, 170, 255); ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.5; ctx.drawImage(rt, 768, 768, 256, 256);
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; ctx.restore();
-  return canvasTexture(c);
+  return { map: canvasTexture(c), normal: canvasTexture(normalCanvas(canvasField(hc), 3), false), rough: canvasTexture(rc, false) };
 }
 
 function makeTasselTexture() {
@@ -376,11 +571,15 @@ function makeTasselTexture() {
     const g = ctx.createRadialGradient(cx - 2, cy - 2, 1, cx, cy, 8); g.addColorStop(0, '#ffe9a0'); g.addColorStop(1, '#9c6f1e');
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, 8, 0, TAU); ctx.fill();
   }
-  // franja listrada vertical (metade de baixo, v∈[0,0.5])
-  const cols = [0xd2628e, 0xc9527f, 0xd98a52, 0xd2628e, 0xb84a72, 0xe0a0b8, 0xd2628e, 0xcf7a4e];
-  for (let x = 0; x < W; x += 6) { ctx.fillStyle = hex(cols[(x / 6) % cols.length]); ctx.fillRect(x, 256, 6, 256); }
-  ctx.fillStyle = 'rgba(0,0,0,0.25)'; for (let x = 0; x < W; x += 6) ctx.fillRect(x, 256, 1, 256);
-  const grad = ctx.createLinearGradient(0, 256, 0, 512); grad.addColorStop(0, 'rgba(0,0,0,0.25)'); grad.addColorStop(0.3, 'rgba(0,0,0,0)'); grad.addColorStop(1, 'rgba(0,0,0,0.15)');
+  // fios (metade de baixo, v∈[0,0.5]): quase branco com fibras verticais — a COR vem do vértice de cada fio
+  ctx.fillStyle = '#f4ecec'; ctx.fillRect(0, 256, W, 256);
+  const frng = createRng(SEED + 707);
+  for (let i = 0; i < 160; i++) {
+    const x = frng() * W, light = frng() < 0.45;
+    ctx.strokeStyle = light ? `rgba(255,255,255,${0.2 + frng() * 0.3})` : `rgba(90,40,60,${0.08 + frng() * 0.18})`; ctx.lineWidth = 0.8 + frng() * 1.8;
+    ctx.beginPath(); ctx.moveTo(x, 256); ctx.lineTo(x + (frng() - 0.5) * 6, 512); ctx.stroke();
+  }
+  const grad = ctx.createLinearGradient(0, 256, 0, 512); grad.addColorStop(0, 'rgba(0,0,0,0.18)'); grad.addColorStop(0.25, 'rgba(0,0,0,0)'); grad.addColorStop(1, 'rgba(0,0,0,0.1)');
   ctx.fillStyle = grad; ctx.fillRect(0, 256, W, 256);
   return canvasTexture(c);
 }
@@ -415,9 +614,10 @@ function makeEyeTexture() {
 // Pompom: lã felpuda — manchas de ruído + fios curtos aleatórios (cinza claro: a cor da instância tinge).
 function makePompomTextures() {
   const S = 256, c = makeCanvas(S, S), ctx = c.getContext('2d');
-  ctx.fillStyle = '#d8d8d8'; ctx.fillRect(0, 0, S, S);
-  const blot = noiseCanvas(128, 61, 9, 3, 150, 255);
-  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.9; ctx.drawImage(blot, 0, 0, S, S);
+  // base quase branca: a cor real vem da instância (evita escurecer duas vezes)
+  ctx.fillStyle = '#ededed'; ctx.fillRect(0, 0, S, S);
+  const blot = noiseCanvas(128, 61, 9, 3, 170, 255);
+  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.8; ctx.drawImage(blot, 0, 0, S, S);
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
   const rng = createRng(SEED + 606);
   const b = makeCanvas(S, S), bctx = b.getContext('2d');
@@ -430,7 +630,8 @@ function makePompomTextures() {
     bctx.strokeStyle = light ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)'; bctx.lineWidth = w; bctx.lineCap = 'round';
     bctx.beginPath(); bctx.moveTo(x, y); bctx.lineTo(x + Math.cos(a) * L, y + Math.sin(a) * L); bctx.stroke();
   }
-  return { map: canvasTexture(c), bump: canvasTexture(b, false) };
+  // normal de "pelos": fios curtos em relevo (campo lido do canvas de traços)
+  return { map: canvasTexture(c), normal: linearTexture(normalCanvas(canvasField(b), 2.6), 1, 1) };
 }
 
 // "Crosta" de casinhas: ladrilho de quadradinhos pastel (malha 20×20 com jitter dentro da célula:
@@ -475,25 +676,32 @@ function makeSprayTexture() {
 let shared = null;
 function getShared() {
   if (shared) return shared;
-  const skin = makeSkinTextures(), trunk = makeTrunkTextures(), cloth = makeClothTextures();
+  const skin = makeSkinTextures(), trunk = makeTrunkTextures(), cloth = makeClothTextures(), gold = makeGoldTextures(), ivory = makeIvoryTextures();
   const city = makeCityAtlas(), tassel = makeTasselTexture(), eye = makeEyeTexture(), pom = makePompomTextures();
   const crust = makeCrustTextures(), spray = makeSprayTexture();
+  const NS = new THREE.Vector2(MT.SKIN_NORMAL_SCALE, MT.SKIN_NORMAL_SCALE);
   const mat = {
-    skin: new THREE.MeshStandardMaterial({ map: skin.map, bumpMap: skin.bump, bumpScale: EM.SKIN_BUMP, roughness: 0.82, metalness: 0 }),
-    trunk: new THREE.MeshStandardMaterial({ map: trunk.map, bumpMap: trunk.bump, bumpScale: EM.SKIN_BUMP * 0.7, roughness: 0.88, metalness: 0 }),
-    cloth: new THREE.MeshStandardMaterial({ map: cloth.map, bumpMap: cloth.bump, bumpScale: 2, roughness: 0.92, metalness: 0 }),
-    ivory: new THREE.MeshStandardMaterial({ color: COLORS.ivory, roughness: 0.45, metalness: 0.05 }),
-    // sem envMap no jogo: metalness moderado + emissivo quente para o ouro não ficar escuro
-    gold: new THREE.MeshStandardMaterial({ color: COLORS.gold, metalness: 0.65, roughness: 0.36, emissive: COLORS.goldDark, emissiveIntensity: 0.22 }),
-    city: new THREE.MeshStandardMaterial({ map: city, vertexColors: true, roughness: 0.8, metalness: 0 }),
-    pink: new THREE.MeshStandardMaterial({ map: tassel, roughness: 0.9, metalness: 0 }),
-    // olho: brilho branco acende via emissiveMap (as partes escuras do mapa quase não emitem)
-    eye: new THREE.MeshStandardMaterial({ map: eye, emissiveMap: eye, emissive: 0xffffff, emissiveIntensity: 0.55, roughness: 0.22, metalness: 0.05 }),
-    silver: new THREE.MeshStandardMaterial({ color: 0xd9dee5, metalness: 0.6, roughness: 0.3, emissive: 0x2a3038, emissiveIntensity: 0.4 }),
-    // lã: sem brilho algum + textura felpuda (a cor vem da instância)
-    pompom: new THREE.MeshStandardMaterial({ map: pom.map, bumpMap: pom.bump, bumpScale: 1.2, roughness: 1.0, metalness: 0 }),
+    // pele: PBR fosca e empoeirada; micro-rugas/fendas/poros no mapa de normais (repetido 8×), rugosidade
+    // absoluta no roughnessMap (roughness=1 → o mapa manda), dobras grandes na geometria
+    skin: new THREE.MeshStandardMaterial({ map: skin.map, normalMap: skin.normal, normalScale: NS, roughnessMap: skin.rough, roughness: 1, metalness: 0, envMapIntensity: MT.SKIN_ENV }),
+    // manga listrada da tromba: tecido (trama tecida na normal)
+    trunk: new THREE.MeshStandardMaterial({ map: trunk.map, normalMap: trunk.normal, normalScale: new THREE.Vector2(0.6, 0.6), roughness: MT.CLOTH_ROUGHNESS, metalness: 0, envMapIntensity: 0.45 }),
+    cloth: new THREE.MeshStandardMaterial({ map: cloth.map, normalMap: cloth.normal, normalScale: new THREE.Vector2(0.6, 0.6), roughness: MT.CLOTH_ROUGHNESS, metalness: 0, envMapIntensity: 0.45 }),
+    // marfim: creme levemente translúcido (sheen + clearcoat fraco), veios ao longo da presa
+    ivory: new THREE.MeshPhysicalMaterial({ map: ivory.map, normalMap: ivory.normal, normalScale: new THREE.Vector2(0.35, 0.35), roughness: MT.IVORY_ROUGHNESS, metalness: 0, clearcoat: MT.IVORY_CLEARCOAT, clearcoatRoughness: 0.4, sheen: 0.3, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xfff2dc), envMapIntensity: 0.8 }),
+    // ouro-bronze escovado: metal puro (reflete o envMap); emissivo residual fraco para não ficar preto sem envMap
+    gold: new THREE.MeshStandardMaterial({ color: MT.GOLD_COLOR, metalness: 1, roughness: 1, roughnessMap: gold.rough, normalMap: gold.normal, normalScale: new THREE.Vector2(0.35, 0.35), emissive: 0x3a2608, emissiveIntensity: MT.GOLD_EMISSIVE, envMapIntensity: MT.GOLD_ENV }),
+    // cidade: cor do vértice × atlas (paredes brancas no atlas → sem escurecer duas vezes); janelas rebaixadas e lisas
+    city: new THREE.MeshStandardMaterial({ map: city.map, normalMap: city.normal, normalScale: new THREE.Vector2(MT.CITY_NORMAL_SCALE, MT.CITY_NORMAL_SCALE), roughnessMap: city.rough, roughness: 1, vertexColors: true, metalness: 0, envMapIntensity: 0.5 }),
+    // borla: cúpula rosa (textura) + fios (cor por vértice sobre textura quase branca)
+    pink: new THREE.MeshStandardMaterial({ map: tassel, vertexColors: true, roughness: 0.85, metalness: 0, envMapIntensity: 0.4 }),
+    // olho: esclera molhada (clearcoat + roughness baixa); brilho branco acende via emissiveMap
+    eye: new THREE.MeshPhysicalMaterial({ map: eye, emissiveMap: eye, emissive: 0xffffff, emissiveIntensity: 0.45, roughness: MT.EYE_ROUGHNESS, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 1 }),
+    silver: new THREE.MeshStandardMaterial({ color: 0xd4d8de, metalness: 1, roughness: 0.3, roughnessMap: gold.rough, emissive: 0x1e2226, emissiveIntensity: 0.5, envMapIntensity: MT.GOLD_ENV }),
+    // lã: sem brilho algum + pelos em relevo (a cor vem da instância)
+    pompom: new THREE.MeshStandardMaterial({ map: pom.map, normalMap: pom.normal, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 1.0, metalness: 0, envMapIntensity: 0.4 }),
     // crosta de casinhas do dorso (casca fina; alfa por vértice esmaece as bordas)
-    crust: new THREE.MeshStandardMaterial({ map: crust.map, bumpMap: crust.bump, bumpScale: 2.5, roughness: 0.85, metalness: 0, vertexColors: true, transparent: true, depthWrite: true }),
+    crust: new THREE.MeshStandardMaterial({ map: crust.map, bumpMap: crust.bump, bumpScale: 2.5, roughness: 0.85, metalness: 0, vertexColors: true, transparent: true, depthWrite: true, envMapIntensity: 0.5 }),
     // jato d'água: pontos aditivos brancos (a cor por vértice esmaece para névoa)
     spray: new THREE.PointsMaterial({ map: spray, size: EM.SPRAY_POINT_SIZE * (E.SCALE || 1), sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true, opacity: 0.5, fog: true }),
   };
@@ -594,6 +802,24 @@ function tubeGeometry(curve, segs, radial, radiusAt, { capStart = false, capEnd 
   if (comp.dot(analytic) < 0) { flipWinding(g); g.computeVertexNormals(); }
   weldSeam(g, (k) => k * (radial + 1), (k) => k * (radial + 1) + radial, segs + 1);
   return g;
+}
+// Divide uma malha indexada em duas pelo v médio de cada triângulo (< vSplit → primeira): usada para a
+// tromba (manga de tecido / ponta de pele com materiais diferentes). Saída não indexada (prep solda).
+function splitByV(g, vSplit) {
+  const idx = g.index.array, pos = g.attributes.position, nor = g.attributes.normal, uv = g.attributes.uv;
+  const out = [[], []];
+  for (let i = 0; i < idx.length; i += 3) {
+    const a = idx[i], b = idx[i + 1], c = idx[i + 2];
+    const vm = (uv.getY(a) + uv.getY(b) + uv.getY(c)) / 3;
+    out[vm < vSplit ? 0 : 1].push(a, b, c);
+  }
+  return out.map((list) => {
+    const n = list.length, P = new Float32Array(n * 3), N = new Float32Array(n * 3), U = new Float32Array(n * 2);
+    for (let k = 0; k < n; k++) { const s = list[k]; P[k * 3] = pos.getX(s); P[k * 3 + 1] = pos.getY(s); P[k * 3 + 2] = pos.getZ(s); N[k * 3] = nor.getX(s); N[k * 3 + 1] = nor.getY(s); N[k * 3 + 2] = nor.getZ(s); U[k * 2] = uv.getX(s); U[k * 2 + 1] = uv.getY(s); }
+    const o = new THREE.BufferGeometry();
+    o.setAttribute('position', new THREE.BufferAttribute(P, 3)); o.setAttribute('normal', new THREE.BufferAttribute(N, 3)); o.setAttribute('uv', new THREE.BufferAttribute(U, 2));
+    return o;
+  });
 }
 // "Para cima" perpendicular à tangente de uma curva (para apoiar casas no dorso das presas)
 function surfaceUp(tangent, out) { out.set(0, 1, 0).addScaledVector(tangent, -tangent.y); if (out.lengthSq() < 1e-6) out.set(1, 0, 0); return out.normalize(); }
@@ -861,6 +1087,12 @@ export function createElephant(route, index, opts = {}) {
     placeGeom(lid, headPoint(d, tmp, false).addScaledVector(d, -9), quatFromUp(new V3(0.0, 0.92, side * 0.38).normalize()));
     scaleUV(lid, 0.3, 0.1);
     add('skin', lid);
+    // dobra da pálpebra: rolo de pele em arco sobre o olho (sobrancelha carnuda) e dobra menor por baixo
+    const qd = new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), d);
+    const brow = new THREE.TorusGeometry(EM.EYE_RADIUS + 16, 11, 8, 20, Math.PI); brow.rotateZ(0.15 * side);
+    placeGeom(brow, headPoint(d, tmp, false).addScaledVector(d, -3), qd); scaleUV(brow, 0.5, 0.08); add('skin', brow);
+    const under = new THREE.TorusGeometry(EM.EYE_RADIUS + 10, 6, 7, 16, Math.PI); under.rotateZ(Math.PI + 0.1 * side);
+    placeGeom(under, headPoint(d, tmp, false).addScaledVector(d, -4), qd); scaleUV(under, 0.4, 0.06); add('skin', under);
   }
   // ============================ PATAS ==============================
   // Perfil de revolução (raio, y): pé alargado e arredondado embaixo (flare ≈ 1.12), tornozelo,
@@ -945,7 +1177,10 @@ export function createElephant(route, index, opts = {}) {
     // anéis de dobras esculpidas (ondulados) ao longo da tromba, rasos na raiz (sob a cabeça) e na ponta
     const trunkDisp = (t, a) => (6 + 0.03 * trunkR(t)) * smooth(0.06, 0.2, t) * (1 - smooth(0.9, 0.97, t)) * foldValue(Math.cos(a * TAU) * 0.5 + 9, Math.sin(a * TAU) * 0.5, t * 16);
     const g = tubeGeometry(trunkCurve, low ? 56 : 96, low ? 16 : 24, trunkR, { disp: trunkDisp });
-    add('trunk', g, BONE.trunk);
+    // manga de tecido (v < TRUNK_FABRIC_END) e ponta de PELE (material da pele: micro-rugas e poros)
+    const [sleeve, tip] = splitByV(g, TRUNK_FABRIC_END);
+    add('trunk', sleeve, BONE.trunk);
+    scaleUV(tip, 1, 1.6); add('skin', tip, BONE.trunk);
     // 2 anéis de ouro na manga: na ponta do tecido e a meio caminho
     for (const t0 of [TRUNK_FABRIC_END - 0.01, 0.47]) {
       const ring = new THREE.TorusGeometry(trunkR(t0) + 8, 11, 10, 32);
@@ -1082,6 +1317,11 @@ export function createElephant(route, index, opts = {}) {
     }
     const inNotch = (c, r) => notches.some((n) => c >= n.c0 && c < n.c1 && r >= n.r0 && r < n.r1);
     const inCore = (x, y) => pointInPolygon(x + dx * 0.5, y + dy * 0.5, corePoly) && pointInPolygon(x - dx * 0.5, y - dy * 0.5, corePoly) && pointInPolygon(x + dx * 0.5, y - dy * 0.5, corePoly) && pointInPolygon(x - dx * 0.5, y + dy * 0.5, corePoly);
+    // ruas estreitas: 2–3 colunas vazias (becos verticais) e uma fileira vazia (travessa)
+    const streets = new Set(); const nSt = hrng.int(MT.EAR_HOUSE_STREETS.min, MT.EAR_HOUSE_STREETS.max);
+    while (streets.size < nSt) streets.add(hrng.int(2, COLS - 3));
+    const streetRow = hrng.int(4, ROWS - 5);
+    const SZ = MT.EAR_HOUSE_SIZE;
     let topRowY = -Infinity;
     for (let row = 0; row < ROWS; row++) {
       const y = HOUSE_RECT.y0 + (row + 0.5) * dy;
@@ -1089,12 +1329,17 @@ export function createElephant(route, index, opts = {}) {
         const x = HOUSE_RECT.x0 + (col + 0.5) * dx;
         if (!inCore(x, y)) continue;
         if (inNotch(col, row)) continue;
-        if (hrng() < 0.015) continue;
-        // profundidades parecidas, um pouco maiores nas fileiras de baixo (terraços)
-        const h = EM.EAR_HOUSE_H.min + (EM.EAR_HOUSE_H.max - EM.EAR_HOUSE_H.min) * (0.35 * hrng() + 0.65 * (1 - row / ROWS) * hrng());
+        if (streets.has(col) || row === streetRow) continue;
+        if (hrng() < 0.03) continue;
+        // profundidades variadas, um pouco maiores nas fileiras de baixo (terraços); algumas torres
+        let h = EM.EAR_HOUSE_H.min + (EM.EAR_HOUSE_H.max - EM.EAR_HOUSE_H.min) * (0.35 * hrng() + 0.65 * (1 - row / ROWS) * hrng());
+        const tower = hrng() < MT.EAR_TOWER_CHANCE; if (tower) h *= 2.2;
+        // tamanhos irregulares (0,7–1,4×), pequenos deslocamentos e rotações: nada de grade uniforme
+        const sw = dx * 0.86 * (tower ? 0.7 : hrng.range(SZ.min, SZ.max)), sh = dy * 0.8 * (tower ? 0.7 : hrng.range(SZ.min, SZ.max));
+        const ox = hrng.range(-0.14, 0.14) * dx, oy = hrng.range(-0.12, 0.12) * dy, rot = hrng.range(-0.1, 0.1);
         const wall = hrng() < 0.85 ? hrng.pick(COLORS.houses) : hrng.pick([0xd9a593, 0xe7b39f, 0xf0d8c8]);
-        const b = boxHouse(dx * 0.86, dy * 0.8, h, 'z', wall, wall, hrng() < 0.35 ? true : 'plain', false, true);
-        b.translate(x, y, Z_BL + 4 + h / 2);
+        const b = boxHouse(sw, sh, h, 'z', wall, wall, hrng() < 0.4 ? true : 'plain', false, true);
+        b.rotateZ(rot); b.translate(x + ox, y + oy, Z_BL + 4 + h / 2);
         mapVertices(b, earWarp);
         hg.push(b);
         if (row === ROWS - 1) topRowY = Math.max(topRowY, y + dy * 0.4);
@@ -1144,9 +1389,9 @@ export function createElephant(route, index, opts = {}) {
     const strap = new THREE.CylinderGeometry(7, 7, tasselTop.distanceTo(new V3(ax.x, yTop, 0)), 8);
     const mid = tasselTop.clone().add(new V3(ax.x, yTop, 0)).multiplyScalar(0.5);
     placeGeom(strap, mid, quatFromUp(new V3(ax.x, yTop, 0).sub(tasselTop).normalize())); add('gold', strap);
-    // pompom vermelho no alto
-    const pom = fuzzySphere(58, 16, 12, 0.2); pom.translate(ax.x, yTop - 44, 0);
-    add('pink', remapUV(pom, [0.02, 0.98, 0.52, 0.98]));
+    // pompom vermelho no alto (textura de fios quase branca × cor do vértice)
+    const pom = fuzzySphere(58, 16, 12, 0.3); pom.translate(ax.x, yTop - 44, 0);
+    remapUV(pom, [0.02, 0.98, 0.04, 0.46]); setColorRange(pom, 0xc43a4c); add('pink', pom);
     // sino dourado (cone) abaixo do pompom
     const bell = new THREE.ConeGeometry(46, 110, 24); bell.rotateX(Math.PI); bell.translate(ax.x, yTop - 100 - 55, 0); add('gold', bell);
     // cúpula rosa com tachas
@@ -1155,9 +1400,33 @@ export function createElephant(route, index, opts = {}) {
     const domeY = yTop - 100 - 110 - 22;
     const rim = new THREE.TorusGeometry(84, 6, 8, 32); rim.rotateX(Math.PI / 2); rim.translate(ax.x, domeY, 0); add('gold', rim);
     for (let i = 0; i < 14; i++) { const a = (i / 14) * TAU; const s = new THREE.SphereGeometry(9, 7, 5); s.translate(ax.x + Math.cos(a) * 84, domeY - 10, Math.sin(a) * 84); add('gold', s); }
-    // franja
-    const fr = new THREE.CylinderGeometry(82, 58, 430, 28, 1, true); fr.translate(ax.x, domeY - 215, 0);
-    remapUV(fr, [0, 1, 0.02, 0.48], 0, Infinity, 3, 1); add('pink', fr);
+    // franja: MUITOS fios finos (tubos de 4 lados) em 3 anéis concêntricos, pendendo da borda da cúpula,
+    // com leve abertura para fora e ondulação; cada fio tem a sua cor (rosa/magenta/laranja)
+    {
+      const srng = createRng(SEED + 909);
+      const NSTR = low ? Math.round(MT.TASSEL_STRANDS * 0.6) : MT.TASSEL_STRANDS;
+      const rings = [[0.42, 79], [0.33, 68], [0.25, 57]];
+      const cols = [0xd2628e, 0xc9527f, 0xd98a52, 0xd2628e, 0xb84a72, 0xe0a0b8, 0xd2628e, 0xcf7a4e, 0xc45c86];
+      let made = 0;
+      for (const [frac, rr] of rings) {
+        const n = Math.round(NSTR * frac);
+        for (let k = 0; k < n; k++) {
+          const a = ((k + 0.5) / n) * TAU + srng.range(-0.3, 0.3) * (TAU / n), ca = Math.cos(a), sa = Math.sin(a);
+          const r0 = rr + srng.range(-3, 3), L = srng.range(MT.TASSEL_STRAND_LENGTH.min, MT.TASSEL_STRAND_LENGTH.max);
+          const flare = srng.range(6, 26), wob = srng.range(-8, 8), ph = srng() * TAU;
+          const pts = [];
+          for (let s = 0; s <= 4; s++) {
+            const t = s / 4, out = r0 + flare * t * t;
+            pts.push(new V3(ax.x + ca * out + wob * Math.sin(ph + t * 3) * t, domeY - 4 - L * t, sa * out + wob * Math.cos(ph + t * 2.5) * t));
+          }
+          const curve = new THREE.CatmullRomCurve3(pts); curve.arcLengthDivisions = 20;
+          const rs = MT.TASSEL_STRAND_RADIUS * srng.range(0.85, 1.15);
+          const st = tubeGeometry(curve, 6, 4, (t) => rs * (1 - 0.35 * t), { capEnd: false });
+          remapUV(st, [0.02, 0.98, 0.04, 0.46]); setColorRange(st, cols[(made++) % cols.length]);
+          add('pink', st);
+        }
+      }
+    }
   }
   // ============================ GUIRLANDA ==========================
   const garland = []; // {pos, tangent}
@@ -1579,7 +1848,8 @@ export function createElephant(route, index, opts = {}) {
     // casinhas das presas (sempre visíveis: são poucas)
     if (tuskInst.length) rig.add(makeInst(tuskInst, REG.ROOFT));
     // casca-crosta
-    if (crustGeom) { const cm = new THREE.Mesh(crustGeom, S.mat.crust); cm.frustumCulled = true; rig.add(cm); }
+    // crosta: casca transparente a 3 m da pele — recebe sombra mas não projeta (evitaria linhas duplas na pele)
+    if (crustGeom) { const cm = new THREE.Mesh(crustGeom, S.mat.crust); cm.frustumCulled = true; cm.castShadow = false; cm.receiveShadow = true; cm.userData.shadowsSet = true; rig.add(cm); }
     carpetCount = carpet.flat.length + carpet.tile.length;
   }
   // ---- tachas da placa (instâncias) ----
@@ -1612,14 +1882,17 @@ export function createElephant(route, index, opts = {}) {
   }
   // ---- pompons (instâncias com cor) ----
   {
-    const pomGeo = fuzzySphere(1, low ? 10 : 12, low ? 7 : 8, 0.26);
+    // lã fibrosa: mais tufos (deslocamento maior) + normal de pelos; cores levemente dessaturadas e variadas
+    const pomGeo = fuzzySphere(1, low ? 10 : 14, low ? 7 : 10, MT.POMPOM_FUZZ);
     scaleUV(pomGeo, 2, 1);
     const inst = new THREE.InstancedMesh(pomGeo, S.mat.pompom, garland.length);
-    const dummy = new THREE.Object3D(); const col = new THREE.Color();
+    const dummy = new THREE.Object3D(); const col = new THREE.Color(), grey = new THREE.Color(0x8c8c8c);
+    const prng = createRng(SEED + 5151 + index);
     garland.forEach((gp, i) => {
       const dn = gp.pos.clone().sub(new V3(HD.cx, HD.cy, 0)).normalize();
       dummy.position.copy(gp.pos).addScaledVector(dn, EM.POMPOM_RADIUS * 0.8); dummy.quaternion.copy(quatFromUp(gp.tangent)); dummy.scale.set(EM.POMPOM_RADIUS, EM.POMPOM_RADIUS * 1.08, EM.POMPOM_RADIUS); dummy.updateMatrix();
-      inst.setMatrixAt(i, dummy.matrix); inst.setColorAt(i, col.set(COLORS.pompoms[i % COLORS.pompoms.length]));
+      col.set(COLORS.pompoms[i % COLORS.pompoms.length]).lerp(grey, MT.POMPOM_DESAT).multiplyScalar(prng.range(0.88, 1.08));
+      inst.setMatrixAt(i, dummy.matrix); inst.setColorAt(i, col);
     });
     inst.instanceMatrix.needsUpdate = true; if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
     rig.add(inst);

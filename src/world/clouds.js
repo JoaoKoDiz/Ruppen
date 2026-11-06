@@ -1,10 +1,16 @@
 // =====================================================================
-//  Nuvens-cúmulo em billboards instanciados (UM draw call) + anéis de nuvem
-//  ao redor das patas de cada elefante + espuma/ondulações na água (UM
-//  draw call instanciado). Textura dos "puffs" procedural (canvas: queda
-//  radial × ruído, com iluminação assada do topo), claridade por altura
-//  dentro da nuvem, ordenação de trás para frente a cada ~0,5 s, deriva
-//  lenta, desvanecimento perto da câmera, névoa e profundidade logarítmica.
+//  Nuvens-cúmulo em billboards instanciados (UM draw call) + bancos de nuvem
+//  ao redor das patas de cada elefante + espuma/ondulações/esteira na água
+//  (UM draw call instanciado).
+//  Atlas de puffs 4×2 (8 variantes) gerado em código (DataTexture — sem a
+//  quantização de alfa pré-multiplicado do canvas): RG = normal da "cúpula"
+//  do puff, B = densidade (espessura), A = cobertura com bordas esgarçadas.
+//  Iluminação por puff no fragment: difusa envolvente do sol pela normal do
+//  atlas, termo "powder" (miolo denso um pouco mais escuro, bordas claras),
+//  silver lining (bordas viradas para o sol quando o puff está em contraluz),
+//  ambiente azul-cinza do céu nas bases, altura dentro da nuvem.
+//  Ordenação de trás para frente a cada ~0,5 s, deriva lenta, desvanecimento
+//  perto da câmera e junto ao mar, névoa e profundidade logarítmica.
 //  Contrato: createClouds(scene, worldData, {quality})
 //            -> { object, update(camera, time, dt), attachTo(elephants) }
 // =====================================================================
@@ -17,98 +23,130 @@ import { createRng } from '../util/rng.js';
 const NUM_ANCHORS = ELEPHANT.COUNT;
 const FOOT_PUFFS = CLOUDS.FOOT_PUFFS; // puffs do banco por elefante (quality=high)
 const LEG_HEIGHT = (ELEPHANT.LEG.topY - ELEPHANT.LEG.bottomY) * (ELEPHANT.SCALE || 1); // m (mundo)
+const FOOT_X = ELEPHANT.LEG.offsetX * (ELEPHANT.SCALE || 1); // posição das patas (local, m)
+const FOOT_Z = ELEPHANT.LEG.offsetZ * (ELEPHANT.SCALE || 1);
 const WIND = new THREE.Vector3(1.1, 0, 0.45); // deriva das nuvens do mundo (m/s)
 const RING_SPIN = 0.0045;            // rad/s de rotação lenta dos anéis das patas
 const SORT_INTERVAL = 0.5;
+const ATLAS_COLS = 4, ATLAS_ROWS = 2, ATLAS_VARIANTS = ATLAS_COLS * ATLAS_ROWS;
+const RIPPLE_PERIOD = 20;            // s — um anel novo parte de cada pata a cada ~20 s
+const RIPPLE_RINGS = 3;              // anéis vivos por pata (vida = PERIOD × RINGS)
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
 
-// ---------------------------------------------------------------------
-//  Atlas 2×2 de puffs: A = densidade (queda radial deformada por ruído),
-//  R = iluminação assada (luz vinda de cima-esquerda sobre a "cúpula").
-// ---------------------------------------------------------------------
-function makePuffAtlas(cell) {
-  const noise = createNoise(SEED + 5501);
-  const size = cell * 2;
-  const canvas = document.createElement('canvas');
-  canvas.width = size; canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  const img = ctx.createImageData(size, size);
-  const dens = new Float32Array(size * size);
-  for (let v = 0; v < 4; v++) {
-    const ox = (v % 2) * cell, oy = Math.floor(v / 2) * cell;
-    const sx = v * 17.3 + 3.1, sy = v * 9.7 + 5.4;
-    for (let y = 0; y < cell; y++) {
-      for (let x = 0; x < cell; x++) {
-        const dx = (x + 0.5 - cell / 2) / (cell / 2), dy = (y + 0.5 - cell / 2) / (cell / 2);
-        const r = Math.hypot(dx, dy);
-        const n1 = noise.fbm2(dx * 1.25 + sx, dy * 1.25 + sy, 3, 2.0, 0.5);      // lóbulos grandes do contorno
-        const n2 = noise.fbm2(dx * 3.1 + sx * 2, dy * 3.1 + sy * 2, 3, 2.1, 0.5); // lóbulos médios
-        const edge = 0.70 + 0.17 * n1 + 0.06 * n2;  // raio da borda ∈ ~[0.47, 0.93]
-        let d = smooth(edge, edge * 0.42, r); // lóbulos definidos (couve-flor), borda ainda macia
-        d *= clamp01(0.92 + 0.16 * n2);
-        d *= smooth(0.95, 0.80, r); // margem transparente larga (mips grosseiros não "vazam")
-        dens[(oy + y) * size + ox + x] = clamp01(d);
-      }
-    }
-  }
-  // iluminação assada: gradiente da densidade como relevo de cúpula
-  const L = new THREE.Vector3(-0.35, -0.75, 0.56).normalize(); // y do canvas cresce para baixo → luz de cima
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const i = y * size + x;
-      const xm = Math.max(0, x - 2), xp = Math.min(size - 1, x + 2), ym = Math.max(0, y - 2), yp = Math.min(size - 1, y + 2);
-      const gx = (dens[y * size + xp] - dens[y * size + xm]) * 3.2;
-      const gy = (dens[yp * size + x] - dens[ym * size + x]) * 3.2;
-      const nx = -gx, ny = -gy, nz = 1;
-      const len = Math.hypot(nx, ny, nz);
-      const lit = clamp01(0.5 + 0.5 * ((nx * L.x + ny * L.y + nz * L.z) / len));
-      const a = Math.pow(dens[i], 0.72); // miolo opaco: puffs sobrepostos formam massa sólida
-      const o = i * 4;
-      img.data[o] = Math.round(255 * lit);
-      img.data[o + 1] = Math.round(255 * dens[i]);
-      img.data[o + 2] = 255;
-      img.data[o + 3] = Math.round(255 * a);
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+function makeTexture(data, w, h, repeat) {
+  const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.wrapS = tex.wrapT = repeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
   tex.colorSpace = THREE.NoColorSpace;
-  tex.premultiplyAlpha = false;
+  tex.anisotropy = 4;
   tex.needsUpdate = true;
   return tex;
 }
 
-// Ruído tileável (mistura de 4 cópias) para a espuma.
-function makeNoiseTexture(size) {
-  const noise = createNoise(SEED + 5502);
-  const canvas = document.createElement('canvas');
-  canvas.width = size; canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  const img = ctx.createImageData(size, size);
-  const f = 4.0 / size;
-  const nz = (x, y) => noise.fbm2(x * f, y * f, 4, 2, 0.5);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const wx = x / size, wy = y / size;
-      const n = nz(x, y) * (1 - wx) * (1 - wy) + nz(x - size, y) * wx * (1 - wy) + nz(x - size, y - size) * wx * wy + nz(x, y - size) * (1 - wx) * wy;
-      const v = Math.max(0, Math.min(255, Math.round(127.5 + 127.5 * n)));
-      const o = (y * size + x) * 4;
-      img.data[o] = v; img.data[o + 1] = v; img.data[o + 2] = v; img.data[o + 3] = 255;
+// ---------------------------------------------------------------------
+//  Atlas 4×2 de puffs: A = cobertura (queda radial deformada por ruído, com
+//  esgarçamento de alta frequência nas bordas), B = densidade, RG = normal
+//  (cúpula + relevo dos lóbulos), para a iluminação por puff no shader.
+// ---------------------------------------------------------------------
+function makePuffAtlas(cell) {
+  const noise = createNoise(SEED + 5501);
+  const W = cell * ATLAS_COLS, Hh = cell * ATLAS_ROWS;
+  const data = new Uint8Array(W * Hh * 4);
+  const dens = new Float32Array(W * Hh);
+  const edgeR = new Float32Array(W * Hh);
+  for (let v = 0; v < ATLAS_VARIANTS; v++) {
+    const ox = (v % ATLAS_COLS) * cell, oy = Math.floor(v / ATLAS_COLS) * cell;
+    const sx = v * 17.3 + 3.1, sy = v * 9.7 + 5.4;
+    const aspectY = [1.0, 1.15, 0.9, 1.25, 1.0, 1.1, 0.95, 1.2][v];   // alguns puffs mais achatados
+    const flatBase = [0.3, 0.0, 0.25, 0.35, 0.0, 0.2, 0.0, 0.3][v];   // base achatada (cúmulo)
+    const wispy = [0.35, 0.6, 0.45, 0.3, 0.7, 0.5, 0.4, 0.55][v];     // quanto a borda esgarça
+    for (let y = 0; y < cell; y++) {
+      for (let x = 0; x < cell; x++) {
+        const dx = (x + 0.5 - cell / 2) / (cell / 2), dy = (y + 0.5 - cell / 2) / (cell / 2);
+        const r = Math.hypot(dx, dy * aspectY);
+        const n1 = noise.fbm2(dx * 1.25 + sx, dy * 1.25 + sy, 3, 2.0, 0.5);      // lóbulos grandes do contorno
+        const n2 = noise.fbm2(dx * 3.1 + sx * 2, dy * 3.1 + sy * 2, 3, 2.1, 0.5); // lóbulos médios
+        const n3 = noise.fbm2(dx * 7.5 + sx * 3, dy * 7.5 + sy * 3, 3, 2.2, 0.55); // fiapos
+        let edge = 0.70 + 0.16 * n1 + 0.06 * n2;  // raio da borda ∈ ~[0.48, 0.92]
+        edge *= 1 - flatBase * smooth(0.25, 0.85, dy);       // base achatada (y do canvas cresce para baixo)
+        let d = smooth(edge, edge * 0.45, r);                 // lóbulos definidos (couve-flor)
+        d *= clamp01(0.92 + 0.16 * n2);
+        // esgarçamento: a faixa externa é corroída por ruído fino (bordas em fiapos)
+        const outer = Math.pow(1 - d, 1.6);
+        d = clamp01(d - outer * wispy * clamp01(0.55 + 0.7 * n3));
+        d *= smooth(0.97, 0.82, r); // margem transparente (mips grosseiros não "vazam")
+        const i = (oy + y) * W + ox + x;
+        dens[i] = clamp01(d);
+        edgeR[i] = edge;
+      }
     }
   }
-  ctx.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.colorSpace = THREE.NoColorSpace;
-  tex.needsUpdate = true;
-  return tex;
+  for (let v = 0; v < ATLAS_VARIANTS; v++) {
+    const ox = (v % ATLAS_COLS) * cell, oy = Math.floor(v / ATLAS_COLS) * cell;
+    for (let y = 0; y < cell; y++) {
+      for (let x = 0; x < cell; x++) {
+        const i = (oy + y) * W + ox + x;
+        const dx = (x + 0.5 - cell / 2) / (cell / 2), dy = (y + 0.5 - cell / 2) / (cell / 2);
+        // normal: cúpula (aponta para fora nas bordas) + relevo dos lóbulos (gradiente da densidade)
+        const xm = Math.max(ox, ox + x - 2), xp = Math.min(ox + cell - 1, ox + x + 2);
+        const ym = Math.max(oy, oy + y - 2), yp = Math.min(oy + cell - 1, oy + y + 2);
+        const gx = (dens[(oy + y) * W + xp] - dens[(oy + y) * W + xm]) * 2.2;
+        const gy = (dens[yp * W + ox + x] - dens[ym * W + ox + x]) * 2.2;
+        const rr = Math.min(1, Math.hypot(dx, dy) / Math.max(0.3, edgeR[i]));
+        const domeZ = Math.sqrt(Math.max(0.04, 1 - rr * rr));
+        let nx = dx * 0.9 - gx, ny = -dy * 0.9 + gy, nz = domeZ * 1.1 + 0.35;
+        const len = Math.hypot(nx, ny, nz) || 1;
+        nx /= len; ny /= len;
+        const dd = dens[i];
+        const a = Math.pow(dd, 0.62); // miolo opaco: puffs sobrepostos formam massa sólida
+        const o = i * 4;
+        data[o] = Math.round(127.5 + 127.5 * nx);
+        data[o + 1] = Math.round(127.5 + 127.5 * ny);
+        data[o + 2] = Math.round(255 * dd);
+        data[o + 3] = Math.round(255 * a);
+      }
+    }
+  }
+  return makeTexture(data, W, Hh, false);
+}
+
+// Ruído tileável (R = fbm, G = fbm mais fino, B = "bolhas" — distância ao ponto
+// mais próximo de uma nuvem de pontos, periódica) para a espuma.
+function makeFoamTexture(size) {
+  const noise = createNoise(SEED + 5502);
+  const rng = createRng(SEED + 5504);
+  const pts = [];
+  for (let i = 0; i < 180; i++) pts.push([rng() * size, rng() * size, rng.range(0.6, 1.3)]);
+  const data = new Uint8Array(size * size * 4);
+  const f = 4.0 / size, f2 = 11.0 / size;
+  const nz = (x, y) => noise.fbm2(x * f, y * f, 4, 2, 0.5);
+  const nz2 = (x, y) => noise.fbm2(x * f2 + 9, y * f2 + 4, 3, 2.2, 0.55);
+  const tile = (fn, x, y) => {
+    const wx = x / size, wy = y / size;
+    return fn(x, y) * (1 - wx) * (1 - wy) + fn(x - size, y) * wx * (1 - wy) + fn(x - size, y - size) * wx * wy + fn(x, y - size) * (1 - wx) * wy;
+  };
+  const cellR = size / Math.sqrt(180) * 0.9;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let f1 = 1e9;
+      for (const [px, py, pr] of pts) {
+        let ddx = Math.abs(x - px), ddy = Math.abs(y - py);
+        if (ddx > size / 2) ddx = size - ddx;
+        if (ddy > size / 2) ddy = size - ddy;
+        f1 = Math.min(f1, Math.hypot(ddx, ddy) / (cellR * pr));
+      }
+      const o = (y * size + x) * 4;
+      data[o] = Math.max(0, Math.min(255, Math.round(127.5 + 127.5 * tile(nz, x, y))));
+      data[o + 1] = Math.max(0, Math.min(255, Math.round(127.5 + 127.5 * tile(nz2, x, y))));
+      data[o + 2] = Math.round(255 * clamp01(f1)); // 0 no centro de cada bolha, 1 entre bolhas
+      data[o + 3] = 255;
+    }
+  }
+  return makeTexture(data, size, size, true);
 }
 
 // ---------------------------------------------------------------------
@@ -120,7 +158,7 @@ const PUFF_VERT = /* glsl */`
 #include <fog_pars_vertex>
 attribute vec3 aOffset;   // posição no mundo (grupo -1) ou deslocamento local ao elefante
 attribute vec4 aParams;   // tamanho, claridade (0 base .. 1 topo), rotação, grupo (-1 | 0..N-1)
-attribute float aVar;     // célula do atlas (0..3) + 4 × espelhar
+attribute float aVar;     // célula do atlas (0..7) + 8 × espelhar
 uniform vec3 uAnchors[NUM_ANCHORS];
 uniform vec3 uWind;
 uniform float uTime;
@@ -129,7 +167,8 @@ uniform vec3 uSunDir;
 varying vec2 vUv;
 varying float vShade;
 varying float vFade;
-varying float vSunSide;
+varying vec3 vSunB;       // direção do sol no espaço do atlas (x direita, y cima, z para a câmera)
+varying float vBacklit;   // 0..1: o puff está entre a câmera e o sol (contraluz)
 varying float vVar;
 varying float vWorldY;
 varying float vSize;
@@ -154,7 +193,7 @@ void main() {
   vec3 vd = normalize(center - cameraPosition);
   vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), vd));
   vec3 up = cross(vd, right);
-  float mirror = aVar >= 4.0 ? -1.0 : 1.0;
+  float mirror = aVar >= 8.0 ? -1.0 : 1.0;
   float cr = cos(aParams.z), sr = sin(aParams.z);
   vec2 q = vec2(position.x * mirror, position.y);
   q = vec2(q.x * cr - q.y * sr, q.x * sr + q.y * cr);
@@ -167,13 +206,17 @@ void main() {
 
   float depth = -(viewMatrix * vec4(center, 1.0)).z;
   vFade = smoothstep(max(size * 0.22, 18.0), max(size * 0.75, 60.0), depth);
-  // o desvanecimento junto ao mar é feito POR PIXEL no fragment (vWorldY/vSize): por vértice,
-  // a interpolação deixava a metade de baixo de cada puff semitransparente (bancos viravam "vapor")
+  // o desvanecimento junto ao mar é feito POR PIXEL no fragment (vWorldY/vSize)
   vWorldY = world.y;
   vSize = size;
   vUv = uv;
   vShade = aParams.y;
-  vSunSide = dot(uSunDir, right) * mirror;
+  // sol no espaço do atlas: base (right, up, -vd), desfaz a rotação do quad e o espelho
+  vec2 sxy = vec2(dot(uSunDir, right), dot(uSunDir, up));
+  sxy = vec2(sxy.x * cr + sxy.y * sr, -sxy.x * sr + sxy.y * cr);
+  sxy.x *= mirror;
+  vSunB = vec3(sxy, dot(uSunDir, -vd));
+  vBacklit = smoothstep(-0.2, 0.9, dot(uSunDir, vd));
   vVar = aVar;
 }`;
 
@@ -182,33 +225,51 @@ const PUFF_FRAG = /* glsl */`
 #include <logdepthbuf_pars_fragment>
 #include <fog_pars_fragment>
 uniform sampler2D uMap;
-uniform vec3 uLit;
-uniform vec3 uShade;
+uniform vec3 uSunColor;
+uniform vec3 uAmbTop;     // luz do céu vindo de cima (branco-azulado)
+uniform vec3 uShade;      // ambiente azul-cinza das bases
 varying vec2 vUv;
 varying float vShade;
 varying float vFade;
-varying float vSunSide;
+varying vec3 vSunB;
+varying float vBacklit;
 varying float vVar;
 varying float vWorldY;
 varying float vSize;
 
 void main() {
   #include <logdepthbuf_fragment>
-  float cellIdx = mod(vVar, 4.0);
-  vec2 cell = vec2(mod(cellIdx, 2.0), floor(cellIdx / 2.0));
-  vec2 uv = (vUv + cell) * 0.5;
+  float cellIdx = mod(vVar, 8.0);
+  vec2 cell = vec2(mod(cellIdx, 4.0), floor(cellIdx / 4.0));
+  vec2 uv = (vUv + cell) * vec2(0.25, 0.5);
   vec4 tx = texture2D(uMap, uv);
-  float alpha = tx.a * vFade * smoothstep(0.5, 0.34, length(vUv - 0.5));
+  float alpha = tx.a * vFade * smoothstep(0.5, 0.36, length(vUv - 0.5));
   // some suavemente perto do nível do mar (sem corte reto do quad na água)
   alpha *= smoothstep(0.0, vSize * 0.22, vWorldY);
   if (alpha < 0.006) discard;
-  float lit = tx.r;
-  // topo branco iluminado, base azul-cinza: altura dentro da nuvem (vShade) + relevo assado forte
-  // (cada puff lê como uma cúpula) + lado do sol
-  float light = vShade * 0.70 + (lit - 0.5) * 0.95 + 0.12 + (vUv.y - 0.5) * 0.30 + (vUv.x - 0.5) * vSunSide * 0.30;
-  // as partes densas do miolo ficam um pouco mais sombreadas (volume)
-  light -= tx.g * 0.22 * (1.0 - vShade);
-  vec3 col = mix(uShade, uLit, clamp(light, 0.0, 1.0));
+
+  vec3 N = vec3(tx.rg * 2.0 - 1.0, 0.0);
+  N.z = sqrt(saturate(1.0 - dot(N.xy, N.xy)));
+  float dens = tx.b;
+  // difusa envolvente pelo relevo do puff (lado do sol claro, lado oposto na sombra)
+  float ndl = dot(N, vSunB);
+  float wrapL = saturate(ndl * 0.55 + 0.45);
+  // "powder"/espalhamento múltiplo: miolo denso um pouco mais escuro, bordas finas claras
+  float powder = 1.0 - 0.34 * dens * dens;
+  // auto-sombra da massa acima: base da nuvem escura, topo claro
+  float heightLit = mix(0.30, 1.0, vShade);
+  // silver lining: borda (baixa densidade) virada para o sol, em contraluz
+  float edge = pow(1.0 - dens, 2.0);
+  vec2 sd = vSunB.xy / max(length(vSunB.xy), 1e-3);
+  float rim = edge * saturate(dot(N.xy, sd) * 1.5) * vBacklit;
+  // retroespalhamento: visto com o sol atrás da câmera, a nuvem fica uniformemente clara
+  float frontLit = saturate(vSunB.z) * 0.35;
+  vec3 sun = uSunColor * (wrapL * powder * heightLit + frontLit * heightLit + rim * 1.6);
+  // ambiente do céu: topo/lados virados para cima recebem branco-azulado, bases azul-cinza
+  float up = saturate(N.y * 0.5 + 0.5);
+  vec3 amb = mix(uShade, uAmbTop, up * (0.35 + 0.65 * vShade));
+  amb *= 1.0 - 0.18 * dens;
+  vec3 col = amb + sun;
   gl_FragColor = vec4(col, alpha);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -216,7 +277,7 @@ void main() {
 }`;
 
 // ---------------------------------------------------------------------
-//  Shaders da espuma/ondulações (anel instanciado por elefante)
+//  Shaders da espuma / anéis / esteira (anel instanciado por elefante)
 // ---------------------------------------------------------------------
 const FOAM_VERT = /* glsl */`
 #include <common>
@@ -224,10 +285,19 @@ const FOAM_VERT = /* glsl */`
 #include <fog_pars_vertex>
 attribute float aIndex;
 uniform vec3 uAnchors[NUM_ANCHORS];
-varying vec2 vLocal;
+uniform float uHeadings[NUM_ANCHORS];
+varying vec2 vLocal;   // no referencial do elefante (x = frente, y = lado direito)
+varying vec2 vWorldXZ;
+varying float vSeed;
 void main() {
-  vLocal = position.xz;
-  vec3 world = uAnchors[int(aIndex + 0.5)] + vec3(position.x, 0.4, position.z);
+  int i = int(aIndex + 0.5);
+  float h = uHeadings[i];
+  float ch = cos(h), sh = sin(h);
+  // mundo = R_y(heading) · local  ⇒  local = R_y(-heading) · mundo
+  vLocal = vec2(position.x * ch - position.z * sh, position.x * sh + position.z * ch);
+  vec3 world = uAnchors[i] + vec3(position.x, 0.4, position.z);
+  vWorldXZ = world.xz;
+  vSeed = aIndex;
   vec4 mvPosition = viewMatrix * vec4(world, 1.0);
   gl_Position = projectionMatrix * mvPosition;
   #include <logdepthbuf_vertex>
@@ -240,28 +310,67 @@ const FOAM_FRAG = /* glsl */`
 #include <fog_pars_fragment>
 uniform sampler2D uNoise;
 uniform vec3 uFoam;
+uniform vec3 uRipple;
 uniform float uTime;
 uniform float uFoamRadius;
 varying vec2 vLocal;
+varying vec2 vWorldXZ;
+varying float vSeed;
+
 void main() {
   #include <logdepthbuf_fragment>
   float r = length(vLocal);
-  float th = atan(vLocal.y, vLocal.x) / PI2;
   float R = uFoamRadius;
-  vec2 uvA = vec2(th * 16.0 + uTime * 0.003, r / 150.0 - uTime * 0.010);
-  vec2 uvB = vec2(th * 6.0 - uTime * 0.0015, r / 480.0 + uTime * 0.003);
-  float nA = texture2D(uNoise, uvA).r;
-  float nB = texture2D(uNoise, uvB).r;
-  // espuma: faixa ao redor das patas, rasgada por ruído
-  float band = smoothstep(R * 0.30, R * 0.55, r) * (1.0 - smoothstep(R * 1.15, R * 1.6, r));
-  float foam = band * smoothstep(0.40, 0.80, nA * 0.62 + nB * 0.48);
-  // ondulações concêntricas que se afastam, esmaecendo
-  float rip = 0.5 + 0.5 * sin(r * (PI2 / 120.0) - uTime * 0.8 + nB * 2.5);
-  float ripBand = smoothstep(R * 0.7, R * 1.1, r) * (1.0 - smoothstep(R * 1.9, R * 2.7, r));
-  float ripple = ripBand * pow(rip, 6.0) * (0.25 + 0.5 * nA) * 0.26;
-  float alpha = saturate(foam * 0.92 + ripple);
-  if (alpha < 0.004) discard;
-  gl_FragColor = vec4(uFoam, alpha);
+  vec2 pw = vWorldXZ;
+  // ruídos em coordenadas de MUNDO (a espuma não gira com o elefante; deriva devagar)
+  vec3 nA = texture2D(uNoise, pw * (1.0 / 900.0) + uTime * vec2(0.004, 0.002)).rgb;
+  vec3 nB = texture2D(uNoise, pw * (1.0 / 260.0) - uTime * vec2(0.006, 0.009)).rgb;
+  vec3 nC = texture2D(uNoise, pw * (1.0 / 70.0) + uTime * vec2(0.02, -0.015)).rgb;
+  float bubbles = 0.45 + 0.55 * smoothstep(0.25, 0.75, nC.b);         // buracos redondos (bolhas)
+  float lace = smoothstep(0.35, 0.85, nA.r * 0.55 + nB.g * 0.45);      // rendilhado rasgado
+
+  // ---- espuma ao redor do grupo de patas: faixa rasgada, com bolhas, mais densa por dentro
+  float band = smoothstep(R * 0.28, R * 0.55, r) * (1.0 - smoothstep(R * 1.05, R * 1.55, r));
+  float foam = band * lace * bubbles * (0.55 + 0.45 * (1.0 - smoothstep(R * 0.6, R * 1.4, r)));
+  // respingos ao redor de cada pata + anéis que se expandem de cada pata a cada ~20 s
+  vec2 feet[4];
+  feet[0] = vec2( FOOT_X,  FOOT_Z); feet[1] = vec2(-FOOT_X, -FOOT_Z);
+  feet[2] = vec2( FOOT_X, -FOOT_Z); feet[3] = vec2(-FOOT_X,  FOOT_Z);
+  float ring = 0.0;
+  float splash = 0.0;
+  for (int j = 0; j < 4; j++) {
+    float fr = length(vLocal - feet[j]);
+    splash = max(splash, (1.0 - smoothstep(280.0, 720.0, fr)) * smoothstep(0.3, 0.8, nB.r * 0.6 + nC.g * 0.5));
+    float ph0 = (j < 2 ? 0.0 : 0.5) + float(j) * 0.125 + vSeed * 0.21;
+    for (int k = 0; k < RIPPLE_RINGS; k++) {
+      float life = fract(uTime / (RIPPLE_PERIOD * float(RIPPLE_RINGS)) + ph0 + float(k) / float(RIPPLE_RINGS));
+      float rad = 350.0 + life * 2.6 * R;
+      float width = 60.0 + 260.0 * life;
+      float g = exp(-pow((fr - rad) / width, 2.0));
+      // o anel se quebra levemente com o ruído e esmaece ao se expandir
+      ring = max(ring, g * pow(1.0 - life, 1.4) * (0.55 + 0.45 * nA.g));
+    }
+  }
+  // ---- esteira atrás (x < 0 no referencial do elefante): duas linhas a partir das
+  //      patas externas abrindo devagar + rastro turbulento central
+  float back = -vLocal.x;
+  float wake = 0.0;
+  if (back > 0.0) {
+    float spread = FOOT_Z + back * 0.10;
+    float w = 110.0 + back * 0.07;
+    float lines = exp(-pow((abs(vLocal.y) - spread) / w, 2.0));
+    float streak = smoothstep(0.35, 0.8, texture2D(uNoise, vec2(vLocal.x / 2600.0, vLocal.y / 420.0) + vec2(uTime * 0.0015, 0.0)).r);
+    float trail = (1.0 - smoothstep(0.0, FOOT_Z * 1.1, abs(vLocal.y))) * smoothstep(0.45, 0.85, nB.r);
+    float along = smoothstep(0.0, 700.0, back) * exp(-back / 2800.0);
+    wake = (lines * (0.5 + 0.5 * streak) * 0.55 + trail * 0.28) * along;
+  }
+  float alpha = foam * 0.85 + splash * 0.9;
+  alpha = saturate(alpha);
+  float ripA = saturate(ring * 0.42 + wake * 0.5);
+  vec3 col = mix(uRipple, uFoam, saturate(alpha / max(alpha + ripA, 1e-3)));
+  float a = saturate(alpha + ripA * (1.0 - alpha));
+  if (a < 0.004) discard;
+  gl_FragColor = vec4(col, a);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
   #include <fog_fragment>
@@ -276,6 +385,7 @@ function generatePuffs(worldData, scale, clusters) {
   const islands = worldData.islands || [];
   const nearIsland = (x, z) => islands.some((isl) => Math.hypot(x - isl.cx, z - isl.cz) < isl.boundRadius + 600);
   const half = WORLD.HALF + 6000;
+  const variant = () => Math.floor(rng() * ATLAS_VARIANTS * 2); // 8 células × espelho
 
   // --- nuvens do mundo: aglomerados achatados com base plana e topo em couve-flor
   for (let c = 0; c < CLOUDS.COUNT; c++) {
@@ -310,7 +420,7 @@ function generatePuffs(worldData, scale, clusters) {
         const lx = lobe.x + rng.range(-0.25, 0.25) * lobe.r, lz = lobe.z + rng.range(-0.25, 0.25) * lobe.r * aspect;
         const x = cx + lx * ca - lz * sa, z = cz + lx * sa + lz * ca;
         const y = base + size * 0.38 + lobe.h * rng.range(0.05, 0.3);
-        out.push({ x, y, z, size, shade: clamp01((y - base) / Math.max(1, height)) * 0.8 + 0.1, rot: rng.range(-0.3, 0.3), variant: Math.floor(rng() * 8), group: -1 });
+        out.push({ x, y, z, size, shade: clamp01((y - base) / Math.max(1, height)) * 0.8 + 0.1, rot: rng.range(-0.3, 0.3), variant: variant(), group: -1 });
       }
     }
     for (let i = 0; i < count; i++) {
@@ -324,7 +434,7 @@ function generatePuffs(worldData, scale, clusters) {
       const size = (80 + 210 * wf * rng.range(0.5, 1.0)) * (0.8 + 0.5 * (1 - edgeT));
       const y = base + size * 0.36 + yrel;
       const shade = clamp01((y - base) / Math.max(1, height));
-      out.push({ x, y, z, size, shade, rot: rng.range(-0.45, 0.45), variant: Math.floor(rng() * 8), group: -1 });
+      out.push({ x, y, z, size, shade, rot: rng.range(-0.45, 0.45), variant: variant(), group: -1 });
     }
   }
 
@@ -364,12 +474,13 @@ function generatePuffs(worldData, scale, clusters) {
       const size = Math.min(720, (260 + 420 * rng.range(0.4, 1.0)) * (0.75 + 0.5 * (1 - edgeT)) * (1 - 0.25 * yrel / height));
       const y = base + size * 0.35 + yrel;
       const shade = clamp01((y - base) / Math.max(1, height));
-      out.push({ x, y, z, size, shade, rot: rng.range(-0.4, 0.4), variant: Math.floor(rng() * 8), group: -1 });
+      out.push({ x, y, z, size, shade, rot: rng.range(-0.4, 0.4), variant: variant(), group: -1 });
     }
   }
 
   // --- bancos de nuvem ao redor das patas (deslocamentos LOCAIS ao elefante): anel denso de
-  //     puffs sobrepostos subindo até ~o joelho, com alguns montes mais altos (refs 1–3)
+  //     puffs sobrepostos subindo até ~o joelho, mais denso junto à água (espuma por baixo),
+  //     com alguns montes mais altos (refs 1–3)
   const nFoot = Math.round(FOOT_PUFFS * scale);
   const R = ELEPHANT.FOOT_CLOUD_RADIUS;
   const bankTop = LEG_HEIGHT * CLOUDS.FOOT_TOP_FRACTION;    // ~780 m
@@ -380,18 +491,18 @@ function generatePuffs(worldData, scale, clusters) {
       const ang = (i / nBig) * Math.PI * 2 + rng.range(-0.15, 0.15);
       const rad = R * rng.range(0.78, 1.08);
       const size = rng.range(850, 1050);
-      out.push({ x: Math.cos(ang) * rad, y: size * 0.40, z: Math.sin(ang) * rad, size, shade: 0.45, rot: rng.range(-0.3, 0.3), variant: Math.floor(rng() * 8), group: e });
+      out.push({ x: Math.cos(ang) * rad, y: size * 0.38, z: Math.sin(ang) * rad, size, shade: 0.45, rot: rng.range(-0.3, 0.3), variant: variant(), group: e });
     }
     for (let i = 0; i < nFoot; i++) {
       const ang = rng.range(0, Math.PI * 2);
       // mar de nuvens: denso perto das patas (0,6–1,2 R), estendendo-se até ~2,2 R e baixando para fora
       const rad = Math.min(2.2 * R, Math.max(0.25 * R, R * (0.95 + rng.gauss() * 0.42)));
       const outer = clamp01((rad / R - 1.2) / 1.0);             // 0 dentro do anel, 1 na borda externa
-      const yt = Math.pow(rng(), 1.1) * (1 - 0.6 * outer);
-      const size = (300 + 420 * rng()) * (1 - 0.3 * yt);
-      const y = Math.max(size * 0.40, yt * bankTop);
+      const yt = Math.pow(rng(), 1.5) * (1 - 0.6 * outer);       // a maioria fica baixa, junto à água
+      const size = (320 + 440 * rng()) * (1 - 0.35 * yt);
+      const y = Math.max(size * 0.36, yt * bankTop);
       const shade = 0.30 + 0.70 * clamp01(y / bankTop);
-      out.push({ x: Math.cos(ang) * rad, y, z: Math.sin(ang) * rad, size, shade, rot: rng.range(-0.4, 0.4), variant: Math.floor(rng() * 8), group: e });
+      out.push({ x: Math.cos(ang) * rad, y, z: Math.sin(ang) * rad, size, shade, rot: rng.range(-0.4, 0.4), variant: variant(), group: e });
     }
     const nHeaps = Math.round(CLOUDS.FOOT_HEAPS * scale);
     for (let hI = 0; hI < nHeaps; hI++) {
@@ -405,7 +516,7 @@ function generatePuffs(worldData, scale, clusters) {
         const size = (260 + 320 * rng()) * (1 - 0.3 * yrel / top);
         const y = Math.max(size * 0.4, yrel);
         const shade = 0.35 + 0.65 * clamp01(y / top);
-        out.push({ x: hx + Math.cos(ang) * rr, y, z: hz + Math.sin(ang) * rr, size, shade, rot: rng.range(-0.4, 0.4), variant: Math.floor(rng() * 8), group: e });
+        out.push({ x: hx + Math.cos(ang) * rr, y, z: hz + Math.sin(ang) * rr, size, shade, rot: rng.range(-0.4, 0.4), variant: variant(), group: e });
       }
     }
   }
@@ -423,9 +534,10 @@ export function createClouds(scene, worldData, opts = {}) {
   let anchors = [];
   for (let i = 0; i < NUM_ANCHORS; i++) {
     const r = routes[i % Math.max(1, routes.length)];
-    anchors.push(r ? { position: r.poseAt(r.u0).position.clone(), heading: 0 } : { position: new THREE.Vector3(1e7, 0, 1e7), heading: 0 });
+    anchors.push(r ? { position: r.poseAt(r.u0).position.clone(), heading: r.poseAt(r.u0).heading || 0 } : { position: new THREE.Vector3(1e7, 0, 1e7), heading: 0 });
   }
   const anchorVals = anchors.map((a) => a.position.clone());
+  const headingVals = new Float32Array(NUM_ANCHORS);
 
   // ------------------------------- puffs ---------------------------------
   const clusters = [];
@@ -454,12 +566,15 @@ export function createClouds(scene, worldData, opts = {}) {
   geo.instanceCount = N;
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e7);
 
+  // Intensidades em espaço LINEAR antes do ACES (exposição 0,9): topos ao sol ≈ 2,5
+  // viram branco quase puro; bases ≈ 0,5 viram azul-cinza.
   const puffUniforms = THREE.UniformsUtils.merge([
     THREE.UniformsLib.fog,
     {
       uMap: { value: null },
-      uLit: { value: new THREE.Color(COLORS.cloudLit).multiplyScalar(1.1) },
-      uShade: { value: new THREE.Color(COLORS.cloudShade) },
+      uSunColor: { value: new THREE.Color(COLORS.sunLight).multiplyScalar(2.0) },
+      uAmbTop: { value: new THREE.Color(COLORS.cloudLit).multiplyScalar(0.95) },
+      uShade: { value: new THREE.Color(COLORS.cloudShade).multiplyScalar(1.35) },
       uAnchors: { value: anchorVals },
       uWind: { value: WIND.clone() },
       uTime: { value: 0 },
@@ -482,7 +597,7 @@ export function createClouds(scene, worldData, opts = {}) {
 
   // ------------------------------ espuma ---------------------------------
   const R = ELEPHANT.FOOT_CLOUD_RADIUS;
-  const ring = new THREE.RingGeometry(R * 0.25, R * 2.75, 96, 10);
+  const ring = new THREE.RingGeometry(R * 0.2, R * 2.75, 96, 12);
   ring.rotateX(-Math.PI / 2);
   const foamGeo = new THREE.InstancedBufferGeometry();
   foamGeo.index = ring.index;
@@ -496,17 +611,20 @@ export function createClouds(scene, worldData, opts = {}) {
     THREE.UniformsLib.fog,
     {
       uNoise: { value: null },
-      uFoam: { value: new THREE.Color(COLORS.foam).multiplyScalar(1.2) },
+      uFoam: { value: new THREE.Color(COLORS.foam).multiplyScalar(1.6) },
+      uRipple: { value: new THREE.Color(COLORS.foam).multiplyScalar(1.1) },
       uAnchors: { value: anchorVals },
+      uHeadings: { value: headingVals },
       uTime: { value: 0 },
       uFoamRadius: { value: R },
     },
   ]);
   foamUniforms.uAnchors.value = anchorVals;
-  foamUniforms.uNoise.value = makeNoiseTexture(256);
+  foamUniforms.uHeadings.value = headingVals;
+  foamUniforms.uNoise.value = makeFoamTexture(256);
   const foamMat = new THREE.ShaderMaterial({
     uniforms: foamUniforms, vertexShader: FOAM_VERT, fragmentShader: FOAM_FRAG,
-    defines: { NUM_ANCHORS },
+    defines: { NUM_ANCHORS, FOOT_X: FOOT_X.toFixed(1), FOOT_Z: FOOT_Z.toFixed(1), RIPPLE_PERIOD: RIPPLE_PERIOD.toFixed(1), RIPPLE_RINGS },
     transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending, side: THREE.DoubleSide, fog: true,
   });
   const foamMesh = new THREE.Mesh(foamGeo, foamMat);
@@ -570,6 +688,7 @@ export function createClouds(scene, worldData, opts = {}) {
       for (let i = 0; i < NUM_ANCHORS; i++) {
         const a = anchors[i];
         if (a && a.position) anchorVals[i].copy(a.position);
+        if (a && typeof a.heading === 'number') headingVals[i] = a.heading;
       }
       puffUniforms.uTime.value = time;
       foamUniforms.uTime.value = time;

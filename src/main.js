@@ -30,7 +30,8 @@ else ({ createElephant } = await import('./elephant/elephant.js'));
 if (params.dove) ({ createDove } = await import(candidatePath('player', params.dove)));
 else ({ createDove } = await import('./player/dove.js'));
 const num = (k, d) => (params[k] !== undefined ? Number(params[k]) : d);
-const quality = params.quality || 'high';
+const quality = ['low', 'high', 'ultra'].includes(params.quality) ? params.quality : 'high';
+const worldQuality = quality === 'low' ? 'low' : 'high'; // os módulos do mundo só distinguem low/high; 'ultra' é só do render
 
 // ------------------------------ renderer --------------------------------
 const canvas = document.getElementById('game');
@@ -43,21 +44,20 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, WORLD.CAMERA_NEAR, WORLD.CAMERA_FAR);
 camera.position.set(0, 200, 30);
 
-const lighting = createLighting(scene);
+const lighting = createLighting(scene, renderer, { quality }); // envMap PMREM + sol com sombras (high/ultra)
 
 // -------------------------------- mundo ---------------------------------
-const sky = createSky(scene, { quality });
-const ocean = createOcean(scene, { quality });
-const islands = createIslands(scene, WORLD_DATA, { quality });
-const clouds = createClouds(scene, WORLD_DATA, { quality });
-const post = createPost(scene, camera); // vinheta/haze sutil (quad de tela cheia)
-if (quality === 'low') post.object.visible = false;
-const elephants = WORLD_DATA.routes.map((route, i) => createElephant(route, i, { quality }));
+const sky = createSky(scene, { quality: worldQuality });
+const ocean = createOcean(scene, { quality: worldQuality });
+const islands = createIslands(scene, WORLD_DATA, { quality: worldQuality });
+const clouds = createClouds(scene, WORLD_DATA, { quality: worldQuality });
+const post = createPost(renderer, scene, camera, { quality }); // composer: [GTAO ultra] → bloom → vinheta/haze/curva; low = render direto
+const elephants = WORLD_DATA.routes.map((route, i) => createElephant(route, i, { quality: worldQuality }));
 for (const e of elephants) scene.add(e.group);
 
 // ------------------------------- jogador --------------------------------
 const input = createInput(canvas);
-const dove = createDove({ quality });
+const dove = createDove({ quality: worldQuality });
 scene.add(dove.group);
 const flight = createFlightController({ input, islandHeightAt: WORLD_DATA.islandHeightAt, elephants });
 const chase = createChaseCamera(camera, flight, { input });
@@ -67,6 +67,7 @@ const delivery = createDelivery({ elephants, flight, pkg, input, audio });
 const hud = createHUD({ root: document.getElementById('ui'), delivery, flight, elephants, input, camera });
 const map = createMapUI({ root: document.getElementById('ui'), worldData: WORLD_DATA, elephants, flight, delivery, input, camera });
 clouds.attachTo?.(elephants);
+lighting.enableShadows(scene); // castShadow/receiveShadow em tudo o que deve ter sombra (céu/oceano/nuvens/véus ficam de fora)
 
 // posição inicial: centro do mundo, olhando para o alvo da primeira entrega
 {
@@ -105,7 +106,8 @@ function tick(dt) {
   pkg.update(dt);
   delivery.update(dt);
   if (!freeCam) chase.update(dt);
-  lighting.update(camera.position);
+  lighting.update(camera); // move o sol e a caixa de sombras (encaixada em texels) para perto do jogador
+  lighting.refreshShadows(scene, dt); // a cada 2 s: objetos novos (cestas, LOD) ganham sombra
   sky.update(camera, time);
   ocean.update(camera, time);
   clouds.update(camera, time, dt);
@@ -120,7 +122,7 @@ function frame() {
   requestAnimationFrame(frame);
   clock.update(); const dt = Math.min(clock.getDelta(), 0.05);
   if (!paused) tick(dt);
-  renderer.render(scene, camera);
+  post.render(); // renderer.render + composer (ou só renderer.render em quality=low)
 }
 frame();
 
@@ -131,10 +133,11 @@ window.addEventListener('resize', () => {
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  post.setSize();
 });
 
 // ----------------------- ganchos de depuração/teste ---------------------
 window.__ready = true;
-window.__step = async (n = 1, dt = 1 / 60) => { for (let i = 0; i < n; i++) { tick(dt); } renderer.render(scene, camera); };
+window.__step = async (n = 1, dt = 1 / 60) => { for (let i = 0; i < n; i++) { tick(dt); } post.render(); };
 window.__stats = () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures, player: flight.state.position.toArray().map((v) => Math.round(v)), target: delivery.target?.name, deliveries: delivery.count });
-window.__ruppen = { THREE, scene, camera, renderer, flight, dove, elephants, delivery, pkg, map, hud, ocean, sky, clouds, islands, input, audio, worldData: WORLD_DATA, setPaused: (p) => { paused = p; }, get time() { return time; } };
+window.__ruppen = { THREE, scene, camera, renderer, lighting, post, quality, flight, dove, elephants, delivery, pkg, map, hud, ocean, sky, clouds, islands, input, audio, worldData: WORLD_DATA, setPaused: (p) => { paused = p; }, get time() { return time; } };

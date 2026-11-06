@@ -160,22 +160,29 @@ export const ISLANDS = {
 export const DOVE_MODEL = {
   HEAD_RADIUS: 0.2,         // raio da cabeça (m)
   TAIL_LENGTH: 0.8,         // comprimento da cauda em leque (m)
-  RIDER_HEIGHT: 1.75,       // altura do cavaleiro em pé (m) — sentado ≈ 0,92 acima do quadril
+  RIDER_HEIGHT: 1.75,       // altura do cavaleiro em pé (m) — cabeça = altura/7,5; sentado ≈ 0,92 acima do quadril
   WING_THICKNESS: 0.028,    // espessura das asas (chapas extrudadas)
   FLAP_HZ_CRUISE: 1.3,      // batidas por segundo em cruzeiro
   FLAP_HZ_BOOST: 2.2,       // batidas por segundo acelerando / subindo
   GLIDE_PERIOD: 7.5,        // ciclo em cruzeiro: ~4 s planando + ~3,5 s batendo
   REIN_LENGTH: 0.95,        // comprimento em repouso de cada rédea (m) — define a folga
   COLORS: {
-    featherTop: 0xfff7ee, featherUnder: 0xe2e7ee, primaries: 0x343840,
-    beak: 0xd8bdb4, eye: 0x1b1b1f, feet: 0xe58a66,
-    leather: 0x5b3a21, leatherDark: 0x3d2614, metal: 0xcfd3d8,
-    jacket: 0x23262e, trousers: 0x2b2826, boots: 0x261a12, skin: 0xc9977b, hair: 0x2a1c12, pack: 0x4d3b26,
+    featherTop: 0xfdf8f0, featherUnder: 0xe3e7ee, breast: 0xf0dcd6, primaries: 0x3b3f47,
+    beak: 0x55505a, cere: 0xece3e6, eye: 0x111013, eyering: 0xd6c0bb, feet: 0xd9806a,
+    leather: 0x6a4426, leatherDark: 0x3a2516, metal: 0xd9dbe0,
+    jacket: 0x262a33, trousers: 0x35312e, boots: 0x2a1d14, skin: 0xc99a7d, hair: 0x2a1c12, pack: 0x4f3d27,
+    scarf: 0xb8642a, glove: 0x3b2a1e,
   },
   // --- src/player/dove.js (modelo principal, asa em gaivota com primárias separadas) ---
   TAIL_LENGTH_FAN: 0.66,    // cauda curta em leque arredondado (m)
-  PRIMARIES: 7,             // "dedos" de penas primárias por asa
+  PRIMARIES: 8,             // lâminas de penas primárias por asa
   PRIMARY_DARK_FRACTION: 0.4, // fração externa de cada primária que escurece (pontas escuras)
+  PRIMARY_TWIST: 0.14,      // rad — torção da lâmina da primária na ponta (bordo de fuga sobe)
+  PRIMARY_TIP_RISE: 0.05,   // m — curvatura para cima da ponta de cada primária
+  TIP_LAG: 0.26,            // rad — atraso angular das pontas das penas na batida (osso da ponta)
+  TIP_SUPINATION: 0.32,     // rad — supinação das primárias na subida da asa
+  BODY_BOB: 0.014,          // m — balanço vertical do corpo por batida
+  BODY_FEATHER_TILE: { repeatU: 3, repeatV: 2, perRow: 6, rows: 8 }, // tile de penas do corpo (3 voltas × 2 ao longo)
   FLAP_WINDOW: 2.6,         // s de batidas no início de cada GLIDE_PERIOD (o resto é planado)
   GLIDE_DIHEDRAL: 0.17,     // rad — braço levemente erguido (V raso) ao planar
   GLIDE_WRIST_DROOP: 0.3,   // rad — mão cai em relação ao braço (quebra do punho / asa em gaivota)
@@ -348,4 +355,67 @@ export const ELEPHANT_POLISH = {
   STUD_SIZES: { big: 40, mid: 21, small: 12 },   // raios das tachas da placa (coluna central, médias, pequenas)
   POMPOM_RADIUS: 44,        // raio dos pompons da guirlanda
   POMPOM_SPACING: 114,       // passo entre pompons ao longo da borda da placa
+};
+// Materiais PBR do elefante (src/elephant/elephant.js): mapas procedurais tileáveis (canvas → normal/roughness)
+export const ELEPHANT_MATERIALS = {
+  SKIN_NORMAL_REPEAT: 8,    // repetições do mapa de normais micro da pele por ladrilho do mapa de cor (≈ 425 m/ladrilho no mundo)
+  SKIN_NORMAL_SCALE: 0.85,  // intensidade das micro-rugas/poros
+  SKIN_ROUGHNESS: 0.86,     // pele fosca e empoeirada (o roughnessMap baixa nos vincos)
+  SKIN_ENV: 0.5,            // envMapIntensity da pele
+  GOLD_COLOR: 0xc9962f,     // ouro-bronze quente
+  GOLD_ROUGHNESS: 0.34,     // metal escovado (roughnessMap com riscos 0.28–0.42)
+  GOLD_ENV: 1.2,
+  GOLD_EMISSIVE: 0.3,       // brilho residual (sem envMap o metal puro ficaria preto)
+  IVORY_COLOR: 0xf2e6cc,
+  IVORY_ROUGHNESS: 0.45,
+  IVORY_CLEARCOAT: 0.15,
+  CLOTH_WEAVE_REPEAT: 25,   // repetições da trama tecida por ladrilho do atlas dos panos (≈ 50–60 m no mundo)
+  TRUNK_WEAVE_REPEAT: { u: 50, v: 40 },
+  CLOTH_ROUGHNESS: 0.9,
+  TASSEL_STRANDS: 150,      // fios da franja da borla (tubos finos; low = 90)
+  TASSEL_STRAND_LENGTH: { min: 380, max: 450 },
+  TASSEL_STRAND_RADIUS: 4.2,
+  POMPOM_FUZZ: 0.34,        // deslocamento dos tufos (fuzzySphere)
+  POMPOM_DESAT: 0.22,       // dessaturação das cores dos pompons (mistura com cinza)
+  EAR_HOUSE_SIZE: { min: 0.7, max: 1.4 },   // variação de tamanho das casinhas do bloco da orelha
+  EAR_HOUSE_STREETS: { min: 2, max: 3 },    // ruas estreitas (colunas vazias) no bloco
+  EAR_TOWER_CHANCE: 0.06,   // fração de casinhas que viram torres (2,2× mais altas)
+  EYE_ROUGHNESS: 0.15,      // esclera molhada
+  CITY_NORMAL_SCALE: 0.7,   // relevo das janelas/telhas/tijolos
+};
+
+// ----------------------------- RENDER --------------------------------
+// Iluminação baseada em imagem, sombras e pós-processamento (src/world/lighting.js, src/world/post.js).
+// Níveis de qualidade (#quality= no jogo, ?quality= no preview):
+//   'low'   — sem sombras, sem pós-processamento (render direto); o envMap fica (é barato)
+//   'high'  — padrão: envMap PMREM, sombras PCF suaves 4096², bloom sutil + vinheta/haze/curva fílmica
+//   'ultra' — 'high' + oclusão ambiente (GTAO) + alcance de sombra maior
+export const RENDER = {
+  EXPOSURE: 0.9,             // toneMappingExposure (ACES): brancos não estouram
+  ENV_INTENSITY: 0.9,        // peso do mapa de ambiente (PMREM do céu) nos materiais PBR (scene.environmentIntensity)
+  ENV_SUN_GLOW: 2.5,         // brilho (HDR) do halo do sol no mapa de ambiente → reflexo quente no ouro
+  SUN_INTENSITY: 2.2,        // DirectionalLight
+  HEMI_INTENSITY: 0.6,       // HemisphereLight — reduzida: o envMap já dá a luz ambiente do céu
+  AMBIENT_INTENSITY: 0.12,   // AmbientLight residual (sombras cinza-azuladas, nunca pretas)
+  SHADOW: {
+    low: null,                                                             // sem sombras
+    high: { range: 1600, mapSize: 4096, bias: -0.00012, normalBias: 1.6 }, // ±range (m) em torno do foco, mapa 4096²
+    ultra: { range: 2000, mapSize: 4096, bias: -0.00012, normalBias: 2.0 },
+    DEPTH: 6000,             // m — meio-alcance do frustum de sombra ao longo da direção do sol (near/far = ±DEPTH)
+    FOCUS_AHEAD: 0.6,        // o centro da caixa de sombras fica à frente da câmera: esta fração de `range` ao longo do olhar
+    FOCUS_Y: 900,            // m — altura do plano de interesse (cidades ~1500–2100 m): o foco pára quando o olhar o cruza
+    REFRESH_S: 2,            // s — intervalo da varredura da cena que liga sombras em objetos criados depois (cestas…)
+  },
+  BLOOM: { strength: 0.18, radius: 0.6, threshold: 0.9 },  // só glitter do sol, ouro e nuvens brilhantes
+  GRADE: {
+    contrast: 0.22,          // peso da curva S fílmica (0 = sem contraste extra)
+    desaturate: 0.06,        // 6% de dessaturação
+    vignette: 0.07,          // escurecimento máximo nos cantos (0..1)
+    vignetteStart: 0.45,     // raio (0..1, do centro ao canto) onde a vinheta começa
+    hazeLift: 0.028,         // fração da cor da névoa somada à imagem inteira (levanta os pretos)
+    hazeLiftEdge: 0.012,     // leve véu extra nas bordas
+  },
+  AO: {                      // GTAO (ultra): raio em metros, espessura em metros
+    radius: 28, distanceExponent: 1.5, thickness: 6, scale: 1.0, samples: 16, distanceFallOff: 1, blendIntensity: 0.85,
+  },
 };
