@@ -10,7 +10,8 @@
 //  Contrato:
 //    createLighting(scene, renderer, { quality, shadowRange? }) → {
 //      sun, hemi, ambient, sunDirection, environment (Texture | null), shadowsEnabled, setEnvIntensity(k),
-//      update(camera | Vector3),            // por quadro: move o sol/caixa de sombras para perto do jogador
+//      update(camera | Vector3),            // por quadro: move o sol/caixa de sombras para perto do jogador e
+//                                           // afina a névoa com a altitude (RENDER.FOG_ALTITUDE)
 //      enableShadows(root),                 // liga castShadow/receiveShadow (+ envMap PBR) em tudo o que deve ter
 //      refreshShadows(root, dt),            // chama enableShadows a cada RENDER.SHADOW.REFRESH_S s (objetos novos)
 //    }
@@ -198,6 +199,9 @@ export function createLighting(scene, renderer = null, opts = {}) {
   function update(cameraOrPosition) {
     const isCam = !!cameraOrPosition?.isCamera;
     const pos = isCam ? cameraOrPosition.position : cameraOrPosition;
+    // névoa mais rala com a altitude da câmera (FogExp2 não depende da altura: de 3–5 km o ar ficaria leitoso)
+    const fa = RENDER.FOG_ALTITUDE;
+    scene.fog.density = WORLD.FOG_DENSITY * THREE.MathUtils.lerp(1, fa.factor, THREE.MathUtils.smoothstep(pos.y, fa.from, fa.to));
     if (!shadowsEnabled) {
       sun.position.copy(pos).addScaledVector(sunDirection, RENDER.SHADOW.DEPTH);
       sun.target.position.copy(pos);

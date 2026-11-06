@@ -418,7 +418,10 @@ export const RENDER = {
     FOCUS_Y: 900,            // m — altura do plano de interesse: o foco pára quando o olhar o cruza
     REFRESH_S: 2,            // s — intervalo da varredura da cena que liga sombras/envMap em objetos criados depois
   },
-  BLOOM: { strength: 0.18, radius: 0.6, threshold: 0.9 },  // só glitter do sol, ouro e nuvens brilhantes
+  // Bloom em espaço de tela (0..1): só o que satura (disco/glitter do sol, brilho especular do ouro);
+  // plumagem branca ao sol fica em ~0,85–0,93 e não deve brilhar.
+  BLOOM: { strength: 0.14, radius: 0.6, threshold: 0.965 },
+  FOG_ALTITUDE: { from: 300, to: 6000, factor: 0.45 }, // densidade × lerp(1, factor, smoothstep(from, to, câmera.y))
   GRADE: {
     contrast: 0.18,          // peso da curva S fílmica (0 = sem contraste extra)
     desaturate: 0.06,        // 6% de dessaturação
