@@ -64,7 +64,8 @@ await step(5); const zone = await page.evaluate(() => window.__ruppen.delivery.z
 check('zona de entrega detectada', zone.inZone === true, JSON.stringify(zone));
 await key('Space', true); await step(2); await key('Space', false); let d1 = await S();
 check('Espaço solta a cesta', d1.attached === false && d1.state === 'falling', `state=${d1.state} attached=${d1.attached}`);
-let delivered = false; for (let i = 0; i < 40 && !delivered; i++) { await step(15); const s = await S(); if (s.count >= 1) delivered = true; }
+let delivered = false; for (let i = 0; i < 40 && !delivered; i++) { await step(15); const s = await S(); if (s.count >= 1) delivered = true;
+  if (process.env.PLAYTEST_DEBUG && (i % 4 === 0 || delivered)) console.log('  [drop]', i, JSON.stringify(await page.evaluate(() => { const r = window.__ruppen; const e = r.delivery.target; const objs = []; r.scene.traverse((o) => { if (o.name && /cage|cesta|basket/i.test(o.name)) objs.push(o); }); const info = { st: r.delivery.state, falling: r.pkg.falling, n: objs.length }; if (objs.length) { const w = new r.THREE.Vector3(); objs[0].getWorldPosition(w); info.cage = w.toArray().map(Math.round); info.surf = Math.round(e.getSurfaceHeight(w.x, w.z) ?? -1); } return info; }))); }
 const d2 = await S();
 check('entrega concluída no alvo', delivered, `count=${d2.count} state=${d2.state}`);
 await step(120); const d3 = await S();
