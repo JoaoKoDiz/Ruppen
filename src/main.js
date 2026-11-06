@@ -35,7 +35,9 @@ const worldQuality = quality === 'low' ? 'low' : 'high'; // os módulos do mundo
 
 // ------------------------------ renderer --------------------------------
 const canvas = document.getElementById('game');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality !== 'low', logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
+// Sem MSAA no canvas: em high/ultra a cena vai para um render target MSAA 4× com depth (post.js) e só o
+// quad final chega ao canvas; em low o render é direto e sem AA (barato). Log depth: 0,5 m a 160 km sem z-fighting.
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, RENDER.PIXEL_RATIO[quality]));
 renderer.setSize(window.innerWidth, window.innerHeight, false);
 applyRendererDefaults(renderer);
@@ -51,7 +53,8 @@ const sky = createSky(scene, { quality: worldQuality });
 const ocean = createOcean(scene, { quality: worldQuality });
 const islands = createIslands(scene, WORLD_DATA, { quality: worldQuality });
 const clouds = createClouds(scene, WORLD_DATA, { quality: worldQuality });
-const post = createPost(renderer, scene, camera, { quality }); // composer: captura → bloom → vinheta/haze/curva; low = render direto
+// composer: cena (MSAA + depth) → SSAO → bloom → grade → SMAA; low = render direto. #ao=0 desliga a AO, #postdebug=1|2 mostra o buffer de AO
+const post = createPost(renderer, scene, camera, { quality, ao: params.ao !== '0', debug: num('postdebug', 0) });
 const elephants = WORLD_DATA.routes.map((route, i) => createElephant(route, i, { quality: worldQuality }));
 for (const e of elephants) scene.add(e.group);
 

@@ -10,7 +10,8 @@ export const WORLD = {
   SEA_LEVEL: 0,
   CAMERA_NEAR: 0.5,
   CAMERA_FAR: 160000,     // distância de renderização enorme (usa logarithmicDepthBuffer)
-  FOG_DENSITY: 0.000085,  // FogExp2 — perspectiva aérea forte: ~45% de névoa a 8–10 km, ~90% a 20 km (como nas referências)
+  FOG_DENSITY: 0.00003,   // FogExp2 residual (gaussiana: fecha o horizonte a 40+ km). A perspectiva aérea principal é
+                          // a extinção exponencial com a altura de RENDER.AERIAL (lighting.js, no chunk de névoa de todo material)
 };
 
 // Direção DO sol (de onde a luz vem), normalizada em lighting.js
@@ -53,7 +54,9 @@ export const COLORS = {
   forestDark: 0x3b6a37,  // mata fechada
   scrub: 0x7d8c4b,       // matagal/charneca de altitude
   sandWet: 0xb9a97c,     // faixa de areia molhada na linha d'água
-  shallows: 0x4fb3c8,    // água rasa turquesa ao redor das ilhas
+  shallows: 0x4fb3c8,    // água rasa turquesa ao redor das ilhas (luz espalhada sobre a plataforma de areia)
+  seabedRock: 0x55604f,  // fundo rochoso com algas (costas sem praia)
+  lichen: 0xb9b47a,      // líquen nas rochas
 };
 
 // -------------------------- ELEFANTES --------------------------------
@@ -117,6 +120,46 @@ export const CLOUDS = {
   FOOT_TOP_FRACTION: 0.30,  // altura do banco como fração da altura da pata (joelho ≈ 0,3)
   FOOT_HEAP_FRACTION: 0.46, // altura dos montes como fração da altura da pata
   // orçamento: COUNT×~34 + BIG_COUNT×~105 + 7×(14+FOOT_PUFFS+FOOT_HEAPS×FOOT_HEAP_PUFFS) ≈ 11,3 k instâncias (≤ 12 k)
+  // (os puffs acima são o modo quality=low; em high/ultra as nuvens são VOLUMÉTRICAS — src/world/volclouds.js)
+  VOL: {
+    SMALL_COUNT: 120,          // cúmulos pequenos espalhados (refs: "small scattered cumulus")
+    SMALL_WIDTH: { min: 380, max: 1300 },
+    SMALL_HEIGHT: { min: 170, max: 420 },
+    BIG_COUNT: 34,             // cúmulos grandes sobre o mar
+    BIG_WIDTH: { min: 1500, max: 3400 },
+    BIG_HEIGHT: { min: 600, max: 1300 },
+    BASE_MIN: 160, BASE_MAX: 650,   // altura da base plana (m)
+    FOOT_TOP: 1800,            // topo dos montes do banco das patas (m)
+    FOOT_COVER: 2.2,           // reforço da cobertura do banco das patas (resiste mais à erosão: banco contínuo)
+    FOOT_RING: 2150,           // raio médio do anel de nuvem ao redor das patas (m, local do elefante)
+    LEG_CLEAR: [0.92, 1.25],    // a densidade cai dentro deste cilindro (× raio da pata) — pernas visíveis no banco
+    CULL_DIST: 40000,          // m — além disso a nuvem não é desenhada
+    FADE_START: 30000,         // m — começa a desvanecer
+    DENSITY: 0.03,             // coeficiente de extinção máximo (1/m): cúmulo denso, silhueta nítida
+    BASE_NOISE_SCALE: 1500,    // m por ladrilho do ruído base (perlin-worley 64³)
+    DETAIL_NOISE_SCALE: 300,   // m por ladrilho do ruído de detalhe (worley 32³)
+    EROSION: 0.82,             // quanto o ruído base corrói a forma dos lóbulos
+    DETAIL_EROSION: 0.55,      // idem para o detalhe (couve-flor nos topos, fiapos nas bases)
+    EDGE_SHARP: 0.26,          // a densidade satura em d = EDGE_SHARP (borda nítida, miolo uniforme)
+    MAX_STEPS: 80,             // passos primários (inclui saltos no vazio)
+    LIGHT_STEPS: 5,            // passos de luz em direção ao sol
+    LIGHT_STEP0: 28,           // m — 1º passo de luz (dobra a cada passo)
+    STEP_MIN: 9,               // m — passo mínimo
+    STEP_K: 0.011,             // passo = clamp(t·K, MIN, MAX): cresce com a distância
+    STEP_MAX: 280,
+    SUN: 2.6,                  // intensidade do sol (linear, antes do ACES)
+    AMB_TOP: 0.62,             // luz do céu nos topos
+    AMB_BOTTOM: 0.42,          // ambiente azul-cinza nas bases
+    AMB_PROBE: 90,             // m — sonda de oclusão do céu (para cima)
+    PHASE_G: 0.6,              // Henyey–Greenstein para frente
+    PHASE_BACK: -0.3,          // lobo de retroespalhamento
+    PHASE_BACK_W: 0.3,
+    POWDER: 0.55,              // força do termo "powder" (vincos escuros entre os lóbulos com o sol atrás)
+    BODY_SHADOW: 0.3,          // transmitância da sombra do corpo do elefante sobre o banco das patas
+    WIND: { x: 1.1, z: 0.45 }, // m/s — deriva das nuvens do mundo
+    CHURN: 0.9,                // m/s — evolução lenta do ruído (nuvem "fervendo")
+    PASS_SCALE: 0.5,             // resolução do passe de nuvens (1 = cheia; 0,5 = meia resolução, composta por cima)
+  },
 };
 
 export const CITY_NAMES = ['Zamurra', 'Kethari', 'Oronde', 'Vashtu', 'Mirapol', 'Sulaymi', 'Tendravel'];
@@ -130,29 +173,65 @@ export const LAYERS = { DEFAULT: 0, NO_FOG: 1 };
 // ----------------------------- ILHAS ---------------------------------
 // Parâmetros da malha de terreno e da vegetação instanciada (src/world/islands.js).
 export const ISLANDS = {
-  GRID_HIGH: 170,          // vértices por lado da malha de terreno (quality=high)
-  GRID_LOW: 110,           // idem para quality=low
-  TREES_HIGH: 6000,        // árvores instanciadas por ilha (~12 triângulos cada)
-  TREES_LOW: 3000,
-  ROCKS_HIGH: 400,         // pedras instanciadas por ilha (inclui os matacões)
-  ROCKS_LOW: 220,
-  BOULDERS_HIGH: 40,       // matacões grandes no sopé das falésias (parte de ROCKS_*)
-  BOULDERS_LOW: 20,
+  // --- malha de terreno adaptativa (quadtree restrita: densa na costa, cristas e picos) ---
+  TERRAIN_LEVELS: 11,      // níveis do quadtree (folha mínima = 2·boundRadius / 2^níveis ≈ 3–5 m)
+  TERRAIN_LEAVES_HIGH: 18000, // folhas por ilha (≈ 3,3 triângulos/folha → ~60k tris) em quality=high
+  TERRAIN_LEAVES_LOW: 8000,
+  DEEP_CULL_Y: -45,        // m — folhas inteiras abaixo disto não são desenhadas (o mar é opaco ali)
+  RASTER: 256,             // células da grade regular de cobertura (posicionar árvores/pedras, relevo local)
+  // --- detalhe de renderização (só visual: a jogabilidade continua em island.heightAt) ---
+  EROSION_M: 24,           // m — profundidade máx. das ravinas (só cava: nunca acima de heightAt + ~3 m)
+  CLIFF_TOP: [3.2, 9.7],   // m — altura da borda das falésias costeiras (costa sem praia → com rocha)
+  DETAIL_FADE: [160, 750, 1100, 5200], // m — detalhe fino some de [0]→[1], o grosso de [2]→[3]
+  TEX_SIZE_HIGH: 512,      // px — texturas procedurais de detalhe (tileáveis)
+  TEX_SIZE_LOW: 256,
+  // --- vegetação e pedras instanciadas ---
+  CONIFERS_HIGH: 1700,     // coníferas (~29 tris) por ilha
+  CONIFERS_LOW: 800,
+  BROADLEAF_HIGH: 650,     // folhosas de copa redonda (~31 tris)
+  BROADLEAF_LOW: 280,
+  BUSHES_HIGH: 420,        // arbustos nos prados/bordas (mesma malha das folhosas)
+  BUSHES_LOW: 200,
+  ROCKS_HIGH: 160,         // pedras (80 tris, facetadas) — inclui os matacões e as pedras da arrebentação
+  ROCKS_LOW: 90,
+  BOULDERS_HIGH: 34,       // matacões grandes no sopé das falésias (parte de ROCKS_*)
+  BOULDERS_LOW: 16,
+  STACKS_HIGH: 22,         // agulhas/rochedos no mar junto às costas rochosas
+  STACKS_LOW: 12,
   TREE_HEIGHT_MIN: 12,     // árvores grandes (m) para serem visíveis do voo
   TREE_HEIGHT_MAX: 30,
+  TREE_LOD_DIST: 7500,     // m — além disto (distância ao centro da ilha) as árvores usam a malha simples
   SKIRT_Y: -300,           // y da "saia" submersa da malha fora do contorno da ilha
   TREE_VIS_DIST: 28000,    // além desta distância da câmera as árvores somem (sub-pixel)
   ROCK_VIS_DIST: 18000,    // idem para as pedras
   VEG_NOISE_M: 700,        // m — escala das manchas prado/pasto seco
   FOREST_NOISE_M: 520,     // m — escala das manchas de floresta
-  BEACH_NOISE_M: 900,      // m — escala das costas com/sem praia
+  BEACH_NOISE_M: 900,      // m — escala das costas com/sem praia (sem praia → costa rochosa com falésia)
   SAND_MAX_Y: 8,           // m — areia até esta altura (onde a encosta é suave)
   SAND_WET_Y: 1.5,         // m — faixa de areia molhada/escura junto à água
   TREELINE: 0.45,          // fração de maxH acima da qual não há floresta
-  SHALLOWS_SEGMENTS: 160,  // ângulos do anel de água rasa
-  SHALLOWS_Y: 0.8,         // m — altura do anel acima do oceano (evita z-fight)
-  SHALLOWS_OUTER: 0.27,    // fração de R além da costa onde o turquesa desaparece
-  SHALLOWS_OPACITY: 0.55,  // opacidade junto à costa
+  // --- campo da costa (textura polar por ilha lida pelo oceano: fundo, distância à costa) ---
+  SHORE_TEX_W: 2048,       // amostras angulares por ilha
+  SHORE_TEX_ROWS: 48,      // amostras radiais por ilha (u = r / contorno de SHORE_U0 a SHORE_U1)
+  SHORE_U0: 0.86,
+  SHORE_U1: 1.16,
+  WATER_SIGMA: [0.30, 0.072, 0.052], // 1/m — absorção da água clara (R, G, B): areia turquesa no raso
+};
+
+// ----------------------------- OCEANO --------------------------------
+// Ondas de Gerstner perto da câmera (src/world/ocean.js). Cada onda: [comprimento (m), amplitude (m),
+// direção em graus relativa ao vento]. Soma das amplitudes ≈ 2,8 m (crista máx. < DOVE.ALT_MIN = 6 m).
+export const OCEAN = {
+  WIND_DEG: 28.8,          // direção do vento/ondulação (graus a partir de +X para +Z) = trem longo do shader
+  WAVES: [[262, 0.82, 0], [187, 0.6, 27], [133, 0.44, -23], [95, 0.32, 46], [68, 0.23, -37], [49, 0.16, 12], [36, 0.11, -58], [27, 0.08, 71]],
+  CHOP: 0.085,             // Q·k·A por onda (agudeza das cristas; soma 0,68 < 1 → sem laços)
+  NEAR_RADIUS: 4600,       // m — raio da malha densa (anéis ×1,0245) com deslocamento
+  DISP_FADE: [2400, 4200], // m — o deslocamento some entre estes raios
+  NORMAL_FADE: [1800, 4500], // m — a normal analítica de Gerstner some (o mar longe continua como antes)
+  SEGMENTS_HIGH: 256,      // segmentos angulares da malha (high) — ~180k tris
+  SEGMENTS_LOW: 128,
+  WHITECAP: [0.74, 0.5],   // jacobiano: espuma começa em [0] e é plena em [1] (esparsa)
+  FOAM_LINE_M: 21,         // m — espaçamento das linhas de arrebentação que chegam à praia
 };
 
 // ------------------------- MODELO DA POMBA ----------------------------
@@ -316,7 +395,7 @@ export const ELEPHANT_MODEL = {
   EAR_HOUSE_GRID: { rows: 22, cols: 16 },   // bloco de casinhas em terraços no manto (muitas fileiras pequenas)
   EAR_HOUSE_RECT: { x0: -0.95, x1: -0.26, y0: -0.6, y1: -0.05 },   // região do bloco (frações da largura/altura da orelha; x<0 = para trás, y<0 = para baixo): parte SUPERIOR-EXTERNA (ref. 1)
   TRUNK_ROOT_RADIUS: 235,   // m — raio da tromba na raiz (afunila até TRUNK.baseRadius a ~25% do comprimento)
-  CITY_SPACING_HIGH: 6.5,   // m — passo da malha de casas do dorso no alto (quality=high); cresce para ~1,5× nos flancos
+  CITY_SPACING_HIGH: 7.6,   // m — passo da malha de casas do dorso no alto (quality=high); cresce para ~1,5× nos flancos
   CITY_SPACING_LOW: 11,
   CITY_FLANK_ANGLE: 1.25,   // rad — até que ângulo (a partir do zênite) as casas INSTANCIADAS descem pelos flancos
   CRUST_FLANK_ANGLE: 1.7,   // rad — até onde desce a casca-crosta (textura de casinhas) pelos flancos
@@ -334,7 +413,7 @@ export const ELEPHANT_MODEL = {
   TUSK_HOUSE_DIV: 30,       // lado da casinha da presa = diâmetro local / TUSK_HOUSE_DIV
   TUSK_HOUSE_GAP: 2.0,      // passo entre casinhas da presa (× lado)
   TUSK_HOUSE_SPAN: 1.35,    // rad — meio-ângulo coberto pelas casas (±: quase toda a metade de cima da presa)
-  TUSK_HOUSE_MAX: 2200,     // limite de casinhas por par de presas (orçamento de triângulos)
+  TUSK_HOUSE_MAX: 1800,     // limite de casinhas por par de presas (orçamento de triângulos)
   TUSK_TOWERS: 9,           // torres brancas por presa
   FOLD_BODY: 20,            // m — amplitude das dobras esculpidas do corpo (geometria)
   FOLD_HEAD: 8,             // m — idem cabeça
@@ -388,13 +467,41 @@ export const ELEPHANT_MATERIALS = {
   EYE_ROUGHNESS: 0.15,      // esclera molhada
   CITY_NORMAL_SCALE: 0.7,   // relevo das janelas/telhas/tijolos
 };
+// Pele ESCULPIDA como uma única malha (src/elephant/sculpt.js): campo de distância com união suave
+// (smin polinomial) de elipsoides/cones arredondados, poligonizado por "surface nets" uma vez e
+// compartilhado pelos 7 elefantes; dobras deslocadas na normal, AO de cavidade nos vértices,
+// pesos de skinning pela região dominante do campo.
+export const ELEPHANT_SCULPT = {
+  CELL_HIGH: 14.2,          // lado da célula da grade (m, modelo-base) em quality=high (≈ 140 k triângulos)
+  CELL_LOW: 19,             // idem quality=low (≈ 80 k)
+  K_BODY: 120,              // suavidade (k do smin) entre os volumes do tronco (barriga, cernelha, ombros, quadris)
+  K_NECK: 150,              // pescoço ↔ corpo/cabeça
+  K_HEAD: 120,              // cabeça (crânio, domos, bochechas, queixo) ↔ pescoço
+  K_TRUNK: 110,             // raiz da tromba ↔ face (abaulado suave)
+  K_LEG: 130,               // patas ↔ ombros/quadris (musculosos)
+  K_TAIL: 45,
+  CREASE_LEG: 16,           // m — vinco extra onde as patas entram no corpo
+  CREASE_NECK: 10,          // m — idem pescoço/cabeça
+  CREASE_TRUNK: 12,         // m — anéis fundos na raiz da tromba
+  FOLD_TRUNK: 1.0,          // fator das dobras em anel da tromba
+  KNEE_Y: 410,              // altura dos joelhos (osso do joelho; dobras finas ao redor)
+  AO_STEP: 30,              // m — passo das amostras do campo para o AO de cavidade
+  AO_STRENGTH: 0.42,        // escurecimento máximo do AO (axilas, virilhas, sob a barriga, raiz da tromba)
+  TRI_COLOR_TILE: 1100,     // m (modelo-base) — ladrilho do mapa de cor triplanar
+  TRI_NORMAL_TILE: 140,     // m (modelo-base) — ladrilho dos mapas de normal/rugosidade triplanares
+  TRI_SHARPNESS: 4,         // expoente da mistura triplanar
+  NOD: 0.012,               // rad — aceno leve da cabeça
+  KNEE_FLEX: 0.2,           // rad — flexão do joelho na fase de balanço
+  HIP_SWING: 0.12,          // rad — balanço das patas a partir do quadril
+};
 
 // ----------------------------- RENDER --------------------------------
-// Iluminação baseada em imagem, sombras e pós-processamento (src/world/lighting.js, src/world/post.js).
+// Iluminação baseada em imagem, sombras, perspectiva aérea e pós-processamento (src/world/lighting.js, src/world/post.js).
 // Níveis de qualidade (#quality= no jogo, ?quality= no preview):
-//   'low'   — sem sombras, sem pós-processamento (render direto); o envMap fica (é barato)
-//   'high'  — padrão: envMap PMREM, sombras PCF 4096² (±1600 m), bloom sutil + vinheta/haze/curva fílmica
-//   'ultra' — 'high' + pixel ratio até 2 + filtro de sombra mais largo (sem AO: GTAO não funciona com log depth aqui)
+//   'low'   — sem sombras, sem pós-processamento (render direto no canvas, sem AA); envMap e perspectiva aérea ficam (baratos)
+//   'high'  — padrão: envMap PMREM, sombras PCF 4096² (±1600 m); cena num render target MSAA 4× com depth;
+//             SSAO (meia resolução, 12 amostras) → bloom sutil → grade fílmica → SMAA
+//   'ultra' — 'high' + pixel ratio até 2 + filtro de sombra mais largo + SSAO com 16 amostras
 export const RENDER = {
   EXPOSURE: 0.9,             // toneMappingExposure (ACES)
   PIXEL_RATIO: { low: 1, high: 1.5, ultra: 2 }, // teto de devicePixelRatio por nível (main.js)
@@ -430,4 +537,36 @@ export const RENDER = {
     hazeLift: 0.02,          // fração da cor da névoa somada à imagem inteira (levanta os pretos)
     hazeLiftEdge: 0.012,     // leve véu extra nas bordas
   },
+  // Perspectiva aérea física (todas as qualidades): injetada em ShaderChunk.fog_* por lighting.js, então vale para todo
+  // material com fog=true (padrão e ShaderMaterial com os chunks), na profundidade real do fragmento (nuvens transparentes
+  // incluídas). Transmitância T = exp(−τ·RGB), τ = ∫ σ(h) ds com σ(h) = SIGMA0·exp(−h/H) + SIGMA1 (analítica ao longo do
+  // raio); cor = mix(cor, luma, DESAT·(1−T)) · T + corDaNévoa · (1 − T). RGB > 1 no azul: o ar espalha mais azul →
+  // objetos distantes azulados, dessaturados, de baixo contraste (silhuetas ainda visíveis a 15–20 km).
+  AERIAL: {
+    H: 1200,                 // m — altura de escala do haze (camada limite marinha: denso junto ao mar, ralo no alto)
+    SIGMA0: 6.0e-5,          // 1/m — extinção ao nível do mar (verde)
+    SIGMA1: 1.2e-5,          // 1/m — piso (ar limpo acima da camada)
+    RGB: [0.80, 0.96, 1.22], // extinção relativa por canal
+    DESAT: 0.35,             // dessaturação extra com a distância
+  },
+  // Oclusão ambiente em espaço de tela (post.js): lê o depth logarítmico, reconstrói a posição de vista, normal pelas
+  // derivadas do depth, espiral de amostras num disco de raio ∝ distância, blur bilateral, aplicada antes do grade com
+  // desvanecimento pela névoa/perspectiva aérea (ao longe não escurece o haze). quality=low: desligada.
+  AO: {
+    high: { samples: 12, scale: 0.5 },   // scale = resolução do buffer de AO em relação ao drawing buffer
+    ultra: { samples: 16, scale: 0.5 },
+    // escala fina: raio no mundo = NEAR·(dist/NEAR_DIST)^EXP (≈ 2 m a 10 m, 7 m a 120 m, 20 m a 1,2 km, 40 m a 5 km)
+    RADIUS_NEAR: 2.0, RADIUS_NEAR_DIST: 10, RADIUS_EXP: 0.48,
+    RADIUS_MIN: 0.5, RADIUS_MAX: 120, // limites da escala fina (m)
+    LARGE_K: 0.06,           // escala larga: raio = dist × K (constante na tela ≈ 6% da altura com fov 62°)
+    MAX_PX: 0.13, MIN_PX: 1.5, // raio projetado máximo (fração da altura da tela) / mínimo (px)
+    INTENSITY: 1.6,          // ganho da oclusão fina
+    INTENSITY_LARGE: 1.3,    // ganho da oclusão larga
+    BIAS: 0.08,              // cosseno mínimo (evita auto-oclusão em superfícies curvas)
+    POWER: 1.25,             // contraste da AO
+    STRENGTH: 0.9,           // mistura final: cor × mix(1, ao, STRENGTH × visibilidade)
+    FADE: [18000, 40000],    // m — some com a distância
+    BLUR_SHARP: 0.06,        // tolerância relativa de profundidade do blur bilateral
+  },
+  MSAA: 4,                   // amostras do render target da cena (high/ultra)
 };

@@ -7,6 +7,17 @@
 //     (o ouro reflete o céu/sol; o lado da sombra fica azulado, nunca preto);
 //   • hemisfério azul-cinza (céu em cima, mar refletido embaixo) como preenchimento: o lado
 //     da sombra do elefante fica cinza médio, o sol esculpe o lado iluminado; e FogExp2.
+//  Perspectiva aérea (todas as qualidades): ao ser importado, este módulo substitui os chunks
+//  fog_pars_vertex / fog_vertex / fog_pars_fragment / fog_fragment do three.js. Além da FogExp2 (agora
+//  residual, WORLD.FOG_DENSITY), todo material com névoa aplica a extinção exponencial com a altura de
+//  RENDER.AERIAL na profundidade REAL do fragmento (por isso fica no material e não no pós: nuvens e véus
+//  transparentes não gravam depth). O vertex calcula vFogOffset = posição do fragmento − câmera, em mundo
+//  ((mvPosition, 0) · viewMatrix = rotação inversa da vista). AERIAL_GLSL (exportado) traz as funções
+//    vec3 ruppenAerialT(vec3 offsetDaCamera, float alturaDaCamera)          → transmitância RGB
+//    vec3 ruppenApplyAerial(vec3 cor, vec3 offset, float camY, vec3 haze)   → cor com haze (sRGB de tela)
+//  para shaders que não usam os chunks (ex.: nuvens volumétricas em ray-march): cole AERIAL_GLSL e chame
+//  ruppenApplyAerial(cor, pos − cameraPosition, cameraPosition.y, fogColor) — protegido por #ifndef RUPPEN_AERIAL.
+//
 //  Contrato:
 //    createLighting(scene, renderer, { quality, shadowRange? }) → {
 //      sun, hemi, ambient, sunDirection, environment (Texture | null), shadowsEnabled, setEnvIntensity(k),
@@ -28,6 +39,76 @@ import * as THREE from 'three';
 import { COLORS, SUN_DIR, WORLD, RENDER } from '../config.js';
 
 export const sunDirection = new THREE.Vector3(SUN_DIR.x, SUN_DIR.y, SUN_DIR.z).normalize();
+
+// ------------------------- perspectiva aérea ------------------------------
+const glf = (x) => { const t = Number(x).toPrecision(7); return /[.e]/.test(t) ? t : t + '.0'; };
+const AP = RENDER.AERIAL;
+export const AERIAL_GLSL = /* glsl */`
+#ifndef RUPPEN_AERIAL
+#define RUPPEN_AERIAL
+const float AP_H = ${glf(AP.H)};
+const float AP_SIGMA0 = ${glf(AP.SIGMA0)};
+const float AP_SIGMA1 = ${glf(AP.SIGMA1)};
+const vec3 AP_RGB = vec3(${AP.RGB.map(glf).join(', ')});
+const float AP_DESAT = ${glf(AP.DESAT)};
+// profundidade óptica analítica de um raio reto da câmera (altura camY) até camY + offset, com
+// densidade SIGMA0·exp(−h/H) + SIGMA1 (h ≥ 0: abaixo do mar conta como o nível do mar)
+vec3 ruppenAerialT(vec3 offset, float camY) {
+  float dist = length(offset);
+  float h0 = max(camY, 0.0);
+  float h1 = max(camY + offset.y, 0.0);
+  float k = (h1 - h0) / AP_H;
+  float shape = abs(k) < 1e-3 ? 1.0 - 0.5 * k : (1.0 - exp(-k)) / k;
+  float tau = dist * (AP_SIGMA0 * exp(-h0 / AP_H) * shape + AP_SIGMA1);
+  return exp(-tau * AP_RGB);
+}
+vec3 ruppenApplyAerial(vec3 col, vec3 offset, float camY, vec3 haze) {
+  vec3 T = ruppenAerialT(offset, camY);
+  float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  col = mix(col, vec3(l), AP_DESAT * (1.0 - T.g));
+  return col * T + haze * (1.0 - T);
+}
+#endif
+`;
+
+function installAerialPerspective() {
+  const C = THREE.ShaderChunk;
+  if (C.fog_fragment.includes('ruppenApplyAerial')) return;
+  C.fog_pars_vertex = /* glsl */`
+#ifdef USE_FOG
+	varying float vFogDepth;
+	varying vec3 vFogOffset;
+#endif`;
+  C.fog_vertex = /* glsl */`
+#ifdef USE_FOG
+	vFogDepth = - mvPosition.z;
+	vFogOffset = ( vec4( mvPosition.xyz, 0.0 ) * viewMatrix ).xyz;
+#endif`;
+  C.fog_pars_fragment = /* glsl */`
+#ifdef USE_FOG
+	uniform vec3 fogColor;
+	varying float vFogDepth;
+	varying vec3 vFogOffset;
+	#ifdef FOG_EXP2
+		uniform float fogDensity;
+	#else
+		uniform float fogNear;
+		uniform float fogFar;
+	#endif
+${AERIAL_GLSL}
+#endif`;
+  C.fog_fragment = /* glsl */`
+#ifdef USE_FOG
+	#ifdef FOG_EXP2
+		float fogFactor = 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );
+	#else
+		float fogFactor = smoothstep( fogNear, fogFar, vFogDepth );
+	#endif
+	gl_FragColor.rgb = ruppenApplyAerial( gl_FragColor.rgb, vFogOffset, cameraPosition.y, fogColor );
+	gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );
+#endif`;
+}
+installAerialPerspective();
 
 // ------------------------- mapa de ambiente ------------------------------
 // Esfera invertida pequena (o PMREMGenerator renderiza com near 0,1 / far 100) com o

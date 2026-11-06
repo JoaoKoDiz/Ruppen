@@ -7,7 +7,7 @@
 //   câmera: cx,cy,cz + lx,ly,lz   OU   dist,az,el (graus) ao redor de tx,ty,tz
 //   t=<segundos> frames=<n>   avança o tempo/animação antes de renderizar
 //   orbit=1                   OrbitControls interativo (para olhar no navegador)
-//   quality=low|high|ultra   (ultra = high + oclusão ambiente; os módulos do mundo recebem low/high)
+//   quality=low|high|ultra   (os módulos do mundo recebem low/high)   ao=0 desliga a SSAO   postdebug=1|2 mostra a AO
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { WORLD, ELEPHANT, DOVE } from '../src/config.js';
@@ -23,7 +23,7 @@ const worldQuality = quality === 'low' ? 'low' : 'high';
 const withEnv = q.env === '1' || kind === 'env' || kind === 'all';
 
 const canvas = document.getElementById('game');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', logarithmicDepthBuffer: true }); // high/ultra: MSAA no render target do post
 renderer.setPixelRatio(1);
 renderer.setSize(window.innerWidth, window.innerHeight, false);
 applyRendererDefaults(renderer);
@@ -49,7 +49,7 @@ const shadowFocus = q.cx !== undefined ? new THREE.Vector3(num('lx', 0), num('ly
 const viewDist = q.cx !== undefined ? shadowFocus.distanceTo(new THREE.Vector3(num('cx', 0), num('cy', 100), num('cz', 0))) : num('dist', d.dist);
 const focusSubject = viewDist > 2;
 const lighting = createLighting(scene, renderer, { quality, shadowRange: focusSubject ? THREE.MathUtils.clamp(viewDist * 0.9, 12, 4800) : undefined }); // mesmo envMap/sombras do jogo
-const post = createPost(renderer, scene, camera, { quality });   // mesmo pós-processamento do jogo
+const post = createPost(renderer, scene, camera, { quality, ao: q.ao !== '0', debug: num('postdebug', 0) });   // mesmo pós-processamento do jogo
 
 // -------- ambiente opcional (sempre tenta; stubs funcionam) --------
 const updaters = [];

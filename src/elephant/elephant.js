@@ -42,11 +42,16 @@
 // =====================================================================
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { ELEPHANT, ELEPHANT_MODEL, ELEPHANT_POLISH, ELEPHANT_MATERIALS, COLORS, SEED } from '../config.js';
+import { ELEPHANT, ELEPHANT_MODEL, ELEPHANT_POLISH, ELEPHANT_MATERIALS, ELEPHANT_SCULPT, COLORS, SEED } from '../config.js';
 import { createRng, hashInt } from '../util/rng.js';
 import { createNoise } from '../util/noise.js';
+import {
+  foldValue, FOLD_CA, FOLD_SA, TRUNK_CURVE, trunkR, BODY_SX, BONES, BONE, EYES, EAR_PIVOT, TRUNK_ROOT, LEGS,
+  getSkinGeometry, getTables, skinBody, skinHead, skinNeck, skinTop, skinTopY, castOut, sdf, gradient, foldAt,
+  skinWeightsFor, legAxis, NECK_C,
+} from './sculpt.js';
 
-const E = ELEPHANT, B = E.BODY, LG = E.LEG, HD = E.HEAD, EAR = E.EAR, TR = E.TRUNK, TK = E.TUSK;
+const E = ELEPHANT, B = E.BODY, LG = E.LEG, HD = E.HEAD, EAR = E.EAR, TR = E.TRUNK, TK = E.TUSK, SC = ELEPHANT_SCULPT;
 const TAU = Math.PI * 2;
 const V3 = THREE.Vector3;
 const noise = createNoise(SEED + 331);
@@ -71,17 +76,6 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const hex = (c) => '#' + c.toString(16).padStart(6, '0');
 const rgba = (c, a) => `rgba(${(c >> 16) & 255},${(c >> 8) & 255},${c & 255},${a})`;
 
-// --- dobras ESCULPIDAS da pele (geometria): |ruído| com deformação de domínio → cristas arredondadas
-//     separadas por vincos (lençóis de barro amassado). Devolve −0.5 (vinco) … +0.5 (crista). O domínio
-//     é anisotrópico (quem chama alonga um eixo: lençóis longos, diagonais nos flancos, anéis nas patas). ---
-const fnz = createNoise(SEED + 919);
-function foldValue(x, y, z) {
-  const wx = fnz.noise3(x * 0.55 + 3.1, y * 0.55, z * 0.55), wy = fnz.noise3(x * 0.55, y * 0.55 + 7.3, z * 0.55), wz = fnz.noise3(x * 0.55 + 1.7, y * 0.55, z * 0.55 + 5.7);
-  const X = x + 0.9 * wx, Y = y + 0.9 * wy, Z = z + 0.9 * wz;
-  const n1 = fnz.noise3(X, Y, Z), n2 = fnz.noise3(X * 2.2 + 11, Y * 2.2, Z * 2.2);
-  return Math.min(1, Math.abs(n1) * 1.5 + Math.abs(n2) * 0.4) - 0.5;
-}
-const FOLD_CA = Math.cos(0.6), FOLD_SA = Math.sin(0.6);   // dobras a ~35° nos flancos (ref. 1)
 // Solda as normais das duas colunas coincidentes da emenda de uma malha em grade (idxA(k), idxB(k)).
 function weldSeam(g, idxA, idxB, count) {
   const n = g.attributes.normal, v = new THREE.Vector3();
@@ -704,6 +698,8 @@ function getShared() {
   const mat = {
     // pele: PBR fosca e empoeirada; micro-rugas/fendas/poros no mapa de normais (repetido 8×), rugosidade
     // absoluta no roughnessMap (roughness=1 → o mapa manda), dobras grandes na geometria
+    // pele esculpida (malha única): os mesmos mapas em triplanar, sem UV
+    skinTri: makeTriplanarSkin(skin),
     skin: new THREE.MeshStandardMaterial({ map: skin.map, vertexColors: true, normalMap: skin.normal, normalScale: NS, roughnessMap: skin.rough, roughness: 1, metalness: 0, envMapIntensity: MT.SKIN_ENV }),
     // manga listrada da tromba: tecido (trama tecida na normal)
     trunk: new THREE.MeshStandardMaterial({ map: trunk.map, normalMap: trunk.normal, normalScale: new THREE.Vector2(0.6, 0.6), roughness: MT.CLOTH_ROUGHNESS, metalness: 0, envMapIntensity: 0.45 }),
@@ -722,7 +718,7 @@ function getShared() {
     // lã: sem brilho algum + pelos em relevo (a cor vem da instância)
     pompom: new THREE.MeshStandardMaterial({ map: pom.map, normalMap: pom.normal, normalScale: new THREE.Vector2(1.1, 1.1), roughness: 1.0, metalness: 0, envMapIntensity: 0.4 }),
     // crosta de casinhas do dorso (casca fina; alfa por vértice esmaece as bordas)
-    crust: new THREE.MeshStandardMaterial({ map: crust.map, bumpMap: crust.bump, bumpScale: 2.5, roughness: 0.85, metalness: 0, vertexColors: true, transparent: true, depthWrite: true, envMapIntensity: 0.5 }),
+    crust: new THREE.MeshStandardMaterial({ map: crust.map, bumpMap: crust.bump, bumpScale: 2.5, roughness: 0.85, metalness: 0, vertexColors: true, transparent: true, depthWrite: true, alphaTest: 0.02, envMapIntensity: 0.5 }),
     // jato d'água: pontos aditivos brancos (a cor por vértice esmaece para névoa)
     spray: new THREE.PointsMaterial({ map: spray, size: EM.SPRAY_POINT_SIZE * (E.SCALE || 1), sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true, opacity: 0.5, fog: true }),
   };
@@ -742,10 +738,12 @@ function prep(g, bone = 0, color = 0xffffff) {
     for (let i = 0; i < n; i++) { col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
   }
-  const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
-  for (let i = 0; i < n; i++) { si[i * 4] = bone; sw[i * 4] = 1; }
-  g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
-  g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+  if (!g.attributes.skinIndex) {   // sem pesos calculados: todos os vértices presos a UM osso
+    const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) { si[i * 4] = bone; sw[i * 4] = 1; }
+    g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
+    g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+  }
   if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(n * 2), 2));
   if (!g.attributes.normal) g.computeVertexNormals();
   return g;
@@ -964,72 +962,15 @@ function archBox(w, h, d, sideReg, color, { ru = 1, rv = 1, topReg = REG.PLAIN, 
 }
 
 // ------------------------------------------------------------------
-//  superfícies analíticas (usadas pela geometria E pela colocação da cidade)
+//  superfícies (consultas na pele esculpida: tabelas por direção de src/elephant/sculpt.js)
 // ------------------------------------------------------------------
-// Elevação extra no dorso (cernelha / garupa) em função da direção unitária.
-function backBump(nx, ny) {
-  const sh = smooth(0.05, 0.55, nx) * (1 - smooth(0.55, 0.95, nx));
-  let y = 38 * sh * ny * ny;
-  if (nx < -0.35) { const q = (-nx - 0.35) / 0.65; y -= 52 * q * q * Math.max(0, ny); }   // garupa mais baixa que a cernelha
-  return y;
-}
-// Ponto da pele do corpo para uma direção unitária d (elipsoide + barriga caída + ruído).
-// BODY_SX alonga o corpo em X (o elipsoide nominal fica atarracado na silhueta).
-const BODY_SX = 1.1;
-function bodyPoint(d, out, folds = true) {
-  const nx = d.x, ny = d.y, nz = d.z;
-  let x = nx * B.rx * BODY_SX, y = ny * B.ry, z = nz * B.rz;
-  if (ny < 0) {
-    const belly = Math.pow(-ny, 1.6) * (1 - Math.min(1, Math.abs(nx) * 1.15) ** 2);
-    y -= 55 * belly; z *= 1 + 0.07 * belly;
-  }
-  y += backBump(nx, ny);
-  const amp = 14 * (1 - smooth(0.25, 0.65, ny));
-  const n = noise.fbm3(nx * 2.3 + 5, ny * 2.3, nz * 2.3, 3);
-  out.set(x, B.cy + y, z).addScaledVector(d, amp * n);
-  if (!folds) return out;
-  // dobras esculpidas: lençóis longos e diagonais nos flancos, mais rasas no alto do dorso (sob a cidade)
-  const fa = EM.FOLD_BODY * (1 - 0.55 * smooth(0.35, 0.8, ny));
-  const lx = out.x, ly = out.y - B.cy, lz = out.z;
-  const f = foldValue((lx * FOLD_CA + ly * FOLD_SA) / 210, (-lx * FOLD_SA + ly * FOLD_CA) / 68, lz / 130);
-  return out.addScaledVector(d, fa * f);
-}
-// Ponto da pele da cabeça para uma direção unitária d (centro em HD).
-function headPoint(d, out, folds = true) {
-  const R = HR;
-  let x = d.x * R * 0.96, y = d.y * R * 1.2, z = d.z * R * 0.92;
-  const f = Math.max(0, d.x) * Math.max(0, d.y); y += 56 * f; x += 16 * f;           // testa abaulada (domo alto)
-  if (d.y > 0.2) y += 22 * (d.y - 0.2) * (1 - Math.min(1, Math.abs(d.z) * 1.4));   // crista do crânio
-  if (d.y > 0.35) y -= 16 * Math.pow(Math.max(0, 1 - Math.abs(d.z) * 2.2), 2) * (d.y - 0.35);   // leve sulco entre os dois domos do topo
-  if (d.y < -0.1) { const q = Math.min(1, (-d.y - 0.1) / 0.6); z *= 1 - 0.14 * q * Math.max(0, d.x + 0.3); }   // face afunila para a raiz da tromba
-  if (d.y < -0.2 && d.x > 0.1) { const q = Math.min(1, (-d.y - 0.2) / 0.5) * d.x; x += 22 * q; }  // mandíbula
-  if (d.x < 0) x *= 0.92;                                                              // nuca mais achatada (encaixe no pescoço)
-  const cheek = Math.max(0, Math.abs(d.z) - 0.55) * (1 - Math.min(1, Math.abs(d.y + 0.1) * 2)); z += 18 * cheek * Math.sign(d.z);
-  const n = noise.fbm3(d.x * 2.5 + 11, d.y * 2.5, d.z * 2.5, 3) * 8;
-  out.set(HD.cx + x, HD.cy + y, z).addScaledVector(d, n);
-  if (!folds) return out;
-  // dobras esculpidas (mais finas que no corpo), fluindo em diagonal para a raiz da tromba e
-  // contornando os olhos; rasas no alto do crânio (casinhas) e sob a placa
-  const eyeDot = Math.max(d.x * EYE_DIR.x + d.y * EYE_DIR.y + Math.abs(d.z) * EYE_DIR.z, 0);
-  const mask = (1 - 0.85 * smooth(0.9, 0.985, eyeDot)) * (1 - 0.5 * smooth(0.7, 0.95, d.y));
-  const lx = out.x - HD.cx, ly = out.y - HD.cy, lz = out.z;
-  const fh = foldValue((lx * FOLD_CA + ly * FOLD_SA) / 150 + 4, (-lx * FOLD_SA + ly * FOLD_CA) / 46, lz / 90);
-  return out.addScaledVector(d, EM.FOLD_HEAD * mask * fh);
-}
-const EYE_DIR = new V3(0.56, 0.1, 0.82).normalize();
+// Ponto da pele do corpo na direção unitária d (mesma parametrização do elipsoide do corpo); com
+// "folds" inclui as dobras deslocadas. nOut (opcional) recebe a normal suave.
+function bodyPoint(d, out, folds = true, nOut = null) { skinBody(d, out, nOut, folds); return out; }
+// Ponto da pele da cabeça para uma direção unitária d (a partir do centro HD)
+function headPoint(d, out, folds = true, nOut = null) { skinHead(d, out, nOut, folds); return out; }
 // Direção na cabeça a partir de latitude/longitude (lon 0 = frente +X, positivo = +Z)
 function headDir(lat, lon, out) { return out.set(Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon)); }
-
-// Tromba: curva e raio (estáticos: usados pela geometria, pela placa e pelo pushOutOfTrunk)
-const TRUNK_CURVE = new THREE.CatmullRomCurve3([
-  new V3(900, 1010, 0), new V3(1035, 925, 0), new V3(1105, 790, 0), new V3(1140, 640, 0), new V3(1145, 480, 0),
-  new V3(1135, 320, 0), new V3(1145, 180, 0), new V3(1205, 90, 0), new V3(1310, 90, 0), new V3(1390, 160, 0), new V3(1400, 250, 0)]);
-TRUNK_CURVE.arcLengthDivisions = 400;
-function trunkR(t) {
-  if (t < 0.26) { const q = smooth(0, 0.26, t); return lerp(EM.TRUNK_ROOT_RADIUS, TR.baseRadius, q); }   // raiz grossa que afunila
-  if (t < 0.965) return lerp(TR.baseRadius, TR.tipRadius, (t - 0.26) / 0.705);
-  return TR.tipRadius * Math.sqrt(Math.max(0, 1 - ((t - 0.965) / 0.035) ** 2)) + 0.5;
-}
 // Empurra um ponto para fora do tubo da raiz da tromba (a ponta da placa e a guirlanda abraçam a raiz)
 const _tp = new V3();
 function pushOutOfTrunk(p, lift) {
@@ -1056,6 +997,145 @@ function platePoint(s, w, lift, out) {
 // ------------------------------------------------------------------
 //  o modelo
 // ------------------------------------------------------------------
+// Peças fixas encaixadas na pele esculpida (iguais para os 7 elefantes): faixas dos tornozelos,
+// unhas, manga de tecido da tromba e seus anéis. Calculadas uma vez por qualidade.
+const fittedCache = {};
+// Lança da linha/eixo (o) para fora até a pele; distância limitada a sMax (além disso a peça afunda
+// sob outra parte — ex.: a manga da tromba sob a face).
+const _fo = new V3(), _fn = new V3();
+function fitOut(o, dir, lift, sMax, out, folds = true) {
+  let s = 0, d = sdf(o.x, o.y, o.z);
+  for (let it = 0; it < 96 && d < -0.25 && s < sMax; it++) { s += Math.max(-d, 0.5); d = sdf(o.x + dir.x * s, o.y + dir.y * s, o.z + dir.z * s); }
+  s = Math.min(s, sMax);
+  out.copy(o).addScaledVector(dir, s);
+  gradient(out.x, out.y, out.z, _fn);
+  if (folds) out.addScaledVector(_fn, foldAt(out, _fn));
+  return out.addScaledVector(_fn, lift);
+}
+function getFitted(low) {
+  const key = low ? 'low' : 'high';
+  if (fittedCache[key]) return fittedCache[key];
+  const out = { bands: [], nails: [], sleeve: null, sleeveRings: [] };
+  const P = new V3(), o = new V3(), dir = new V3();
+  // --- faixas dos tornozelos: casca que segue a pele (dobras incluídas) 11 m acima dela ---
+  const BAND_Y0 = 62, BAND_Y1 = 232, RAD = 30, ROWS = 7;
+  for (let li = 0; li < 4; li++) {
+    const [sx, sz] = LEGS[li];
+    const pos = [], uv = [], idx = [], ringR = [];
+    for (let r = 0; r <= ROWS; r++) {
+      const y = lerp(BAND_Y0, BAND_Y1, r / ROWS); let acc = 0;
+      legAxis(sx, sz, y, o);
+      for (let j = 0; j <= RAD; j++) {
+        const a = (j / RAD) * TAU; dir.set(Math.cos(a), 0, Math.sin(a));
+        if (j === RAD) { pos.push(pos[(r * (RAD + 1)) * 3], pos[(r * (RAD + 1)) * 3 + 1], pos[(r * (RAD + 1)) * 3 + 2]); }
+        else { fitOut(o, dir, 11, 400, P); pos.push(P.x, P.y, P.z); acc += Math.hypot(P.x - o.x, P.z - o.z); }
+        uv.push(j / RAD, 0.255 + 0.24 * (r / ROWS));
+      }
+      ringR.push({ y, r: acc / RAD, c: o.clone() });
+    }
+    for (let r = 0; r < ROWS; r++) for (let j = 0; j < RAD; j++) { const a = r * (RAD + 1) + j, b = a + RAD + 1; idx.push(a, b, a + 1, b, b + 1, a + 1); }
+    const g = new THREE.BufferGeometry(); g.setIndex(idx);
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.computeVertexNormals(); weldSeam(g, (k) => k * (RAD + 1), (k) => k * (RAD + 1) + RAD, ROWS + 1);
+    { const n = new V3().fromBufferAttribute(g.attributes.normal, (RAD + 1) * 2); const p0 = new V3().fromBufferAttribute(g.attributes.position, (RAD + 1) * 2); legAxis(sx, sz, p0.y, o); if (n.dot(p0.sub(o)) < 0) { flipWinding(g); g.computeVertexNormals(); } }
+    out.bands.push({ g, rings: [ringR[0], ringR[ROWS]] });
+    // unhas: 5 na borda do pé, da frente para os lados
+    const nails = [];
+    legAxis(sx, sz, -14, o);
+    for (const a of [-1.05, -0.52, 0, 0.52, 1.05]) {
+      dir.set(sx * Math.cos(a), 0, Math.sin(a)); fitOut(o, dir, -6, 400, P, false);
+      nails.push({ p: P.clone(), d: dir.clone() });
+    }
+    out.nails.push(nails);
+  }
+  // --- manga de tecido da tromba (t 0.04 → TRUNK_FABRIC_END) 9 m acima da pele ---
+  {
+    const segs = low ? 52 : 84, radial = low ? 16 : 24, t0 = 0.04, t1 = TRUNK_FABRIC_END;
+    const frames = TRUNK_CURVE.computeFrenetFrames(segs, false);
+    const pos = [], uv = [], idx = [];
+    for (let i = 0; i <= segs; i++) {
+      const t = lerp(t0, t1, i / segs); TRUNK_CURVE.getPointAt(t, o);
+      const fi = Math.round(t * segs), N = frames.normals[Math.min(segs, fi)], Bn = frames.binormals[Math.min(segs, fi)];
+      for (let j = 0; j <= radial; j++) {
+        if (j === radial) { const k = (i * (radial + 1)) * 3; pos.push(pos[k], pos[k + 1], pos[k + 2]); }
+        else {
+          const a = (j / radial) * TAU; dir.set(0, 0, 0).addScaledVector(N, Math.cos(a)).addScaledVector(Bn, Math.sin(a)).normalize();
+          fitOut(o, dir, 9, trunkR(t) * 1.22 + 18, P); pos.push(P.x, P.y, P.z);
+        }
+        uv.push(j / radial, t);
+      }
+    }
+    for (let i = 0; i < segs; i++) for (let j = 0; j < radial; j++) { const a = i * (radial + 1) + j, b = a + radial + 1; idx.push(a, a + 1, b, b, a + 1, b + 1); }
+    const g = new THREE.BufferGeometry(); g.setIndex(idx);
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.computeVertexNormals();
+    { const k = Math.floor(segs / 2) * (radial + 1); const n = new V3().fromBufferAttribute(g.attributes.normal, k), p0 = new V3().fromBufferAttribute(g.attributes.position, k); TRUNK_CURVE.getPointAt(lerp(t0, t1, 0.5), o); if (n.dot(p0.sub(o)) < 0) { flipWinding(g); g.computeVertexNormals(); } }
+    weldSeam(g, (k) => k * (radial + 1), (k) => k * (radial + 1) + radial, segs + 1);
+    skinWeightsFor(g);
+    out.sleeve = g;
+    // raio médio da manga nos anéis de ouro
+    for (const tr of [TRUNK_FABRIC_END - 0.01, 0.47]) {
+      TRUNK_CURVE.getPointAt(tr, o); const tan = TRUNK_CURVE.getTangentAt(tr); const N = new V3(0, 0, 1).cross(tan).normalize(), Bn = new V3().crossVectors(tan, N);
+      let acc = 0; for (let j = 0; j < 12; j++) { const a = (j / 12) * TAU; dir.set(0, 0, 0).addScaledVector(N, Math.cos(a)).addScaledVector(Bn, Math.sin(a)); fitOut(o, dir, 0, trunkR(tr) * 1.3, P, false); acc += P.distanceTo(o); }
+      out.sleeveRings.push({ t: tr, r: acc / 12 });
+    }
+  }
+  fittedCache[key] = out;
+  return out;
+}
+
+// Material da pele esculpida: mapas da pele (cor, normal micro, rugosidade) amostrados em TRIPLANAR no
+// espaço do modelo em pose de ligação (sem UV, sem emendas); o quadro tangente de cada projeção sai das
+// derivadas de tela (funciona com skinning). AO de cavidade na cor do vértice.
+function makeTriplanarSkin(src) {
+  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, envMapIntensity: MT.SKIN_ENV });
+  const uni = {
+    triMap: { value: src.map }, triNormal: { value: src.normal }, triRough: { value: src.rough },
+    triScaleC: { value: 1 / SC.TRI_COLOR_TILE }, triScaleN: { value: 1 / SC.TRI_NORMAL_TILE }, triNS: { value: MT.SKIN_NORMAL_SCALE }, triSharp: { value: SC.TRI_SHARPNESS },
+  };
+  m.userData.triplanar = uni;
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, uni);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vTriP;\nvarying vec3 vTriN;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTriP = position;\nvTriN = normal;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vTriP;
+varying vec3 vTriN;
+uniform sampler2D triMap, triNormal, triRough;
+uniform float triScaleC, triScaleN, triNS, triSharp;
+vec3 triW() { vec3 w = pow(abs(normalize(vTriN)), vec3(triSharp)); return w / (w.x + w.y + w.z); }
+vec3 triPerturb(vec3 eyePos, vec3 N, vec2 uv, vec3 mapN) {
+  vec3 q0 = dFdx(eyePos), q1 = dFdy(eyePos); vec2 st0 = dFdx(uv), st1 = dFdy(uv);
+  vec3 q1perp = cross(q1, N), q0perp = cross(N, q0);
+  vec3 T = q1perp * st0.x + q0perp * st1.x, B = q1perp * st0.y + q0perp * st1.y;
+  float det = max(dot(T, T), dot(B, B)); float sc = det == 0.0 ? 0.0 : inversesqrt(det);
+  return normalize(mat3(T * sc, B * sc, N) * mapN);
+}`)
+      .replace('#include <map_fragment>', `{
+  vec3 tw = triW(); vec3 tp = vTriP * triScaleC;
+  vec4 tc = texture2D(triMap, tp.zy) * tw.x + texture2D(triMap, tp.xz) * tw.y + texture2D(triMap, tp.xy) * tw.z;
+  diffuseColor *= tc;
+}`)
+      .replace('#include <roughnessmap_fragment>', `float roughnessFactor = roughness;
+{
+  vec3 tw = triW(); vec3 tp = vTriP * triScaleN;
+  roughnessFactor *= texture2D(triRough, tp.zy).g * tw.x + texture2D(triRough, tp.xz).g * tw.y + texture2D(triRough, tp.xy).g * tw.z;
+}`)
+      .replace('#include <normal_fragment_maps>', `{
+  vec3 tw = triW(); vec3 tp = vTriP * triScaleN;
+  vec3 mx = texture2D(triNormal, tp.zy).xyz * 2.0 - 1.0; mx.xy *= triNS;
+  vec3 my = texture2D(triNormal, tp.xz).xyz * 2.0 - 1.0; my.xy *= triNS;
+  vec3 mz = texture2D(triNormal, tp.xy).xyz * 2.0 - 1.0; mz.xy *= triNS;
+  vec3 nAcc = tw.x * triPerturb(-vViewPosition, normal, tp.zy, mx) + tw.y * triPerturb(-vViewPosition, normal, tp.xz, my) + tw.z * triPerturb(-vViewPosition, normal, tp.xy, mz);
+  normal = normalize(nAcc);
+}`);
+  };
+  m.customProgramCacheKey = () => 'ruppen-skin-triplanar';
+  return m;
+}
+
 export function createElephant(route, index, opts = {}) {
   const low = opts.quality === 'low';
   const S = getShared();
@@ -1064,20 +1144,13 @@ export function createElephant(route, index, opts = {}) {
   group.name = 'elephant_' + index;
   const rig = new THREE.Group(); // recebe o balanço vertical do passo
   group.add(rig);
+  getTables();
 
-  // ossos
-  const BONE = { root: 0, legFL: 1, legFR: 2, legBL: 3, legBR: 4, earL: 5, earR: 6, trunk: 7, tail: 8 };
-  const EAR_PIVOT = { x: 740, y: 1415, z: 225 };
-  const TRUNK_ROOT = { x: 1010, y: 950, z: 0 };
-  const TAIL_ROOT = { x: -545, y: 1175, z: 0 };
-  const bonePos = [
-    [0, 0, 0],
-    [LG.offsetX, LG.topY, -LG.offsetZ], [LG.offsetX, LG.topY, LG.offsetZ], [-LG.offsetX, LG.topY, -LG.offsetZ], [-LG.offsetX, LG.topY, LG.offsetZ],
-    [EAR_PIVOT.x, EAR_PIVOT.y, -EAR_PIVOT.z], [EAR_PIVOT.x, EAR_PIVOT.y, EAR_PIVOT.z],
-    [TRUNK_ROOT.x, TRUNK_ROOT.y, TRUNK_ROOT.z], [TAIL_ROOT.x, TAIL_ROOT.y, TAIL_ROOT.z],
-  ];
-  const bones = bonePos.map((p, i) => { const b = new THREE.Bone(); b.position.set(p[0], p[1], p[2]); b.name = Object.keys(BONE)[i]; return b; });
-  for (let i = 1; i < bones.length; i++) bones[0].add(bones[i]);
+  // ossos (src/elephant/sculpt.js → BONES): raiz, quadril+joelho ×4, cabeça, 4 da tromba, cauda, orelhas
+  const bones = BONES.map((b) => { const bo = new THREE.Bone(); bo.name = b.name; const pp = b.parent >= 0 ? BONES[b.parent].pos : [0, 0, 0]; bo.position.set(b.pos[0] - pp[0], b.pos[1] - pp[1], b.pos[2] - pp[2]); return bo; });
+  BONES.forEach((b, i) => { if (b.parent >= 0) bones[b.parent].add(bones[i]); });
+  const legBone = (li, knee) => 1 + li * 2 + (knee ? 1 : 0);
+  const HEAD_POS = new V3(...BONES[BONE.head].pos);
 
   // partes por material (grupos do SkinnedMesh)
   const parts = { skin: [], trunk: [], cloth: [], ivory: [], gold: [], city: [], pink: [], eye: [], silver: [] };
@@ -1085,168 +1158,69 @@ export function createElephant(route, index, opts = {}) {
   // (malhas em grade regular apenas: a orelha tesselada tem triângulos desiguais → cavity = ruído; cavity=false)
   const add = (key, g, bone = 0, color, cavity = true) => { const pg = prep(g, bone, color); if (key === 'skin' && cavity) bakeCavity(pg); parts[key].push(pg); return g; };
   const tmp = new V3(), tmp2 = new V3(), tmp3 = new V3();
+  const fitted = getFitted(low);
 
-  // ============================ CORPO ==============================
-  {
-    // Esfera com os polos em cima (debaixo da cidade) e embaixo (barriga): as linhas de dobra
-    // (v constante) são anéis horizontais ao redor do corpo — horizontais nos flancos, no ombro e na
-    // garupa, sem convergir em "estrela" nos lados; a textura esmaece nos polos (v→0/1). A emenda de
-    // u (u=0) fica à frente (+X), escondida pelo pescoço.
-    const WS = low ? 72 : 104, HS = low ? 48 : 78;
-    const g = new THREE.SphereGeometry(1, WS, HS);
-    g.rotateY(Math.PI);
-    // uv: u ao redor do corpo (2,5 ladrilhos), v do polo de baixo ao de cima
-    { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) { const u = uv.getX(i), v = uv.getY(i); uv.setXY(i, u * 2.5, v); } }
-    mapVertices(g, (v) => { tmp.copy(v).normalize(); bodyPoint(tmp, v); });
-    weldSeam(g, (k) => k * (WS + 1), (k) => k * (WS + 1) + WS, HS + 1);
-    add('skin', g);
-  }
-  // pescoço (une corpo e cabeça): elipsoide + ruído + dobras (as mesmas do corpo, contínuas na junção)
-  const NC = { x: 580, y: 1110, rx: 300, ry: 345, rz: 345 };
-  const neckPoint = (n, out) => {
-    const nz = noise.fbm3(n.x * 2 + 3, n.y * 2, n.z * 2, 3) * 8;
-    out.set(NC.x + n.x * NC.rx, NC.y + n.y * NC.ry, n.z * NC.rz).addScaledVector(n, nz);
-    const lx = out.x - NC.x, ly = out.y - NC.y;
-    return out.addScaledVector(n, EM.FOLD_BODY * 0.7 * (1 - 0.5 * smooth(0.4, 0.8, n.y)) * foldValue((lx * FOLD_CA + ly * FOLD_SA) / 210 + 2, (-lx * FOLD_SA + ly * FOLD_CA) / 68, out.z / 130));
-  };
-  {
-    const WS = low ? 40 : 56, HS = low ? 28 : 38;
-    const g = new THREE.SphereGeometry(1, WS, HS);
-    mapVertices(g, (v) => { tmp.copy(v); neckPoint(tmp, v); });
-    weldSeam(g, (k) => k * (WS + 1), (k) => k * (WS + 1) + WS, HS + 1);
-    scaleUV(g, 2, 0.62, 0, 0.14);
-    add('skin', g);
-  }
-  // ============================ CABEÇA =============================
-  {
-    const WS = low ? 56 : 80, HS = low ? 36 : 54;
-    const g = new THREE.SphereGeometry(1, WS, HS);
-    mapVertices(g, (v) => { tmp.copy(v).normalize(); headPoint(tmp, v); });
-    weldSeam(g, (k) => k * (WS + 1), (k) => k * (WS + 1) + WS, HS + 1);
-    scaleUV(g, 1.6, 0.74, 0, 0.1);
-    add('skin', g);
-  }
-  // olhos: globo castanho-escuro com íris âmbar e brilho (textura + emissivo), pouco afundado;
+  // ====================== PELE ESCULPIDA (uma malha) ======================
+  // corpo, pescoço, cabeça, tromba, patas e cauda: um único campo de distância poligonizado
+  // (compartilhado pelos 7 elefantes), com skinning pelos ossos acima
+  const skinGeom = getSkinGeometry(low ? SC.CELL_LOW : SC.CELL_HIGH);
+  // olhos: globo castanho-escuro com íris âmbar e brilho (textura + emissivo), na órbita esculpida;
   // anel de pele escura ao redor (pálpebra) + dobra de pele por cima
-  for (const side of [-1, 1]) {
-    const d = new V3(0.56, 0.1, side * 0.82).normalize();
+  for (const E0 of EYES) {
+    const d = E0.dir, side = Math.sign(E0.pos.z), at = E0.pos;
     const g = new THREE.SphereGeometry(EM.EYE_RADIUS, 20, 14);
     // o centro da textura (u=v=0.5) fica em +X da esfera → aponta na direção d (para fora da cabeça)
     const q = new THREE.Quaternion().setFromUnitVectors(new V3(1, 0, 0), d);
     // u cobre 360° e v 180°: comprime u ×2 para a íris ficar redonda (a borda da textura é esclera escura, clamp)
     { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) - 0.5) * 2 + 0.5, uv.getY(i)); }
-    placeGeom(g, headPoint(d, tmp, false).addScaledVector(d, -EM.EYE_SINK), q);
-    add('eye', g);
+    placeGeom(g, tmp.copy(at).addScaledVector(d, -EM.EYE_SINK), q);
+    add('eye', g, BONE.head);
     // anel de pele escura (pálpebras) rente à pele, mapeado no canto escuro da textura do olho
     const ring = new THREE.TorusGeometry(EM.EYE_RADIUS + 3, 9, 8, 24);
-    placeGeom(ring, headPoint(d, tmp, false).addScaledVector(d, -4), new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), d));
+    placeGeom(ring, tmp.copy(at).addScaledVector(d, -4), new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), d));
     remapUV(ring, [0.01, 0.05, 0.01, 0.05]);
-    add('eye', ring);
+    add('eye', ring, BONE.head);
     // pálpebra superior: dobra de pele por cima (meia-casca), ligeiramente acima do globo
     const lid = new THREE.SphereGeometry(EM.EYE_RADIUS + 6, 14, 8, 0, TAU, 0, Math.PI * 0.27);
-    placeGeom(lid, headPoint(d, tmp, false).addScaledVector(d, -9), quatFromUp(new V3(0.0, 0.92, side * 0.38).normalize()));
+    placeGeom(lid, tmp.copy(at).addScaledVector(d, -9), quatFromUp(new V3(0.0, 0.92, side * 0.38).normalize()));
     scaleUV(lid, 0.3, 0.1);
-    add('skin', lid);
+    add('skin', lid, BONE.head);
     // dobra da pálpebra: rolo de pele em arco sobre o olho (sobrancelha carnuda) e dobra menor por baixo
     const qd = new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), d);
     const brow = new THREE.TorusGeometry(EM.EYE_RADIUS + 16, 11, 8, 20, Math.PI); brow.rotateZ(0.15 * side);
-    placeGeom(brow, headPoint(d, tmp, false).addScaledVector(d, -3), qd); scaleUV(brow, 0.5, 0.08); add('skin', brow);
+    placeGeom(brow, tmp.copy(at).addScaledVector(d, -3), qd); scaleUV(brow, 0.5, 0.08); add('skin', brow, BONE.head);
     const under = new THREE.TorusGeometry(EM.EYE_RADIUS + 10, 6, 7, 16, Math.PI); under.rotateZ(Math.PI + 0.1 * side);
-    placeGeom(under, headPoint(d, tmp, false).addScaledVector(d, -4), qd); scaleUV(under, 0.4, 0.06); add('skin', under);
+    placeGeom(under, tmp.copy(at).addScaledVector(d, -4), qd); scaleUV(under, 0.4, 0.06); add('skin', under, BONE.head);
   }
   // ============================ PATAS ==============================
-  // Perfil de revolução (raio, y): pé alargado e arredondado embaixo (flare ≈ 1.12), tornozelo,
-  // leve estreitamento no joelho (≈ 0.88 do quadril, a ~45% da altura) com duas pregas de pele,
-  // coxa/quadril mais largos e topo FECHADO e arredondado (afunda na barriga sem aresta visível).
-  const LR = EM.LEG_HIP_RADIUS;  // raio de referência (quadril)
-  const legProfile = [
-    [0, -90], [0.72 * LR, -90], [0.98 * LR, -80], [1.09 * LR, -62], [1.12 * LR, -30], [1.08 * LR, 10], [1.02 * LR, 60], [0.97 * LR, 120],
-    [0.945 * LR, 190], [0.92 * LR, 260], [0.9 * LR, 320], [0.88 * LR, 360], [0.92 * LR, 400], [0.885 * LR, 430], [0.925 * LR, 470], [0.9 * LR, 510],
-    [0.92 * LR, 580], [0.945 * LR, 650], [0.97 * LR, 720], [1.0 * LR, 790], [1.04 * LR, 850], [1.07 * LR, 900], [1.03 * LR, 935], [0.9 * LR, 955], [0.62 * LR, 966], [0, 968],
-  ];
-  const legR = (y) => { // raio do perfil na altura y (interpolação linear)
-    for (let i = 1; i < legProfile.length; i++) { const [r0, y0] = legProfile[i - 1], [r1, y1] = legProfile[i]; if (y <= y1) return y1 === y0 ? r1 : lerp(r0, r1, (y - y0) / (y1 - y0)); }
-    return 0;
-  };
-  // perfil reamostrado (≈ 40 anéis: as dobras esculpidas precisam de vértices ao longo da pata)
-  const legPts = [];
-  {
-    const pts = legProfile.map(([r, y]) => [r, y]);
-    for (let y = -60; y < 950; y += 30) if (!pts.some(([, py]) => Math.abs(py - y) < 10)) pts.push([legR(y), y]);
-    pts.sort((a, b) => a[1] - b[1]);   // estável: os dois pontos de y=−90 (centro e borda do pé) mantêm a ordem
-    for (const [r, y] of pts) legPts.push(new THREE.Vector2(r, y));
-  }
-  const LEG_SEGS = low ? 26 : 36;
-  const legIdx = { '1,-1': BONE.legFL, '1,1': BONE.legFR, '-1,-1': BONE.legBL, '-1,1': BONE.legBR };
-  for (const sx of [1, -1]) for (const sz of [-1, 1]) {
-    const bone = legIdx[sx + ',' + sz];
-    const cx = sx * LG.offsetX, cz = sz * LG.offsetZ;
-    const g = new THREE.LatheGeometry(legPts, LEG_SEGS);
-    // deformação da pata (também aplicada à faixa do tornozelo, para ela seguir a pele)
-    const legDeform = (v, lift = 0) => {
-      // ruído RADIAL (sem descontinuidade nos planos x=0 / z=0, que criava uma "costura" vertical)
-      // + anéis de dobras esculpidas (lençóis horizontais ondulados), rasos no pé e no topo
-      const rl = Math.hypot(v.x, v.z);
-      const fade = smooth(-30, 70, v.y) * (1 - smooth(800, 920, v.y));
-      const n = noise.fbm3(v.x / 220 + cx, v.y / 220, v.z / 220 + cz, 2) * 6 + lift + EM.FOLD_LEG * fade * foldValue(v.x / 150 + cx * 0.011, v.y / 52, v.z / 150 + cz * 0.013);
-      if (rl > 1e-3) { v.x += (n * v.x) / rl; v.z += (n * v.z) / rl; }
-      // leve dobra do joelho (frente: joelho à frente; trás: jarrete atrás) e coxa inclinada para dentro,
-      // de modo que o topo da pata entre na barriga em vez de sair pelo flanco
-      const k = smooth(560, 320, v.y) * (1 - smooth(140, -40, v.y));   // 1 na altura do joelho
-      v.x += sx * 18 * k + sx * 10 * smooth(560, 900, v.y);
-      v.z -= sz * EM.LEG_HIP_LEAN * smooth(600, 968, v.y);
-      v.x += cx; v.z += cz;
-    };
-    mapVertices(g, (v) => legDeform(v));
-    weldSeam(g, (k) => k, (k) => LEG_SEGS * legPts.length + k, legPts.length);
-    scaleUV(g, 2, 0.45, 0, 0.14);
-    add('skin', g, bone);
-    // unhas: 5 esferas achatadas de marfim meio enterradas na borda do pé, da frente para os lados
-    const rNail = legR(-14);
-    for (const a of [-1.05, -0.52, 0, 0.52, 1.05]) {
-      const ux = sx * Math.cos(a), uz = Math.sin(a);  // frente da pata = +X (lado sx)
-      const n = new THREE.SphereGeometry(1, 10, 7);
-      n.scale(36, 24, 22);
-      const q = new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), new V3(ux, 0, uz));
-      placeGeom(n, new V3(cx + ux * (rNail - 6), -16, cz + uz * (rNail - 6)), q);
+  // unhas (marfim, meio enterradas na borda do pé) e faixa listrada GROSSA no tornozelo que segue a
+  // pele esculpida, com bordas de ouro com contas — tudo preso ao osso do joelho (canela)
+  for (let li = 0; li < 4; li++) {
+    const bone = legBone(li, true);
+    for (const nl of fitted.nails[li]) {
+      const n = new THREE.SphereGeometry(1, 10, 7); n.scale(36, 24, 22);
+      placeGeom(n, nl.p, new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), nl.d));
       add('ivory', n, bone);
     }
-    // faixa listrada GROSSA no tornozelo (segue o perfil e as dobras da pele) com bordas de ouro com contas
-    const BAND_Y0 = 62, BAND_Y1 = 232;
-    const band = new THREE.CylinderGeometry(legR(BAND_Y1), legR(BAND_Y0), BAND_Y1 - BAND_Y0, 30, 6, true);
-    band.translate(0, (BAND_Y0 + BAND_Y1) / 2, 0);
-    mapVertices(band, (v) => legDeform(v, 11));   // segue a pele, 11 m acima dela
-    weldSeam(band, (k) => k * 31, (k) => k * 31 + 30, 7);
-    remapUV(band, [0, 1, 0.255, 0.495]);
-    add('cloth', band, bone);
-    for (const [yb, rb] of [[BAND_Y0 + 4, legR(BAND_Y0 + 4) + 13], [BAND_Y1 - 4, legR(BAND_Y1 - 4) + 13]]) {
-      const ring = new THREE.TorusGeometry(rb, 7, 6, 32); ring.rotateX(Math.PI / 2); ring.translate(cx, yb, cz); add('gold', ring, bone);
-      for (let i = 0; i < 20; i++) { const a = (i / 20) * TAU; const bead = new THREE.SphereGeometry(5.5, 5, 3); bead.translate(cx + Math.cos(a) * (rb + 7), yb, cz + Math.sin(a) * (rb + 7)); add('gold', bead, bone); }
+    const band = fitted.bands[li];
+    add('cloth', band.g.clone(), bone);
+    for (const [k, rr] of band.rings.entries()) {
+      const yb = rr.y + (k === 0 ? 4 : -4), rb = rr.r + 4;
+      const ring = new THREE.TorusGeometry(rb, 7, 6, 32); ring.rotateX(Math.PI / 2); ring.translate(rr.c.x, yb, rr.c.z); add('gold', ring, bone);
+      for (let i = 0; i < 20; i++) { const a = (i / 20) * TAU; const bead = new THREE.OctahedronGeometry(5.5, 0); bead.translate(rr.c.x + Math.cos(a) * (rb + 7), yb, rr.c.z + Math.sin(a) * (rb + 7)); add('gold', bead, bone); }
     }
   }
-  // ============================ CAUDA ==============================
-  {
-    const curve = new THREE.CatmullRomCurve3([new V3(-520, 1185, 0), new V3(-600, 1070, 8), new V3(-628, 900, -6), new V3(-618, 760, 10), new V3(-590, 655, 0)]);
-    const g = tubeGeometry(curve, 20, 10, (t) => (t < 0.75 ? lerp(32, 14, t / 0.75) : t < 0.9 ? lerp(14, 26, (t - 0.75) / 0.15) : 26 * Math.sqrt(Math.max(0, 1 - ((t - 0.9) / 0.1) ** 2))));
-    scaleUV(g, 0.3, 0.6);
-    add('skin', g, BONE.tail);
-  }
   // ============================ TROMBA =============================
+  // a tromba é pele esculpida (anéis de dobras); por cima, a manga de tecido listrado (até
+  // TRUNK_FABRIC_END) com 2 anéis de ouro, deformadas pelos ossos da tromba como a pele
   const trunkCurve = TRUNK_CURVE;
   {
-    // anéis de dobras esculpidas (ondulados) ao longo da tromba, rasos na raiz (sob a cabeça) e na ponta
-    const trunkDisp = (t, a) => (6 + 0.03 * trunkR(t)) * smooth(0.06, 0.2, t) * (1 - smooth(0.9, 0.97, t)) * foldValue(Math.cos(a * TAU) * 0.5 + 9, Math.sin(a * TAU) * 0.5, t * 16);
-    const g = tubeGeometry(trunkCurve, low ? 56 : 96, low ? 16 : 24, trunkR, { disp: trunkDisp });
-    // manga de tecido (v < TRUNK_FABRIC_END) e ponta de PELE (material da pele: micro-rugas e poros)
-    const [sleeve, tip] = splitByV(g, TRUNK_FABRIC_END);
-    add('trunk', sleeve, BONE.trunk);
-    scaleUV(tip, 1, 1.6); add('skin', tip, BONE.trunk);
-    // 2 anéis de ouro na manga: na ponta do tecido e a meio caminho
-    for (const t0 of [TRUNK_FABRIC_END - 0.01, 0.47]) {
-      const ring = new THREE.TorusGeometry(trunkR(t0) + 8, 11, 10, 32);
-      const tan = trunkCurve.getTangentAt(t0);
-      placeGeom(ring, trunkCurve.getPointAt(t0), new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), tan));
-      add('gold', ring, BONE.trunk);
+    add('trunk', fitted.sleeve.clone());
+    for (const sr of fitted.sleeveRings) {
+      const ring = new THREE.TorusGeometry(sr.r + 9, 11, 10, 32);
+      const tan = trunkCurve.getTangentAt(sr.t);
+      placeGeom(ring, trunkCurve.getPointAt(sr.t), new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), tan));
+      add('gold', skinWeightsFor(ring));
     }
   }
   // ============================ PRESAS =============================
@@ -1262,20 +1236,20 @@ export function createElephant(route, index, opts = {}) {
     tuskCurves.push(curve);
     const rAt = (t) => (t < 0.06 ? lerp(92, 72, t / 0.06) : t < 0.97 ? lerp(72, TK.tipRadius, (t - 0.06) / 0.91) : TK.tipRadius * Math.sqrt(Math.max(0, 1 - ((t - 0.97) / 0.03) ** 2)) + 0.5);
     const g = tubeGeometry(curve, low ? 36 : 48, low ? 12 : 14, rAt);
-    add('ivory', g);
+    add('ivory', g, BONE.head);
     // anéis de ouro com contas (3 por presa)
     for (const t of TUSK_RINGS) {
       const tan = curve.getTangentAt(t), P = curve.getPointAt(t), r = rAt(t);
       const q = new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), tan);
       // anel GROSSO (tubo ≈ 0,35 do raio da presa) com duas fileiras de contas nas bordas (ref. 2)
       const tube = r * 0.35;
-      const ring = new THREE.TorusGeometry(r + tube * 0.75, tube, 9, 30); placeGeom(ring, P, q); add('gold', ring);
+      const ring = new THREE.TorusGeometry(r + tube * 0.75, tube, 9, 30); placeGeom(ring, P, q); add('gold', ring, BONE.head);
       const N = new V3().crossVectors(tan, _up).normalize(), Bn = new V3().crossVectors(tan, N);
       const nb = 20, rb = tube * 0.3;
       for (const off of [-tube * 0.9, tube * 0.9]) for (let i = 0; i < nb; i++) {
-        const a = (i / nb) * TAU + (off > 0 ? Math.PI / nb : 0); const bead = new THREE.SphereGeometry(rb, 6, 3);
+        const a = (i / nb) * TAU + (off > 0 ? Math.PI / nb : 0); const bead = new THREE.OctahedronGeometry(rb, 0);
         placeGeom(bead, tmp.copy(P).addScaledVector(tan, off).addScaledVector(N, Math.cos(a) * (r + tube * 0.75 + tube * 0.55)).addScaledVector(Bn, Math.sin(a) * (r + tube * 0.75 + tube * 0.55)));
-        add('gold', bead);
+        add('gold', bead, BONE.head);
       }
     }
   }
@@ -1349,7 +1323,7 @@ export function createElephant(route, index, opts = {}) {
     const finish = (g) => { g.applyMatrix4(M); if (side < 0) flipWinding(g); g.computeVertexNormals(); return g; };
     // aba de pele (grossa na raiz, fina na borda: bisel)
     let ear = new THREE.ExtrudeGeometry(earShape(1), { depth: 28, bevelEnabled: true, bevelThickness: 18, bevelSize: 18, bevelSegments: 3, curveSegments: low ? 5 : 6 });
-    ear.translate(0, 0, 18); earUV(ear); ear = tessellate(ear, low ? 80 : 42); mapVertices(ear, earWarp);
+    ear.translate(0, 0, 18); earUV(ear); ear = tessellate(ear, low ? 80 : 52); mapVertices(ear, earWarp);
     ear = mergeVertices(ear); ear.computeVertexNormals();
     add('skin', finish(ear), bone, undefined, false);
     // manto: miolo de tecido escuro + borda listrada (anel concêntrico), ambos no lado de fora
@@ -1433,12 +1407,12 @@ export function createElephant(route, index, opts = {}) {
     g.computeVertexNormals();
     // orientação: normal deve apontar para fora da cabeça
     { const n = new V3().fromBufferAttribute(g.attributes.normal, Math.floor(NS / 2) * cols + Math.floor(cols / 2)); platePoint(0.5, 0, 0, tmp); tmp2.copy(tmp).sub(new V3(HD.cx, HD.cy, 0)); if (n.dot(tmp2) < 0) { flipWinding(g); g.computeVertexNormals(); } }
-    add('gold', g);
+    add('gold', g, BONE.head);
     // grande bossa dourada no alto da placa + anel
     const boss = new THREE.SphereGeometry(1, 24, 14, 0, TAU, 0, Math.PI / 2);
     platePoint(0.2, 0, lift, tmp); const dn = tmp.clone().sub(new V3(HD.cx, HD.cy, 0)).normalize();
-    placeGeom(boss, tmp, quatFromUp(dn), new V3(92, 62, 92)); add('gold', boss);
-    const bring = new THREE.TorusGeometry(98, 10, 10, 36); placeGeom(bring, platePoint(0.2, 0, lift + 2, tmp), new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), dn)); add('gold', bring);
+    placeGeom(boss, tmp, quatFromUp(dn), new V3(92, 62, 92)); add('gold', boss, BONE.head);
+    const bring = new THREE.TorusGeometry(98, 10, 10, 36); placeGeom(bring, platePoint(0.2, 0, lift + 2, tmp), new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), dn)); add('gold', bring, BONE.head);
   }
   // ============================ BORLA ROSA =========================
   const tasselTop = platePoint(1, 0, 15, new V3());
@@ -1448,18 +1422,18 @@ export function createElephant(route, index, opts = {}) {
     // cordão dourado da ponta da placa até a borla
     const strap = new THREE.CylinderGeometry(7, 7, tasselTop.distanceTo(new V3(ax.x, yTop, 0)), 8);
     const mid = tasselTop.clone().add(new V3(ax.x, yTop, 0)).multiplyScalar(0.5);
-    placeGeom(strap, mid, quatFromUp(new V3(ax.x, yTop, 0).sub(tasselTop).normalize())); add('gold', strap);
+    placeGeom(strap, mid, quatFromUp(new V3(ax.x, yTop, 0).sub(tasselTop).normalize())); add('gold', strap, BONE.head);
     // pompom vermelho no alto (textura de fios quase branca × cor do vértice)
     const pom = fuzzySphere(58, 16, 12, 0.3); pom.translate(ax.x, yTop - 44, 0);
-    remapUV(pom, [0.02, 0.98, 0.04, 0.46]); setColorRange(pom, 0xc43a4c); add('pink', pom);
+    remapUV(pom, [0.02, 0.98, 0.04, 0.46]); setColorRange(pom, 0xc43a4c); add('pink', pom, BONE.head);
     // sino dourado (cone) abaixo do pompom
-    const bell = new THREE.ConeGeometry(46, 110, 24); bell.rotateX(Math.PI); bell.translate(ax.x, yTop - 100 - 55, 0); add('gold', bell);
+    const bell = new THREE.ConeGeometry(46, 110, 24); bell.rotateX(Math.PI); bell.translate(ax.x, yTop - 100 - 55, 0); add('gold', bell, BONE.head);
     // cúpula rosa com tachas
     const dome = new THREE.SphereGeometry(84, 24, 14, 0, TAU, 0, Math.PI / 2); dome.translate(ax.x, yTop - 100 - 110 - 22, 0);
-    remapUV(dome, [0, 1, 0.52, 0.98]); add('pink', dome);
+    remapUV(dome, [0, 1, 0.52, 0.98]); add('pink', dome, BONE.head);
     const domeY = yTop - 100 - 110 - 22;
-    const rim = new THREE.TorusGeometry(84, 6, 8, 32); rim.rotateX(Math.PI / 2); rim.translate(ax.x, domeY, 0); add('gold', rim);
-    for (let i = 0; i < 14; i++) { const a = (i / 14) * TAU; const s = new THREE.SphereGeometry(9, 7, 5); s.translate(ax.x + Math.cos(a) * 84, domeY - 10, Math.sin(a) * 84); add('gold', s); }
+    const rim = new THREE.TorusGeometry(84, 6, 8, 32); rim.rotateX(Math.PI / 2); rim.translate(ax.x, domeY, 0); add('gold', rim, BONE.head);
+    for (let i = 0; i < 14; i++) { const a = (i / 14) * TAU; const s = new THREE.SphereGeometry(9, 7, 5); s.translate(ax.x + Math.cos(a) * 84, domeY - 10, Math.sin(a) * 84); add('gold', s, BONE.head); }
     // franja: MUITOS fios finos (tubos de 4 lados) em 3 anéis concêntricos, pendendo da borda da cúpula,
     // com leve abertura para fora e ondulação; cada fio tem a sua cor (rosa/magenta/laranja)
     {
@@ -1483,7 +1457,7 @@ export function createElephant(route, index, opts = {}) {
           const rs = MT.TASSEL_STRAND_RADIUS * srng.range(0.85, 1.15);
           const st = tubeGeometry(curve, 6, 4, (t) => rs * (1 - 0.35 * t), { capEnd: false });
           remapUV(st, [0.02, 0.98, 0.04, 0.46]); setColorRange(st, cols[(made++) % cols.length]);
-          add('pink', st);
+          add('pink', st, BONE.head);
         }
       }
     }
@@ -1512,9 +1486,9 @@ export function createElephant(route, index, opts = {}) {
       const mid = a.pos.clone().lerp(b.pos, 0.5); const dn = mid.clone().sub(new V3(HD.cx, HD.cy, 0)).normalize(); mid.addScaledVector(dn, EM.POMPOM_RADIUS * 0.8);
       // elo de prata visível entre os pompons (cilindro curto + dois anéis)
       const qd = quatFromUp(b.pos.clone().sub(a.pos).normalize());
-      const cyl = new THREE.CylinderGeometry(EM.POMPOM_RADIUS * 0.46, EM.POMPOM_RADIUS * 0.46, EM.POMPOM_RADIUS * 0.95, 14); placeGeom(cyl, mid, qd); add('silver', cyl);
+      const cyl = new THREE.CylinderGeometry(EM.POMPOM_RADIUS * 0.46, EM.POMPOM_RADIUS * 0.46, EM.POMPOM_RADIUS * 0.95, 14); placeGeom(cyl, mid, qd); add('silver', cyl, BONE.head);
       // tampas de prata (flanges) nas duas pontas do elo, encostadas nos pompons
-      for (const off of [-0.42, 0.42]) { const cap = new THREE.CylinderGeometry(EM.POMPOM_RADIUS * 0.6, EM.POMPOM_RADIUS * 0.6, EM.POMPOM_RADIUS * 0.16, 14); cap.translate(0, off * EM.POMPOM_RADIUS * 0.95, 0); placeGeom(cap, mid, qd); add('silver', cap); }
+      for (const off of [-0.42, 0.42]) { const cap = new THREE.CylinderGeometry(EM.POMPOM_RADIUS * 0.6, EM.POMPOM_RADIUS * 0.6, EM.POMPOM_RADIUS * 0.16, 14); cap.translate(0, off * EM.POMPOM_RADIUS * 0.95, 0); placeGeom(cap, mid, qd); add('silver', cap, BONE.head); }
     }
   }
   // ============================ TRAMA DA BARRIGA ===================
@@ -1525,7 +1499,7 @@ export function createElephant(route, index, opts = {}) {
     for (let r = 0; r < 2; r++) for (let i = 0; i <= N; i++) {
       const phi = phi0 + (i / N) * (TAU - 2 * phi0); const kk = Math.sqrt(1 - rows[r] * rows[r]);
       tmp.set(rows[r], Math.cos(phi) * kk, Math.sin(phi) * kk);
-      bodyPoint(tmp, tmp2).addScaledVector(tmp, 9); pos.push(tmp2.x, tmp2.y, tmp2.z); uv.push((i / N) * 9, 0.03 + r * 0.19);
+      bodyPoint(tmp, tmp2, true, tmp3).addScaledVector(tmp3, 9); pos.push(tmp2.x, tmp2.y, tmp2.z); uv.push((i / N) * 9, 0.03 + r * 0.19);
     }
     for (let i = 0; i < N; i++) idx.push(i, i + 1, N + 1 + i, N + 1 + i, i + 1, N + 2 + i);
     const g = new THREE.BufferGeometry(); g.setIndex(idx);
@@ -1546,11 +1520,10 @@ export function createElephant(route, index, opts = {}) {
   const tuskInst = [];                      // instâncias das casinhas das presas
   const rngCity = createRng(SEED + 9001 + index * 31);
   const RX = B.rx * BODY_SX;
-  const surfAt = (x, z, out) => { // ponto da pele do dorso acima de (x,z) local e normal aproximada
-    const nx = x / RX, nz = z / B.rz, q = nx * nx + nz * nz; if (q >= 1) return null;
-    const ny = Math.sqrt(1 - q); tmp.set(nx, ny, nz); bodyPoint(tmp, out);
-    tmp2.set(nx / RX, ny / B.ry, nz / B.rz).normalize(); return tmp2; // normal
-  };
+  const NC = NECK_C;
+  const _sn = new V3();
+  // ponto da pele (com dobras) na vertical de (x,z) local, por marcha do campo de distância; devolve a normal
+  const surfAt = (x, z, out) => (skinTop(x, z, out, _sn) ? _sn : null);
   const insideNeckOrHead = (p) => (((p.x - NC.x) / 320) ** 2 + ((p.y - NC.y) / 365) ** 2 + (p.z / 365) ** 2 < 1) || (((p.x - HD.cx) / (HR * 1.02)) ** 2 + ((p.y - HD.cy) / (HR * 1.24)) ** 2 + (p.z / (HR * 0.97)) ** 2 < 1);
   const inPalace = (x, z) => Math.abs(x - PALACE_X) < PS.hx + 85 && Math.abs(z) < PS.hz + 80;
   const inBrick = (x, z) => Math.abs(x - BRICK.x) < BRICK.hx + 6 && Math.abs(z - BRICK.z) < BRICK.hz + 6;
@@ -1579,8 +1552,7 @@ export function createElephant(route, index, opts = {}) {
         phi += dphi;
         const nx2 = xx / RX, k2 = Math.sqrt(Math.max(0.03, 1 - nx2 * nx2));
         dirv.set(nx2, Math.cos(p2) * k2, Math.sin(p2) * k2);
-        bodyPoint(dirv, tmp3);
-        nrm.set(dirv.x / RX, dirv.y / B.ry, dirv.z / B.rz).normalize();
+        if (!skinBody(dirv, tmp3, nrm, true)) continue;   // coberto por pescoço/patas/cabeça
         const lx = tmp3.x, lz = tmp3.z;
         if (insideNeckOrHead(tmp3)) continue;
         if (Math.abs(nx2 + 0.12) < 0.075 && Math.abs(p2) > 1.05) continue; // trama da barriga
@@ -1621,7 +1593,7 @@ export function createElephant(route, index, opts = {}) {
   // --- o tapete transborda dos ombros para o pescoço (até a nuca / raiz das orelhas) ---
   {
     const spacing = (low ? EM.CITY_SPACING_LOW : EM.CITY_SPACING_HIGH) * 1.15;
-    const dummy = new THREE.Object3D(), nrm = new V3(), qh = new THREE.Quaternion(), qy = new THREE.Quaternion(), upMix = new V3();
+    const dummy = new THREE.Object3D(), nrm = new V3(), dn = new V3(), qh = new THREE.Quaternion(), qy = new THREE.Quaternion(), upMix = new V3();
     const dlat = spacing / NC.ry;
     for (let lat = Math.PI / 2 - dlat * 0.5, row = 0; lat > -0.15; lat -= dlat, row++) {
       const ring = NC.rz * Math.cos(lat); const n = Math.max(1, Math.round((TAU * ring) / spacing));
@@ -1629,11 +1601,10 @@ export function createElephant(route, index, opts = {}) {
         if (carpet.flat.length + carpet.tile.length >= EM.CARPET_MAX) break;
         const lon = ((j + (row % 2 ? 0.5 : 0)) / n) * TAU + rngCity.range(-0.1, 0.1) * (TAU / n);
         const la = lat + rngCity.range(-0.15, 0.15) * dlat;
-        nrm.set(Math.cos(la) * Math.cos(lon), Math.sin(la), Math.cos(la) * Math.sin(lon));
-        neckPoint(nrm, tmp3);
-        // só onde o pescoço está fora do corpo e da cabeça
-        if ((tmp3.x / RX) ** 2 + ((tmp3.y - B.cy) / B.ry) ** 2 + (tmp3.z / B.rz) ** 2 < 1.0) continue;
-        if (((tmp3.x - HD.cx) / (HR * 1.0)) ** 2 + ((tmp3.y - HD.cy) / (HR * 1.22)) ** 2 + (tmp3.z / (HR * 0.95)) ** 2 < 1) continue;
+        dn.set(Math.cos(la) * Math.cos(lon), Math.sin(la), Math.cos(la) * Math.sin(lon));
+        // só onde a pele é do próprio pescoço (fora do corpo e da cabeça)
+        if (!skinNeck(dn, tmp3, nrm, true)) continue;
+        if (tmp3.x > HD.cx - 60 && tmp3.y < HD.cy + HR * 0.9) continue;
         if (nrm.y < 0.1 && Math.abs(nrm.z) > 0.85) continue;   // flanco baixo do pescoço: pele (debaixo das orelhas)
         const st = noise.noise2(tmp3.x / 230 + index * 3.1, tmp3.z / 230 + la * 0.3); if (Math.abs(st) < 0.03) continue;
         if (rngCity() < 0.12) continue;
@@ -1660,20 +1631,21 @@ export function createElephant(route, index, opts = {}) {
     const phiMax = EM.CRUST_FLANK_ANGLE, REP = EM.CRUST_REPEAT;
     grid(low ? 40 : 54, low ? 28 : 36, (fi, fj) => {
       const nx = -0.985 + fi * (0.985 + 0.96), k = Math.sqrt(Math.max(0.02, 1 - nx * nx)), phi = -phiMax + fj * 2 * phiMax;
-      dirv.set(nx, Math.cos(phi) * k, Math.sin(phi) * k); bodyPoint(dirv, tmp3);
-      nrm.set(dirv.x / RX, dirv.y / B.ry, dirv.z / B.rz).normalize(); tmp3.addScaledVector(nrm, EM.CRUST_OFFSET);
+      dirv.set(nx, Math.cos(phi) * k, Math.sin(phi) * k); const own = skinBody(dirv, tmp3, nrm, true);
+      tmp3.addScaledVector(nrm, EM.CRUST_OFFSET);
       pos.push(tmp3.x, tmp3.y, tmp3.z); uv.push(fi * REP, fj * REP * 1.35);
       const edge = noise.noise2(nx * 3 + index * 1.3, phi * 2.2) * 0.25;
       let a = 1 - smooth(phiMax - 0.55, phiMax - 0.05, Math.abs(phi) + edge);
       a *= 1 - smooth(0.92, 0.985, -nx + edge * 0.4);                       // garupa: borda esmaecida
       if (Math.abs(nx + 0.12) < 0.075 && Math.abs(phi) > 1.05) a = 0;       // trama da barriga
+      if (!own) a = 0;                                                      // sob pescoço/patas
       col.push(1, 1, 1, a);
     });
     grid(low ? 32 : 40, low ? 14 : 20, (fi, fj) => {   // pescoço: lon ao redor, lat 0 → π/2
       const lon = fi * TAU, lat = fj * (Math.PI / 2 - 0.02);
-      nrm.set(Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon)); neckPoint(nrm, tmp3); tmp3.addScaledVector(nrm, EM.CRUST_OFFSET);
+      dirv.set(Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon)); const own = skinNeck(dirv, tmp3, nrm, true); tmp3.addScaledVector(nrm, EM.CRUST_OFFSET);
       pos.push(tmp3.x, tmp3.y, tmp3.z); uv.push(fi * REP * 0.9, fj * REP * 0.45);
-      const a = smooth(0.06, 0.32, lat) * (1 - smooth(0.72, 0.9, Math.abs(nrm.z)) * (1 - smooth(0.25, 0.55, nrm.y)));
+      const a = own ? smooth(0.06, 0.32, lat) * (1 - smooth(0.72, 0.9, Math.abs(dirv.z)) * (1 - smooth(0.25, 0.55, dirv.y))) : 0;
       col.push(1, 1, 1, a);
     });
     const g = new THREE.BufferGeometry(); g.setIndex(idx);
@@ -1804,8 +1776,7 @@ export function createElephant(route, index, opts = {}) {
       if (prng() < 0.04) continue;
       const nx = nx0 + ((c + 0.5) / cols) * (nx1 - nx0), k = Math.sqrt(Math.max(0.03, 1 - nx * nx));
       const phi = sz * (phi0 + ((r + 0.5) / rows) * (phi1 - phi0));
-      dirv.set(nx, Math.cos(phi) * k, Math.sin(phi) * k); bodyPoint(dirv, tmp3);
-      nrm.set(dirv.x / RX, dirv.y / B.ry, dirv.z / B.rz).normalize();
+      dirv.set(nx, Math.cos(phi) * k, Math.sin(phi) * k); if (!skinBody(dirv, tmp3, nrm, true)) continue;
       const depth = prng.range(9, 18), w = 13, d = (((phi1 - phi0) / rows) * k * (B.ry + B.rz)) / 2 * 0.86;
       upMix.copy(nrm).addScaledVector(_up, 0.25).normalize();
       const b = boxHouse(w, depth + 4, d, 'y', prng.pick(PALE), prng.pick(PALE), true, false, true); b.translate(0, (depth - 4) / 2, 0);
@@ -1823,6 +1794,8 @@ export function createElephant(route, index, opts = {}) {
       slimTower(tmp3.clone().addScaledVector(n, -4).add(new V3(dr + 12, 0, 0)), n.clone(), 100 + rngCity.range(0, 60), 0xf6f3ec, true, 6);
     } else slimTower(tmp3.clone().addScaledVector(n, -4), n.clone(), 80 + rngCity.range(0, 90), rngCity.pick([0xf6f3ec, 0xf1c9b1, 0xeadbc6]), rngCity() < 0.6, 6);
   }
+  // (daqui em diante: peças presas ao osso da CABEÇA — presas e alto do crânio acenam com ela)
+  const cityMain = city.splice(0), goldMain = goldCity.splice(0);
   // --- cidades das presas: a metade de cima de cada presa COBERTA de casinhas minúsculas (lado ≈
   //     diâmetro/30, telhados vermelhos; instanciadas) + torres brancas com cúpulas; 3 anéis de ouro ---
   for (const [si, curve] of tuskCurves.entries()) {
@@ -1868,8 +1841,10 @@ export function createElephant(route, index, opts = {}) {
     const w = rngCity.range(5, 9), dd = rngCity.range(5, 9), h = rngCity.range(5, 12);
     const b = boxHouse(w, h + 10, dd, 'y', rngCity.pick(COLORS.houses), rngCity.pick(COLORS.roofs), false, false, true); b.translate(tmp.x, tmp.y + (h - 10) / 2, tmp.z); city.push(b);
   }
-  if (city.length) add('city', mergeGeometries(city, false));
-  for (const g of goldCity) add('gold', g);
+  if (city.length) add('city', mergeGeometries(city, false), BONE.head);
+  if (cityMain.length) add('city', mergeGeometries(cityMain, false));
+  for (const g of goldCity) add('gold', g, BONE.head);
+  for (const g of goldMain) add('gold', g);
 
   // ============================ MONTAGEM ===========================
   const order = ['skin', 'trunk', 'cloth', 'ivory', 'gold', 'city', 'pink', 'eye', 'silver'];
@@ -1877,11 +1852,20 @@ export function createElephant(route, index, opts = {}) {
   for (const k of order) { if (!parts[k].length) continue; merged.push(mergeGeometries(parts[k], false)); mats.push(S.mat[k]); }
   const geom = mergeGeometries(merged, true);
   geom.computeBoundingSphere();
-  const mesh = new THREE.SkinnedMesh(geom, mats);
-  mesh.add(bones[0]);
-  mesh.bind(new THREE.Skeleton(bones));
-  mesh.frustumCulled = true;
-  rig.add(mesh);
+  // dois SkinnedMesh com o MESMO esqueleto: a pele esculpida (geometria compartilhada, material
+  // triplanar) e as demais partes (grupos de material)
+  const skinMesh = new THREE.SkinnedMesh(skinGeom, S.mat.skinTri); skinMesh.name = 'skin';
+  const mesh = new THREE.SkinnedMesh(geom, mats); mesh.name = 'parts';
+  rig.add(bones[0]); rig.add(skinMesh); rig.add(mesh);
+  group.updateMatrixWorld(true);
+  const skeleton = new THREE.Skeleton(bones);
+  for (const m of [skinMesh, mesh]) {
+    m.bind(skeleton);
+    // esfera envolvente fixa (folgada): evita o cálculo com skinning de todos os vértices
+    m.boundingSphere = m.geometry.boundingSphere.clone(); m.boundingSphere.radius *= 1.12;
+    m.frustumCulled = true;
+  }
+  const headAttach = (o) => { o.position.copy(HEAD_POS).negate(); bones[BONE.head].add(o); return o; };
 
   // ---- tapete de casas do dorso (2 InstancedMesh: lajes pálidas / telhados rosa-terracota),
   //      casinhas das presas (1 InstancedMesh) e a casca-crosta ----
@@ -1906,7 +1890,7 @@ export function createElephant(route, index, opts = {}) {
     for (const [key, reg] of [['flat', REG.PLAIN], ['tile', REG.ROOFT]]) { if (carpet[key].length) carpetGroup.add(makeInst(carpet[key], reg)); }
     rig.add(carpetGroup);
     // casinhas das presas (sempre visíveis: são poucas)
-    if (tuskInst.length) rig.add(makeInst(tuskInst, REG.ROOFT));
+    if (tuskInst.length) headAttach(makeInst(tuskInst, REG.ROOFT));
     // casca-crosta
     // crosta: casca transparente a 3 m da pele — recebe sombra mas não projeta (evitaria linhas duplas na pele)
     if (crustGeom) { const cm = new THREE.Mesh(crustGeom, S.mat.crust); cm.frustumCulled = true; cm.castShadow = false; cm.receiveShadow = true; cm.userData.shadowsSet = true; rig.add(cm); }
@@ -1938,12 +1922,12 @@ export function createElephant(route, index, opts = {}) {
     }
     const inst = new THREE.InstancedMesh(studGeo, S.mat.gold, mats4.length);
     mats4.forEach((m, i) => inst.setMatrixAt(i, m)); inst.instanceMatrix.needsUpdate = true;
-    rig.add(inst);
+    headAttach(inst);
   }
   // ---- pompons (instâncias com cor) ----
   {
     // lã fibrosa: mais tufos (deslocamento maior) + normal de pelos; cores levemente dessaturadas e variadas
-    const pomGeo = fuzzySphere(1, low ? 12 : 18, low ? 8 : 12, MT.POMPOM_FUZZ);
+    const pomGeo = fuzzySphere(1, low ? 12 : 15, low ? 8 : 10, MT.POMPOM_FUZZ);
     scaleUV(pomGeo, 2, 1);
     const inst = new THREE.InstancedMesh(pomGeo, S.mat.pompom, garland.length);
     const dummy = new THREE.Object3D(); const col = new THREE.Color(), grey = new THREE.Color(0x8c8c8c);
@@ -1955,7 +1939,7 @@ export function createElephant(route, index, opts = {}) {
       inst.setMatrixAt(i, dummy.matrix); inst.setColorAt(i, col);
     });
     inst.instanceMatrix.needsUpdate = true; if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-    rig.add(inst);
+    headAttach(inst);
   }
 
   // ============================ JATO D'ÁGUA ========================
@@ -1973,14 +1957,16 @@ export function createElephant(route, index, opts = {}) {
     const r = createRng(SEED + 3131 + index * 17);
     for (let i = 0; i < sprayN; i++) { sprayJit[i * 4] = r.range(0.86, 1.14); sprayJit[i * 4 + 1] = r.range(-1, 1); sprayJit[i * 4 + 2] = r.range(-1, 1); sprayJit[i * 4 + 3] = r(); }
     const period = r.range(EM.SPRAY_PERIOD.min, EM.SPRAY_PERIOD.max);
-    return { pts, period, offset: r() * period, tip: new V3(), tipRel: TRUNK_CURVE.getPointAt(1).sub(new V3(TRUNK_ROOT.x, TRUNK_ROOT.y, TRUNK_ROOT.z)), root: new V3(TRUNK_ROOT.x, TRUNK_ROOT.y, TRUNK_ROOT.z) };
+    // ponta da tromba no espaço do último osso da tromba (pose de ligação sem rotação)
+    return { pts, period, offset: r() * period, tip: new V3(), tipRel: TRUNK_CURVE.getPointAt(1).sub(new V3(...BONES[BONE.trunk3].pos)) };
   })();
   const SPRAY_V = 680, SPRAY_G = 230, SPRAY_DIR = new V3(0.56, 0.83, 0).normalize();   // arco alto: ápice ≈ 690 m acima da ponta, alcance ≈ 1,5 corpo
   function updateSpray(time) {
     const ph = (time + spray.offset) % spray.period, LIFE = EM.SPRAY_LIFE, DUR = EM.SPRAY_DURATION;
     const active = ph < DUR + LIFE;
     spray.pts.visible = active; if (!active) return;
-    spray.tip.copy(spray.tipRel).applyQuaternion(B2.trunk.quaternion).add(spray.root);
+    // ponta (mundo, pelo osso da ponta da tromba) → espaço do rig (onde vivem os pontos)
+    spray.tip.copy(spray.tipRel).applyMatrix4(bones[BONE.trunk3].matrixWorld); rig.worldToLocal(spray.tip);
     const tx = spray.tip.x, ty = spray.tip.y, tz = spray.tip.z;
     for (let i = 0; i < sprayN; i++) {
       const b = (i / sprayN) * LIFE;                       // instante de nascimento dentro do ciclo
@@ -2003,21 +1989,26 @@ export function createElephant(route, index, opts = {}) {
   // ============================ ENTIDADE ===========================
   const state = { u: route.u0, position: new THREE.Vector3(), heading: 0 };
   const colLocal = [
-    [-240, 1060, 0, 430], [0, 1075, 0, 445], [240, 1060, 0, 425], [-470, 1040, 0, 330],
-    [HD.cx, HD.cy, 0, HR * 1.02], [580, 1100, 0, 340],
+    [-240, 1060, 0, 430], [0, 1075, 0, 445], [240, 1070, 0, 430], [-480, 1060, 0, 350],
+    [HD.cx, HD.cy + 40, 0, HR * 1.02], [590, 1110, 0, 350],
     [1100, 760, 0, 190], [1140, 420, 0, 115], [1240, 150, 0, 95],
     [1260, 720, -300, 85], [1620, 700, -400, 65], [1260, 720, 300, 85], [1620, 700, 300 + 100, 65],
     [290, 880, -500, 500], [290, 880, 500, 500],   // orelhas gigantes
   ];
-  for (const sx of [1, -1]) for (const sz of [-1, 1]) { colLocal.push([sx * LG.offsetX, 250, sz * LG.offsetZ, 160], [sx * LG.offsetX, 600, sz * LG.offsetZ, 170]); }
+  for (const [sx, sz] of LEGS) { legAxis(sx, sz, 250, tmp); colLocal.push([tmp.x, 250, tmp.z, 190]); legAxis(sx, sz, 620, tmp); colLocal.push([tmp.x, 620, tmp.z, 205]); }
   // Escala global: o modelo é construído nas dimensões-base e o grupo é ampliado por ELEPHANT.SCALE.
   const SCALE = E.SCALE || 1;
   group.scale.setScalar(SCALE);
   const colliders = colLocal.map((c) => ({ center: new THREE.Vector3(), local: new THREE.Vector3(c[0], c[1], c[2]), radius: c[3] * SCALE }));
-  const B2 = { legFL: bones[BONE.legFL], legFR: bones[BONE.legFR], legBL: bones[BONE.legBL], legBR: bones[BONE.legBR], earL: bones[BONE.earL], earR: bones[BONE.earR], trunk: bones[BONE.trunk], tail: bones[BONE.tail] };
+  const bn = (n) => bones[BONE[n]];
+  const B2 = {
+    hip: [bn('hipFL'), bn('hipFR'), bn('hipBL'), bn('hipBR')], knee: [bn('kneeFL'), bn('kneeFR'), bn('kneeBL'), bn('kneeBR')],
+    head: bn('head'), trunk: [bn('trunk0'), bn('trunk1'), bn('trunk2'), bn('trunk3')], tail: bn('tail'), earL: bn('earL'), earR: bn('earR'),
+  };
   const phaseOff = index * 1.7;
   const viewer = { pos: null, has: false };
   const _sv = new V3();
+  const LEG_PHASE = [0, Math.PI, Math.PI, 0];   // pares diagonais: FL+BR, FR+BL
 
   const ent = {
     group, index, name: route.cityName, route,
@@ -2044,27 +2035,33 @@ export function createElephant(route, index, opts = {}) {
       state.heading = pose.heading;
       group.position.copy(pose.position);
       group.rotation.y = pose.heading;
-      // passo lentíssimo: pares diagonais
+      // passo lentíssimo: pares diagonais; a pata balança do quadril e o joelho dobra na fase de
+      // balanço (quando a pata vai à frente, levantada)
       const phase = (time * E.SPEED) / E.STRIDE * TAU + phaseOff;
-      const s = Math.sin(phase);
-      B2.legFL.rotation.z = 0.12 * s; B2.legBR.rotation.z = 0.12 * s;
-      B2.legFR.rotation.z = -0.12 * s; B2.legBL.rotation.z = -0.12 * s;
+      for (let li = 0; li < 4; li++) {
+        const ph = phase + LEG_PHASE[li];
+        B2.hip[li].rotation.z = SC.HIP_SWING * Math.sin(ph);
+        B2.knee[li].rotation.z = -SC.KNEE_FLEX * Math.max(0, Math.cos(ph)) ** 2;
+      }
       rig.position.y = 8 * Math.sin(2 * phase + 0.4);
       rig.rotation.x = 0.006 * Math.sin(phase);  // leve balanço lateral
-      // orelhas abanando, tromba oscilando, cauda
+      B2.head.rotation.z = SC.NOD * Math.sin(2 * phase + 1.1);   // aceno leve da cabeça a cada passo
+      // orelhas abanando, tromba oscilando (onda ao longo dos 4 ossos), cauda
       const t = time + phaseOff * 3;
       B2.earR.rotation.y = 0.08 * Math.sin((TAU * t) / 9);
       B2.earL.rotation.y = -0.08 * Math.sin((TAU * t) / 9 + 0.6);
-      B2.trunk.rotation.x = 0.05 * Math.sin((TAU * t) / 7);
-      B2.trunk.rotation.z = 0.02 * Math.sin((TAU * t) / 11 + 1);
+      for (let i = 0; i < 4; i++) {
+        B2.trunk[i].rotation.x = (0.012 + 0.006 * i) * Math.sin((TAU * t) / 7 - 0.55 * i);
+        B2.trunk[i].rotation.z = (0.006 + 0.004 * i) * Math.sin((TAU * t) / 11 + 1 - 0.4 * i);
+      }
       B2.tail.rotation.y = 0.16 * Math.sin((TAU * t) / 5.5);
       B2.tail.rotation.x = 0.05 * Math.sin((TAU * t) / 3.7);
+      group.updateMatrixWorld(true);
       // LOD do tapete de casas
       let vp = viewer.has ? viewer.pos : (typeof window !== 'undefined' ? window.__ruppen?.camera?.position : null);
       if (vp) { _sv.copy(vp); carpetGroup.visible = _sv.distanceTo(state.position) < ent.lodDistance; }
       else carpetGroup.visible = true;
       updateSpray(time);
-      group.updateMatrixWorld(true);
       for (const c of colliders) c.center.copy(c.local).applyMatrix4(rig.matrixWorld);
       ent.deliveryMarker.set((PZ.x0 + PZ.x1) / 2, ent.cityTopLocal + 260, 0).applyMatrix4(group.matrixWorld);
     },
@@ -2074,26 +2071,21 @@ export function createElephant(route, index, opts = {}) {
       const wx = (x - state.position.x) / SCALE, wz = (z - state.position.z) / SCALE;
       const px = c * wx - sn * wz, pz = sn * wx + c * wz;
       let best = -Infinity;
-      // corpo (pele com dobras) + crosta + cidade
+      // pele esculpida: marcha do campo de distância de cima para baixo (+ dobras) — vale para corpo,
+      // pescoço, cabeça, tromba e patas; por cima, crosta + casas + palácio/templos/praça
+      const ys = skinTopY(px, pz);
+      if (ys === null) return null;
+      _sh.set(px, ys, pz); gradient(px, ys, pz, _sn2);
+      let h = ys + foldAt(_sh, _sn2) * _sn2.y;
       const q = (px / RX) ** 2 + (pz / B.rz) ** 2;
-      if (q < 1) {
-        const ny = Math.sqrt(1 - q), nx = px / RX, nz = pz / B.rz;
-        _sv.set(nx, ny, nz); bodyPoint(_sv, _sh);
-        let h = _sh.y;
-        const nY = (ny / B.ry) / Math.hypot(nx / RX, ny / B.ry, nz / B.rz);
+      if (q < 1 && px < 560) {
         if (inPlaza(px, pz)) h = Math.max(h, PLAZA_TOP);
         else if (inPalace(px, pz)) { h = Math.max(h, Math.abs(px - PALACE_X) < PS.hx * 0.55 && Math.abs(pz) < PS.hz * 0.65 ? PALACE_BASE_TOP + PALACE_TIER_H : Math.abs(px - PALACE_X) < PS.hx && Math.abs(pz) < PS.hz ? PALACE_BASE_TOP : h); const rr = Math.hypot(px - PALACE_X, pz); if (rr < DOME_R + 8) h = Math.max(h, DOME_CY + Math.sqrt(Math.max(0, DOME_R * DOME_R - rr * rr))); }
         else if (inBrick(px, pz)) h = Math.max(h, BRICK_TOP);
-        else if (inTemple(px, pz)) { const T = TEMPLES.find((t) => Math.abs(px - t.x) < t.hx + 30 && Math.abs(pz - t.z) < t.hz + 30); h += T.h; }
-        else if (nY > 0.3) h += EM.CRUST_OFFSET + (nearPlaza(px, pz) ? 28 : HOUSE_AVG);
-        best = Math.max(best, h);
-      }
-      // cabeça (elipsoide) — topo
-      const hr = HR; const dx = (px - HD.cx) / (hr * 0.98), dz = pz / (hr * 0.94); const qh = dx * dx + dz * dz;
-      if (qh < 1) { const ny = Math.sqrt(1 - qh); best = Math.max(best, HD.cy + hr * 1.14 * ny + 50 * Math.max(0, dx) * ny + (ny > 0.4 ? 14 : 0)); }
-      // pescoço
-      const dnx = (px - NC.x) / NC.rx, dnz = pz / NC.rz; const qn = dnx * dnx + dnz * dnz;
-      if (qn < 1) best = Math.max(best, NC.y + NC.ry * Math.sqrt(1 - qn) + EM.CRUST_OFFSET + HOUSE_AVG);
+        else if (inTemple(px, pz)) { const T = TEMPLES.find((tt) => Math.abs(px - tt.x) < tt.hx + 30 && Math.abs(pz - tt.z) < tt.hz + 30); h += T.h; }
+        else if (_sn2.y > 0.3) h += EM.CRUST_OFFSET + (nearPlaza(px, pz) ? 28 : HOUSE_AVG);
+      } else if (((px - NC.x) / NC.rx) ** 2 + (pz / NC.rz) ** 2 < 1 && _sn2.y > 0.3 && px < HD.cx - 60) h += EM.CRUST_OFFSET + HOUSE_AVG;   // casas do pescoço
+      best = h;
       return best === -Infinity ? null : (best + rig.position.y) * SCALE;
     },
     isOverCity(x, z) {
@@ -2103,7 +2095,7 @@ export function createElephant(route, index, opts = {}) {
       return (px / ent.cityFootprint.rx) ** 2 + (pz / ent.cityFootprint.rz) ** 2 < 1;
     },
   };
-  const _sh = new V3();
+  const _sh = new V3(), _sn2 = new V3();
   group.updateMatrixWorld(true);
   ent.update(0, 0);
   return ent;

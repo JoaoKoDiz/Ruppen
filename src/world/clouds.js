@@ -11,14 +11,20 @@
 //  ambiente azul-cinza do céu nas bases, altura dentro da nuvem.
 //  Ordenação de trás para frente a cada ~0,5 s, deriva lenta, desvanecimento
 //  perto da câmera e junto ao mar, névoa e profundidade logarítmica.
+//  quality=high/ultra: as nuvens (do mundo e dos bancos das patas) são
+//  VOLUMÉTRICAS (src/world/volclouds.js — densidade marchada por raio em
+//  caixas-proxy); os puffs em billboard ficam como fallback de quality=low.
+//  A espuma/anéis/esteira nas patas existem nos dois modos.
 //  Contrato: createClouds(scene, worldData, {quality})
-//            -> { object, update(camera, time, dt), attachTo(elephants) }
+//            -> { object, update(camera, time, dt), attachTo(elephants),
+//                 setSceneDepth?(texture) (opcional, ver volclouds.js) }
 // =====================================================================
 import * as THREE from 'three';
 import { WORLD, COLORS, SEED, CLOUDS, ELEPHANT } from '../config.js';
 import { sunDirection } from './lighting.js';
 import { createNoise } from '../util/noise.js';
 import { createRng } from '../util/rng.js';
+import { createVolumetricClouds, LEG_NAMES } from './volclouds.js';
 
 const NUM_ANCHORS = ELEPHANT.COUNT;
 const FOOT_PUFFS = CLOUDS.FOOT_PUFFS; // puffs do banco por elefante (quality=high)
@@ -570,61 +576,68 @@ export function createClouds(scene, worldData, opts = {}) {
   const anchorVals = anchors.map((a) => a.position.clone());
   const headingVals = new Float32Array(NUM_ANCHORS);
 
-  // ------------------------------- puffs ---------------------------------
+  const volumetric = quality !== 'low';
+  // ------------------------- nuvens volumétricas -------------------------
+  const vol = volumetric ? createVolumetricClouds(group, worldData, { anchorCount: NUM_ANCHORS, sunDirection, scene }) : null;
+  let postTried = false;
+  // ------------------------------- puffs (low) ---------------------------
+  let N = 0, puffMesh = null, puffUniforms = null, srcOffset, srcParams, srcVar, offAttr, parAttr, varAttr;
   const clusters = [];
-  const puffs = generatePuffs(worldData, scale, clusters);
-  const N = puffs.length;
-  const srcOffset = new Float32Array(N * 3), srcParams = new Float32Array(N * 4), srcVar = new Float32Array(N);
-  for (let i = 0; i < N; i++) {
-    const p = puffs[i];
-    srcOffset[i * 3] = p.x; srcOffset[i * 3 + 1] = p.y; srcOffset[i * 3 + 2] = p.z;
-    srcParams[i * 4] = p.size; srcParams[i * 4 + 1] = p.shade; srcParams[i * 4 + 2] = p.rot; srcParams[i * 4 + 3] = p.group;
-    srcVar[i] = p.variant;
+  if (!volumetric) {
+    const puffs = generatePuffs(worldData, scale, clusters);
+    N = puffs.length;
+    srcOffset = new Float32Array(N * 3); srcParams = new Float32Array(N * 4); srcVar = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const p = puffs[i];
+      srcOffset[i * 3] = p.x; srcOffset[i * 3 + 1] = p.y; srcOffset[i * 3 + 2] = p.z;
+      srcParams[i * 4] = p.size; srcParams[i * 4 + 1] = p.shade; srcParams[i * 4 + 2] = p.rot; srcParams[i * 4 + 3] = p.group;
+      srcVar[i] = p.variant;
+    }
+    offAttr = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3);
+    parAttr = new THREE.InstancedBufferAttribute(new Float32Array(N * 4), 4);
+    varAttr = new THREE.InstancedBufferAttribute(new Float32Array(N), 1);
+    offAttr.setUsage(THREE.DynamicDrawUsage); parAttr.setUsage(THREE.DynamicDrawUsage); varAttr.setUsage(THREE.DynamicDrawUsage);
+
+    const quad = new THREE.PlaneGeometry(1, 1);
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.index = quad.index;
+    geo.setAttribute('position', quad.getAttribute('position'));
+    geo.setAttribute('uv', quad.getAttribute('uv'));
+    geo.setAttribute('aOffset', offAttr);
+    geo.setAttribute('aParams', parAttr);
+    geo.setAttribute('aVar', varAttr);
+    geo.instanceCount = N;
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e7);
+
+    // Intensidades em espaço LINEAR antes do ACES (exposição 0,9): topos ao sol ≈ 2,5
+    // viram branco quase puro; bases ≈ 0,5 viram azul-cinza.
+    puffUniforms = THREE.UniformsUtils.merge([
+      THREE.UniformsLib.fog,
+      {
+        uMap: { value: null },
+        uSunColor: { value: new THREE.Color(COLORS.sunLight).multiplyScalar(1.7) },
+        uAmbTop: { value: new THREE.Color(COLORS.cloudLit).multiplyScalar(0.72) },
+        uShade: { value: new THREE.Color(COLORS.cloudShade).multiplyScalar(0.9) },
+        uAnchors: { value: anchorVals },
+        uWind: { value: WIND.clone() },
+        uTime: { value: 0 },
+        uRingSpin: { value: RING_SPIN },
+        uSunDir: { value: sunDirection.clone() },
+      },
+    ]);
+    puffUniforms.uAnchors.value = anchorVals; // merge clona; mantém a referência viva
+    puffUniforms.uMap.value = makePuffAtlas(quality === 'low' ? 128 : 256);
+    const puffMat = new THREE.ShaderMaterial({
+      uniforms: puffUniforms, vertexShader: PUFF_VERT, fragmentShader: PUFF_FRAG,
+      defines: { NUM_ANCHORS },
+      transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending, side: THREE.DoubleSide, fog: true,
+    });
+    puffMesh = new THREE.Mesh(geo, puffMat);
+    puffMesh.frustumCulled = false;
+    puffMesh.renderOrder = 20;
+    puffMesh.name = 'cloudPuffs';
+    group.add(puffMesh);
   }
-  const offAttr = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3);
-  const parAttr = new THREE.InstancedBufferAttribute(new Float32Array(N * 4), 4);
-  const varAttr = new THREE.InstancedBufferAttribute(new Float32Array(N), 1);
-  offAttr.setUsage(THREE.DynamicDrawUsage); parAttr.setUsage(THREE.DynamicDrawUsage); varAttr.setUsage(THREE.DynamicDrawUsage);
-
-  const quad = new THREE.PlaneGeometry(1, 1);
-  const geo = new THREE.InstancedBufferGeometry();
-  geo.index = quad.index;
-  geo.setAttribute('position', quad.getAttribute('position'));
-  geo.setAttribute('uv', quad.getAttribute('uv'));
-  geo.setAttribute('aOffset', offAttr);
-  geo.setAttribute('aParams', parAttr);
-  geo.setAttribute('aVar', varAttr);
-  geo.instanceCount = N;
-  geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e7);
-
-  // Intensidades em espaço LINEAR antes do ACES (exposição 0,9): topos ao sol ≈ 2,5
-  // viram branco quase puro; bases ≈ 0,5 viram azul-cinza.
-  const puffUniforms = THREE.UniformsUtils.merge([
-    THREE.UniformsLib.fog,
-    {
-      uMap: { value: null },
-      uSunColor: { value: new THREE.Color(COLORS.sunLight).multiplyScalar(1.7) },
-      uAmbTop: { value: new THREE.Color(COLORS.cloudLit).multiplyScalar(0.72) },
-      uShade: { value: new THREE.Color(COLORS.cloudShade).multiplyScalar(0.9) },
-      uAnchors: { value: anchorVals },
-      uWind: { value: WIND.clone() },
-      uTime: { value: 0 },
-      uRingSpin: { value: RING_SPIN },
-      uSunDir: { value: sunDirection.clone() },
-    },
-  ]);
-  puffUniforms.uAnchors.value = anchorVals; // merge clona; mantém a referência viva
-  puffUniforms.uMap.value = makePuffAtlas(quality === 'low' ? 128 : 256);
-  const puffMat = new THREE.ShaderMaterial({
-    uniforms: puffUniforms, vertexShader: PUFF_VERT, fragmentShader: PUFF_FRAG,
-    defines: { NUM_ANCHORS },
-    transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending, side: THREE.DoubleSide, fog: true,
-  });
-  const puffMesh = new THREE.Mesh(geo, puffMat);
-  puffMesh.frustumCulled = false;
-  puffMesh.renderOrder = 20;
-  puffMesh.name = 'cloudPuffs';
-  group.add(puffMesh);
 
   // ------------------------------ espuma ---------------------------------
   const R = ELEPHANT.FOOT_CLOUD_RADIUS;
@@ -709,20 +722,37 @@ export function createClouds(scene, worldData, opts = {}) {
     object: group,
     puffCount: N,
     clusters,
+    volumetric: vol,
     attachTo(elephants) {
       if (!elephants || !elephants.length) return;
       anchors = [];
       for (let i = 0; i < NUM_ANCHORS; i++) anchors.push(elephants[i % elephants.length]);
       sortTimer = Infinity;
+      // ossos das patas (inclinação do passo): o raio das nuvens pára na superfície da pata
+      if (vol) vol.setLegBones(anchors.map((e) => (e && e.group && e.group.getObjectByName) ? LEG_NAMES.map((n) => e.group.getObjectByName(n) || null) : null));
     },
+    // Modo recomendado com o pós (src/world/post.js): as nuvens viram um passe 'beforeGrade' (depois da
+    // AO, antes do bloom) com oclusão exata pela profundidade da cena. main.js: clouds.attachPost?.(post)
+    attachPost(post, o) { postTried = true; return vol ? vol.attachPost(post, scene, o) : false; },
+    // profundidade da cena (opcional, modo "na cena"): só se as nuvens forem desenhadas num passe que não escreve nela
+    setSceneDepth(texture, o) { if (vol) vol.setSceneDepth(texture, o); },
     update(camera, time, dt = 0) {
       for (let i = 0; i < NUM_ANCHORS; i++) {
         const a = anchors[i];
         if (a && a.position) anchorVals[i].copy(a.position);
         if (a && typeof a.heading === 'number') headingVals[i] = a.heading;
       }
-      puffUniforms.uTime.value = time;
       foamUniforms.uTime.value = time;
+      if (vol) {
+        // sem chamada explícita de attachPost: usa o pós exposto pelo integrador (window.__ruppen.post), se houver
+        if (!postTried && typeof window !== 'undefined' && window.__ruppen && window.__ruppen.post) {
+          postTried = true;
+          vol.attachPost(window.__ruppen.post, scene);
+        }
+        vol.update(camera, time, anchorVals, headingVals, sunDirection, window.__ruppen?.renderer);
+        return;
+      }
+      puffUniforms.uTime.value = time;
       sortTimer += dt;
       // reordena a cada ~0,5 s, ou imediatamente se a câmera saltou (teleporte)
       tmp.set(camera.position.x - lastSortX, camera.position.y - lastSortY, camera.position.z - lastSortZ);
