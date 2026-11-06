@@ -398,13 +398,13 @@ export const ELEPHANT_MATERIALS = {
 export const RENDER = {
   EXPOSURE: 0.9,             // toneMappingExposure (ACES)
   PIXEL_RATIO: { low: 1, high: 1.5, ultra: 2 }, // teto de devicePixelRatio por nível (main.js)
-  ENV_INTENSITY: 0.75,       // multiplica o envMapIntensity de cada MeshStandard/Physical (pele 0,5 → 0,38; ouro 1,2 → 0,9)
+  ENV_INTENSITY: 1.0,        // multiplica o envMapIntensity de cada MeshStandard/Physical (1 = respeita o peso do material: pele 0,4, ouro 1,2)
   ENV_INTENSITY_FALLBACK: 0.5,  // scene.environmentIntensity (Lambert/Phong e objetos ainda não varridos)
   ENV_SUN_GLOW: 2.5,         // brilho (HDR) do halo do sol no mapa de ambiente → reflexo quente no ouro
-  SUN_INTENSITY: 3.0,        // DirectionalLight — luz-chave dominante (volumes esculpidos)
-  HEMI_INTENSITY: 0.42,      // HemisphereLight — preenchimento fraco: o envMap já dá a luz do céu
-  HEMI_SKY: 0xcbd9ee, HEMI_GROUND: 0x46566c,
-  AMBIENT_INTENSITY: 0.04,   // AmbientLight residual (sombras cinza-azuladas, nunca pretas)
+  SUN_INTENSITY: 3.4,        // DirectionalLight — luz-chave dominante (volumes esculpidos)
+  HEMI_INTENSITY: 2.6,       // HemisphereLight — preenchimento azul-cinza: lado da sombra do elefante em cinza médio
+  HEMI_SKY: 0xcbd9ee, HEMI_GROUND: 0x8494a6, // chão = luz refletida pelo mar/nuvens (barriga não fica preta)
+  AMBIENT_INTENSITY: 0.16,   // AmbientLight residual (sombras cinza-azuladas, nunca pretas)
   AMBIENT_COLOR: 0xb6c9e0,
   SHADOW: {
     low: null,                                                                        // sem sombras
@@ -420,7 +420,7 @@ export const RENDER = {
   },
   BLOOM: { strength: 0.18, radius: 0.6, threshold: 0.9 },  // só glitter do sol, ouro e nuvens brilhantes
   GRADE: {
-    contrast: 0.3,           // peso da curva S fílmica (0 = sem contraste extra)
+    contrast: 0.18,          // peso da curva S fílmica (0 = sem contraste extra)
     desaturate: 0.06,        // 6% de dessaturação
     vignette: 0.08,          // escurecimento máximo nos cantos (0..1)
     vignetteStart: 0.45,     // raio (0..1, do centro ao canto) onde a vinheta começa

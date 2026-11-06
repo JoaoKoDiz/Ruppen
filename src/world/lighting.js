@@ -5,7 +5,8 @@
 //   • mapa de ambiente PMREM gerado de um céu procedural (mesmo gradiente e sol
 //     de config.js) → luz ambiente e reflexos realistas nos MeshStandardMaterial
 //     (o ouro reflete o céu/sol; o lado da sombra fica azulado, nunca preto);
-//   • hemisfério + ambiente reduzidos (o envMap já dá a luz do céu) e FogExp2.
+//   • hemisfério azul-cinza (céu em cima, mar refletido embaixo) como preenchimento: o lado
+//     da sombra do elefante fica cinza médio, o sol esculpe o lado iluminado; e FogExp2.
 //  Contrato:
 //    createLighting(scene, renderer, { quality, shadowRange? }) → {
 //      sun, hemi, ambient, sunDirection, environment (Texture | null), shadowsEnabled, setEnvIntensity(k),
@@ -140,8 +141,8 @@ export function createLighting(scene, renderer = null, opts = {}) {
   // opts.shadowRange: substitui o ±range do nível (o preview ajusta a caixa ao tamanho do objeto em foco)
   const shadowCfg = RENDER.SHADOW[quality] && (opts.shadowRange ? { ...RENDER.SHADOW[quality], range: opts.shadowRange } : RENDER.SHADOW[quality]);
 
-  // Sol dominante + pouca luz de preenchimento: o lado da sombra do elefante fica cinza-escuro
-  // azulado (envMap do céu + hemisfério fraco), o lado do sol esculpe as rugas e os volumes.
+  // Sol dominante + preenchimento azul-cinza (envMap do céu + hemisfério): o lado da sombra do
+  // elefante fica cinza médio azulado, o lado do sol esculpe as rugas e os volumes.
   const sun = new THREE.DirectionalLight(COLORS.sunLight, RENDER.SUN_INTENSITY);
   sun.position.copy(sunDirection).multiplyScalar(RENDER.SHADOW.DEPTH);
   sun.target.position.set(0, 0, 0);
