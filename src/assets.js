@@ -51,16 +51,25 @@ const resolve = (p) => (globalThis.__RUPPEN_ASSETS && globalThis.__RUPPEN_ASSETS
 export const pathOf = (id, map) => `assets/tex/${id}_${map}.jpg`;
 
 const loader = new THREE.TextureLoader();
-const images = new Map();   // caminho → textura-base (carregada uma vez)
+const images = new Map();   // caminho → { source, ready, waiters }
 const cache = new Map();    // chave → textura configurada
 
-function baseTexture(path) {
-  let t = images.get(path);
-  if (!t) {
-    t = loader.load(resolve(path), undefined, undefined, () => console.warn('[assets] falhou: ' + path));
-    images.set(path, t);
+// Carrega cada arquivo uma vez; as texturas que o usam só são marcadas para envio à GPU
+// quando a imagem chega (marcar antes gera o aviso "no image data found" do three.js).
+function baseEntry(path) {
+  let e = images.get(path);
+  if (!e) {
+    e = { source: null, ready: false, waiters: [] };
+    const base = loader.load(resolve(path), () => {
+      e.ready = true;
+      for (const t of e.waiters) t.needsUpdate = true;
+      e.waiters.length = 0;
+    }, undefined, () => console.warn('[assets] falhou: ' + path));
+    e.source = base.source;
+    e.base = base;
+    images.set(path, e);
   }
-  return t;
+  return e;
 }
 
 // Textura de um mapa: 'diff' em sRGB, os demais lineares; repetição e anisotropia.
@@ -70,16 +79,15 @@ export function tex(id, map, { repeat = 1, anisotropy = 8 } = {}) {
   const key = `${id}|${map}|${rx}|${ry}|${anisotropy}`;
   let t = cache.get(key);
   if (t) return t;
-  const base = baseTexture(pathOf(id, map));
-  t = base.clone();
-  // o clone compartilha a imagem; quando ela chegar, a fonte é a mesma (Source compartilhada)
-  t.source = base.source;
+  const e = baseEntry(pathOf(id, map));
+  // textura nova que compartilha a mesma imagem (Source) — sem clone(), que marcaria needsUpdate cedo
+  t = new THREE.Texture();
+  t.source = e.source;
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(rx, ry);
   t.anisotropy = anisotropy;
   t.colorSpace = map === 'diff' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  // sem needsUpdate aqui: a imagem ainda não chegou. Quando chegar, o loader marca a
-  // Source compartilhada (version++) e todos os clones são reenviados à GPU sozinhos.
+  if (e.ready) t.needsUpdate = true; else e.waiters.push(t);
   cache.set(key, t);
   return t;
 }
@@ -96,7 +104,7 @@ export function texSet(id, opts = {}) {
 
 // Imagem crua (HTMLImageElement) quando carregada — para quem quer pintar num canvas.
 export function imageOf(id, map) {
-  return baseTexture(pathOf(id, map)).image || null;
+  return baseEntry(pathOf(id, map)).source.data || null;
 }
 
 // HDRI do céu → Promise<THREE.DataTexture> (equirretangular, linear). Use com PMREMGenerator.

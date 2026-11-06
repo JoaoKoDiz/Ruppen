@@ -131,7 +131,7 @@ export const CLOUDS = {
     BASE_MIN: 160, BASE_MAX: 650,   // altura da base plana (m)
     FOOT_TOP: 1800,            // topo dos montes do banco das patas (m)
     FOOT_COVER: 2.2,           // reforço da cobertura do banco das patas (resiste mais à erosão: banco contínuo)
-    FOOT_RING: 2300,           // raio médio do anel de nuvem ao redor das patas (m, local do elefante)
+    FOOT_RING: 2200,           // raio médio do anel de nuvem ao redor das patas (m, local do elefante)
     LEG_CLEAR: [0.92, 1.25],    // a densidade cai dentro deste cilindro (× raio da pata) — pernas visíveis no banco
     NEAR_FADE: [25, 220],      // m — a densidade some perto da câmera (sem "parede" colada na lente)
     CULL_DIST: 40000,          // m — além disso a nuvem não é desenhada
@@ -141,7 +141,8 @@ export const CLOUDS = {
     DETAIL_NOISE_SCALE: 300,   // m por ladrilho do ruído de detalhe (worley 32³)
     EROSION: 0.82,             // quanto o ruído base corrói a forma dos lóbulos
     DETAIL_EROSION: 0.55,      // idem para o detalhe (couve-flor nos topos, fiapos nas bases)
-    EDGE_SHARP: 0.26,          // a densidade satura em d = EDGE_SHARP (borda nítida, miolo uniforme)
+    DETAIL_LOD: [8, 26],       // m de pegada do pixel: o detalhe (voxel ≈ 9 m) some entre esses valores (anti-serrilhado)
+    EDGE_SHARP: 0.3,           // a densidade satura em d = EDGE_SHARP (borda nítida, miolo uniforme)
     MAX_STEPS: 110,            // passos primários (inclui saltos no vazio)
     LIGHT_STEPS: 5,            // passos de luz em direção ao sol
     LIGHT_STEP0: 28,           // m — 1º passo de luz (dobra a cada passo)
