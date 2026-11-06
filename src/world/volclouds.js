@@ -1,6 +1,6 @@
 // =====================================================================
 //  Nuvens VOLUMÉTRICAS (quality high/ultra): densidade marchada por raio
-//  dentro de volumes-proxy (caixas instanciadas) desenhados na própria cena.
+//  dentro de volumes-proxy (caixas instanciadas, 1 draw call).
 //
 //  * Forma de cada nuvem = união suave ("metaballs") de até 16 lóbulos
 //    elipsoidais (semente), guardados numa DataTexture float (1 linha por nuvem):
@@ -14,24 +14,32 @@
 //    Henyey–Greenstein duplo (g≈0,6 + retroespalhamento) + ambiente do céu
 //    (azul-cinza embaixo, branco em cima) + sombra analítica do corpo do
 //    elefante sobre o banco das patas.
-//  * Passo adaptativo (cresce com a distância), salto do espaço vazio pela
-//    distância conservadora aos lóbulos, início do raio deslocado por ruído de
-//    gradiente intercalado (estável no tempo: depende só do pixel), saída
-//    antecipada com opacidade > 0,98.
-//  * Bancos das patas: seguem os elefantes (posição + rumo), têm densidade
-//    reduzida num cilindro em torno de cada pata e o raio PARA ao atingir o
-//    cilindro (inclinado pelo osso da pata) → as pernas ficam à frente da nuvem
-//    que está atrás delas sem precisar da profundidade da cena. Mergulham no mar
-//    (o raio pára em y = 0).
+//  * Passo adaptativo (cresce com a distância e com passos vazios seguidos,
+//    recuando ao achar nuvem), passos finos na superfície, salto do espaço vazio
+//    pela distância conservadora aos lóbulos, início do raio deslocado por um
+//    hash do pixel (estável no tempo), LOD do detalhe pela pegada do pixel,
+//    saída antecipada com opacidade > 0,98, densidade some perto da câmera.
+//  * Bancos das patas: seguem os elefantes (posição + rumo), manta contínua +
+//    lóbulos nas patas + anel de montes + torres em couve-flor; densidade
+//    reduzida num cilindro em volta de cada pata (inclinado pelo osso da pata);
+//    mergulham no mar (o raio pára em y = 0).
 //  * Ordenação de trás para frente por quadro, corte por frustum e > CULL_DIST,
-//    desvanecimento com a distância, névoa aplicada na profundidade média do
-//    espalhamento. Saída em alfa PRÉ-MULTIPLICADO, depthWrite = false.
-//  * Câmera FORA da caixa → FrontSide (o teste de profundidade da face da frente
-//    esconde a nuvem atrás de objetos opacos); DENTRO → BackSide (2º draw call).
-//  * Opcional: setSceneDepth(tex) — profundidade da cena (log depth ou
-//    reversed-Z) para parar o raio em geometria opaca DENTRO do volume. Só pode
-//    ser usada se as nuvens forem desenhadas num passe que NÃO escreve nessa
-//    textura (senão é um laço de realimentação no WebGL).
+//    desvanecimento com a distância, névoa + perspectiva aérea (AERIAL_GLSL de
+//    lighting.js) na profundidade média do espalhamento. Alfa PRÉ-MULTIPLICADO.
+//
+//  Dois modos de desenho:
+//  (a) PASSE do pós (recomendado; attachPost(post)): post.addPass(…, 'beforeGrade')
+//      — depois da AO (que não escurece as nuvens), antes do bloom. Uma caixa
+//      BackSide por nuvem, sem teste de profundidade de hardware: o raio pára na
+//      profundidade da cena (post.depthTexture, log depth) → oclusão exata de
+//      qualquer geometria, inclusive dentro do volume. Resolução CLOUDS.VOL.PASS_SCALE
+//      (0,5 = meia resolução + reconstrução de 4 amostras). Tone mapping ACES e
+//      sRGB feitos no shader (o alvo do passe é "de tela", como o sceneTarget).
+//  (b) NA CENA (sem pós): câmera FORA da caixa → FrontSide (o teste de
+//      profundidade da face da frente esconde a nuvem atrás de objetos opacos);
+//      DENTRO → BackSide; o raio pára nos cilindros das pernas (analítico).
+//      Opcional: setSceneDepth(tex) — só se as nuvens forem desenhadas num passe
+//      que NÃO escreve nessa textura (senão é um laço de realimentação no WebGL).
 // =====================================================================
 import * as THREE from 'three';
 import { WORLD, COLORS, SEED, CLOUDS, ELEPHANT, ELEPHANT_MODEL } from '../config.js';
@@ -224,6 +232,7 @@ uniform vec3 uAmbTop;
 uniform vec3 uAmbBottom;
 uniform float uDensity;
 uniform vec3 uChurn;
+uniform float uPixelAngle;   // tamanho angular de um pixel do alvo (rad): pegada = t·uPixelAngle
 #ifdef USE_SCENE_DEPTH
 uniform sampler2D uSceneDepth;
 uniform vec2 uResolution;
@@ -256,6 +265,7 @@ flat varying vec4 vLegs;
 vec4 L[MAX_LOBES];
 int nL;
 float gBase, gInvH, gDens;
+float gLod;   // 0 perto .. 1 longe: o detalhe 3D (sem mipmaps) some quando fica menor que o pixel
 bool gFoot;
 vec3 gNoiseOff;
 vec3 gLegP[4];
@@ -304,11 +314,11 @@ float densityAt(vec3 p, float b, bool full) {
     vec2 nd = texture(uNoiseDetail, p * (1.0 / DETAIL_SCALE) + gNoiseOff * 3.1).rg;
     // couve-flor (bolhas) em cima, fiapos (perlin) embaixo
     float det = mix(nd.g, nd.r, clamp(h * 2.5 + 0.15, 0.0, 1.0));
-    float de = (1.0 - det) * DETAIL_EROSION;
+    float de = (1.0 - det) * DETAIL_EROSION * (1.0 - 0.85 * gLod);
     d = clamp((d - de) / max(1.0 - de, 1e-3), 0.0, 1.0);
   }
   // cúmulo: densidade quase uniforme por dentro, borda nítida (couve-flor recortada)
-  return smoothstep(0.0, EDGE_SHARP, d);
+  return smoothstep(0.0, mix(EDGE_SHARP, 0.5, gLod), d);
 }
 
 float hg(float c, float g) {
@@ -418,7 +428,10 @@ void main() {
   int lSteps = tEnter > 14000.0 ? 3 : LIGHT_STEPS;
 
   // ---- marcha
-  float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  // jitter estável no tempo (só depende do pixel): hash branco — o filtro de 4 amostras do passe o dissolve
+  vec3 hp = fract(vec3(gl_FragCoord.xyx) * vec3(0.1031, 0.1030, 0.0973));
+  hp += dot(hp, hp.yzx + 33.33);
+  float jitter = fract((hp.x + hp.y) * hp.z);
   float t = tEnter + jitter * clamp(tEnter * STEP_K, STEP_MIN, STEP_MAX);
   float T = 1.0;
   vec3 col = vec3(0.0);
@@ -429,8 +442,9 @@ void main() {
     if (t >= tExit || T < 0.02) break;
     float dtF = clamp(t * STEP_K, STEP_MIN, STEP_MAX);
     // passos finos na entrada da nuvem (superfície nítida, pouco pontilhado); normais por dentro
-    float dt = dtF * mix(0.3, 1.0, smoothstep(0.25, 0.75, 1.0 - T));
+    float dt = dtF * mix(0.2, 1.0, smoothstep(0.2, 0.8, 1.0 - T));
     vec3 p = ro + rd * t;
+    gLod = smoothstep(DETAIL_LOD0, DETAIL_LOD1, t * uPixelAngle);
     float sdf;
     float b = shapeAt(p, sdf);
     if (sdf > dtF) { t += sdf + dtF * 0.3 * jitter; run = 0.0; lastStep = 0.0; continue; }    // vazio: salta até o lóbulo mais próximo
@@ -573,7 +587,7 @@ function genFootBank(rng) {
   const R = V.FOOT_RING;
   const top = V.FOOT_TOP;
   // manta contínua (mar de nuvens) sob o elefante e em volta: elipsoide largo e baixo
-  lobes.push({ x: rng.range(-150, 150), y: 0, z: rng.range(-150, 150), r: R * 1.22, sq: 0.22 });
+  lobes.push({ x: rng.range(-150, 150), y: 0, z: rng.range(-150, 150), r: R * 1.1, sq: 0.24 });
   // 4 lóbulos nas patas (a nuvem "abraça" os pés)
   for (const [sx, sz] of [[1, -1], [1, 1], [-1, -1], [-1, 1]]) {
     const r = rng.range(950, 1150), sq = rng.range(0.62, 0.75);
@@ -582,7 +596,7 @@ function genFootBank(rng) {
   // anel de 8 montes ao redor
   for (let k = 0; k < 7; k++) {
     const a = (k / 7) * Math.PI * 2 + rng.range(-0.25, 0.25);
-    const rad = R * rng.range(0.85, 1.15);
+    const rad = R * rng.range(0.8, 1.05);
     const r = rng.range(1000, 1350), sq = rng.range(0.6, 0.75);
     lobes.push({ x: Math.cos(a) * rad, y: 120, z: Math.sin(a) * rad, r, sq });
   }
@@ -654,6 +668,7 @@ export function createVolumetricClouds(group, worldData, opts = {}) {
       uChurn: { value: new THREE.Vector3(0.3, -1.0, 0.2).multiplyScalar(V.CHURN / V.BASE_NOISE_SCALE) },
       uSceneDepth: { value: null }, uResolution: { value: new THREE.Vector2(1, 1) }, uCamNear: { value: 0.5 }, uCamFar: { value: 1e5 },
       uExposure: { value: 1 },
+      uPixelAngle: { value: 0.002 },
     },
   ]);
   uniforms.uLobes.value = lobeTex;
@@ -669,7 +684,7 @@ export function createVolumetricClouds(group, worldData, opts = {}) {
     PHASE_G: f(V.PHASE_G), PHASE_BACK: f(V.PHASE_BACK), PHASE_BACK_W: f(V.PHASE_BACK_W), POWDER: f(V.POWDER),
     LEG_R: f(LEG_RADIUS), LEG_PX: f(LEG_PIVOT_X), LEG_PY: f(LEG_PIVOT_Y), LEG_PZ: f(LEG_PIVOT_Z),
     LEG_CLEAR0: f(V.LEG_CLEAR[0]), LEG_CLEAR1: f(V.LEG_CLEAR[1]),
-    EDGE_SHARP: f(V.EDGE_SHARP), FOOT_COVER: f(V.FOOT_COVER), NEAR_FADE0: f(V.NEAR_FADE[0]), NEAR_FADE1: f(V.NEAR_FADE[1]), AMB_PROBE: f(V.AMB_PROBE), BODY_CY: f(BODY.cy), BODY_RX: f(BODY.rx), BODY_RY: f(BODY.ry), BODY_RZ: f(BODY.rz), BODY_SHADOW: f(V.BODY_SHADOW),
+    EDGE_SHARP: f(V.EDGE_SHARP), FOOT_COVER: f(V.FOOT_COVER), DETAIL_LOD0: f(V.DETAIL_LOD[0]), DETAIL_LOD1: f(V.DETAIL_LOD[1]), NEAR_FADE0: f(V.NEAR_FADE[0]), NEAR_FADE1: f(V.NEAR_FADE[1]), AMB_PROBE: f(V.AMB_PROBE), BODY_CY: f(BODY.cy), BODY_RX: f(BODY.rx), BODY_RY: f(BODY.ry), BODY_RZ: f(BODY.rz), BODY_SHADOW: f(V.BODY_SHADOW),
   };
   const makeMat = (side) => {
     const m = new THREE.ShaderMaterial({
@@ -741,15 +756,19 @@ export function createVolumetricClouds(group, worldData, opts = {}) {
         this.rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false });
         this.rt.texture.name = 'volclouds.lowres';
         this.quad = new FullScreenQuad(new THREE.ShaderMaterial({
-          uniforms: { tClouds: { value: this.rt.texture } },
+          uniforms: { tClouds: { value: this.rt.texture }, uTexel: { value: new THREE.Vector2(1, 1) } },
           vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
-          fragmentShader: 'uniform sampler2D tClouds; varying vec2 vUv; void main(){ gl_FragColor = texture2D(tClouds, vUv); }',
+          // 4 amostras bilineares em X: reconstrução suave que também dissolve o pontilhado do jitter
+          fragmentShader: 'uniform sampler2D tClouds; uniform vec2 uTexel; varying vec2 vUv; void main(){ vec2 o = uTexel * 0.4; gl_FragColor = 0.25 * (texture2D(tClouds, vUv + vec2(o.x, o.y)) + texture2D(tClouds, vUv + vec2(-o.x, o.y)) + texture2D(tClouds, vUv + vec2(o.x, -o.y)) + texture2D(tClouds, vUv - o)); }',
           transparent: true, premultipliedAlpha: true, blending: THREE.NormalBlending, depthTest: false, depthWrite: false,
         }));
       }
     }
     setSize(w, h) {
-      if (this.rt) this.rt.setSize(Math.max(1, Math.round(w * this.scale)), Math.max(1, Math.round(h * this.scale)));
+      if (this.rt) {
+        this.rt.setSize(Math.max(1, Math.round(w * this.scale)), Math.max(1, Math.round(h * this.scale)));
+        this.quad.material.uniforms.uTexel.value.set(1 / this.rt.width, 1 / this.rt.height);
+      }
       this.fullW = w; this.fullH = h;
     }
     render(renderer, writeBuffer, readBuffer) {
@@ -817,6 +836,11 @@ export function createVolumetricClouds(group, worldData, opts = {}) {
         const img = uniforms.uSceneDepth.value.image;
         if (!passMode && img && img.width) uniforms.uResolution.value.set(img.width, img.height);
         uniforms.uCamNear.value = camera.near; uniforms.uCamFar.value = camera.far;
+      }
+      {
+        const res = uniforms.uResolution.value;
+        const h = passMode && cloudPass && cloudPass.rt ? cloudPass.rt.height : (res.y > 1 ? res.y : 720);
+        uniforms.uPixelAngle.value = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) / Math.max(1, h);
       }
       camera.updateMatrixWorld();
       projView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
