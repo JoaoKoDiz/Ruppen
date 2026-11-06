@@ -84,7 +84,7 @@ const AO_FRAG = /* glsl */`
 ${POST_DEPTH_GLSL}
 uniform vec2 uTexel;      // 1 / tamanho do depth (resolução cheia)
 uniform vec2 uResolution; // tamanho do depth em px
-uniform float uRadiusNear, uRadiusNearDist, uRadiusExp, uRadiusMin, uRadiusMax, uLargeK, uMaxPx, uMinPx, uIntensity, uIntensityLarge, uBias, uPower;
+uniform float uRadiusNear, uRadiusNearDist, uRadiusExp, uRadiusMin, uRadiusMax, uLargeK, uRadiusMaxLarge, uMaxPx, uMinPx, uIntensity, uIntensityLarge, uBias, uPower;
 uniform vec2 uFade;
 varying vec2 vUv;
 // amostras sempre no centro do texel do depth: a posição reconstruída casa exatamente com o depth lido
@@ -106,12 +106,14 @@ void main() {
   vec3 N = normalize(cross(dx, dy));
   // Duas escalas (metade das amostras cada):
   //  • fina  — raio no mundo R = NEAR·(w/NEAR_DIST)^EXP (≈ 2 m a 10 m, 20 m a 1,2 km, 40 m a 5 km): contato, frestas, entre casas;
-  //  • larga — raio constante na tela (LARGE_K·w): volumes grandes (sob a orelha, dobras, sob as presas, pernas na espuma).
+  //  • larga — raio constante na tela (LARGE_K·w, até RADIUS_MAX_LARGE m): volumes grandes (sob a orelha, dobras, sob as
+  //    presas, pernas na espuma). O BIAS (cosseno mínimo) ignora diedros rasos: sem rede escura nas arestas de
+  //    triângulos grandes do terreno.
   float pxPerM = uProj.y * 0.5 * uResolution.y / w;
   float maxPx = uMaxPx * uResolution.y;
   float Rs = clamp(uRadiusNear * pow(w / uRadiusNearDist, uRadiusExp), uRadiusMin, uRadiusMax);
   float RsPx = min(Rs * pxPerM, maxPx);
-  float RlPx = min(w * uLargeK * pxPerM, maxPx);
+  float RlPx = min(min(w * uLargeK, uRadiusMaxLarge) * pxPerM, maxPx);
   if (RlPx < uMinPx) { gl_FragColor = vec4(1.0, w * 0.001, 0.0, 1.0); return; }
   float n1 = ign(gl_FragCoord.xy) * 6.2831853;
   float n2 = ign(gl_FragCoord.yx + vec2(17.0, 5.0));
@@ -233,7 +235,7 @@ class AOPass extends Pass {
         ...depthUniforms,
         uTexel: { value: new THREE.Vector2() },
         uRadiusNear: { value: A.RADIUS_NEAR }, uRadiusNearDist: { value: A.RADIUS_NEAR_DIST }, uRadiusExp: { value: A.RADIUS_EXP },
-        uRadiusMin: { value: A.RADIUS_MIN }, uRadiusMax: { value: A.RADIUS_MAX }, uLargeK: { value: A.LARGE_K },
+        uRadiusMin: { value: A.RADIUS_MIN }, uRadiusMax: { value: A.RADIUS_MAX }, uLargeK: { value: A.LARGE_K }, uRadiusMaxLarge: { value: A.RADIUS_MAX_LARGE },
         uMaxPx: { value: A.MAX_PX }, uMinPx: { value: A.MIN_PX }, uIntensity: { value: A.INTENSITY }, uIntensityLarge: { value: A.INTENSITY_LARGE },
         uBias: { value: A.BIAS }, uPower: { value: A.POWER }, uFade: { value: new THREE.Vector2(A.FADE[0], A.FADE[1]) },
       },

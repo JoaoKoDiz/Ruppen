@@ -572,11 +572,12 @@ export const RENDER = {
     // escala fina: raio no mundo = NEAR·(dist/NEAR_DIST)^EXP (≈ 2 m a 10 m, 7 m a 120 m, 20 m a 1,2 km, 40 m a 5 km)
     RADIUS_NEAR: 2.0, RADIUS_NEAR_DIST: 10, RADIUS_EXP: 0.48,
     RADIUS_MIN: 0.5, RADIUS_MAX: 120, // limites da escala fina (m)
-    LARGE_K: 0.12,           // escala larga: raio = dist × K (constante na tela ≈ 12% da altura com fov 62°)
+    LARGE_K: 0.07,           // escala larga: raio = dist × K (constante na tela ≈ 7% da altura com fov 62°)…
+    RADIUS_MAX_LARGE: 160,   // …até este raio no mundo (m): longe, a AO não escurece faces inteiras
     MAX_PX: 0.2, MIN_PX: 1.5, // raio projetado máximo (fração da altura da tela) / mínimo (px)
-    INTENSITY: 3.5,          // ganho da oclusão fina
-    INTENSITY_LARGE: 3.0,    // ganho da oclusão larga
-    BIAS: 0.07,              // cosseno mínimo (evita auto-oclusão em superfícies curvas)
+    INTENSITY: 4.5,          // ganho da oclusão fina
+    INTENSITY_LARGE: 4.0,    // ganho da oclusão larga
+    BIAS: 0.22,              // cosseno mínimo: ignora diedros rasos (< ~13°) — arestas de malhas facetadas, curvas suaves
     POWER: 1.4,              // contraste da AO
     STRENGTH: 0.9,           // mistura final: cor × mix(1, ao, STRENGTH × visibilidade)
     FADE: [18000, 40000],    // m — some com a distância
