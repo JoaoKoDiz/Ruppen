@@ -400,9 +400,9 @@ export const ELEPHANT_MODEL = {
   EAR_HOUSE_GRID: { rows: 22, cols: 16 },   // bloco de casinhas em terraços no manto (muitas fileiras pequenas)
   EAR_HOUSE_RECT: { x0: -0.95, x1: -0.26, y0: -0.6, y1: -0.05 },   // região do bloco (frações da largura/altura da orelha; x<0 = para trás, y<0 = para baixo): parte SUPERIOR-EXTERNA (ref. 1)
   TRUNK_ROOT_RADIUS: 235,   // m — raio da tromba na raiz (afunila até TRUNK.baseRadius a ~25% do comprimento)
-  CITY_SPACING_HIGH: 7.9,   // m — passo da malha de casas do dorso no alto (quality=high); cresce para ~1,5× nos flancos
+  CITY_SPACING_HIGH: 8.4,   // m — passo da grade de casas do dorso no alto (quality=high); cresce para ~1,5× nos flancos (as casas enchem a célula; ruas recortam)
   CITY_SPACING_LOW: 11,
-  CITY_FLANK_ANGLE: 1.25,   // rad — até que ângulo (a partir do zênite) as casas INSTANCIADAS descem pelos flancos
+  CITY_FLANK_ANGLE: 1.2,    // rad — até que ângulo (a partir do zênite) as casas INSTANCIADAS descem pelos flancos
   CRUST_FLANK_ANGLE: 1.7,   // rad — até onde desce a casca-crosta (textura de casinhas) pelos flancos
   CRUST_OFFSET: 3,          // m — a casca-crosta fica a esta distância acima da pele
   CRUST_REPEAT: 12,         // repetições da textura da crosta ao longo do dorso
@@ -418,7 +418,7 @@ export const ELEPHANT_MODEL = {
   TUSK_HOUSE_DIV: 30,       // lado da casinha da presa = diâmetro local / TUSK_HOUSE_DIV
   TUSK_HOUSE_GAP: 2.0,      // passo entre casinhas da presa (× lado)
   TUSK_HOUSE_SPAN: 1.35,    // rad — meio-ângulo coberto pelas casas (±: quase toda a metade de cima da presa)
-  TUSK_HOUSE_MAX: 1400,     // limite de casinhas por par de presas (orçamento de triângulos)
+  TUSK_HOUSE_MAX: 1150,     // limite de casinhas por par de presas (orçamento de triângulos)
   TUSK_TOWERS: 9,           // torres brancas por presa
   FOLD_BODY: 20,            // m — amplitude das dobras esculpidas do corpo (geometria)
   FOLD_HEAD: 8,             // m — idem cabeça
@@ -443,13 +443,13 @@ export const ELEPHANT_POLISH = {
 // Materiais PBR do elefante (src/elephant/elephant.js): mapas procedurais tileáveis (canvas → normal/roughness)
 export const ELEPHANT_MATERIALS = {
   SKIN_NORMAL_REPEAT: 8,    // repetições do mapa de normais micro da pele por ladrilho do mapa de cor (≈ 425 m/ladrilho no mundo)
-  SKIN_NORMAL_SCALE: 0.85,  // intensidade das micro-rugas/poros
+  SKIN_NORMAL_SCALE: 0.55,  // intensidade das micro-rugas/poros
   SKIN_ROUGHNESS: 0.86,     // pele fosca e empoeirada (o roughnessMap baixa nos vincos)
   SKIN_ENV: 0.4,            // envMapIntensity da pele
   SKIN_COLOR: 0x675e5a,     // base do albedo (após manchas/vincos a média fica ≈ #5d5552: cinza quente médio-escuro)
   SKIN_CAVITY_AO: 0.32,     // escurecimento máximo (cor do vértice) nos vincos esculpidos da geometria
   SKIN_RIDGE_LIFT: 0.08,    // clareamento leve das cristas das dobras
-  SKIN_FINE_WRINKLES: 520,  // segmentos de rugas finas onduladas pintados no mapa de cor da pele (1024²)
+  SKIN_FINE_WRINKLES: 150,  // segmentos de rugas finas onduladas pintados no mapa de cor da pele (1024²)
   EAR_CLOTH_COLOR: 0x5a4c46, // miolo do manto da orelha: tecido taupe escuro quente (não azulado sob o céu)
   GOLD_COLOR: 0xb8862c,     // ouro-bronze quente
   GOLD_ROUGHNESS: 0.34,     // metal escovado (roughnessMap com riscos 0.28–0.42)
@@ -471,6 +471,32 @@ export const ELEPHANT_MATERIALS = {
   EAR_TOWER_CHANCE: 0.06,   // fração de casinhas que viram torres (2,2× mais altas)
   EYE_ROUGHNESS: 0.15,      // esclera molhada
   CITY_NORMAL_SCALE: 0.7,   // relevo das janelas/telhas/tijolos
+};
+// Arquitetura das cidades (src/elephant/architecture.js + elephant.js). Metros do modelo-base (×ELEPHANT.SCALE no mundo).
+export const ELEPHANT_CITY = {
+  STOREY: 1.1,              // altura de um andar (≈ 3,3 m no mundo)
+  BAY: 1.05,                // largura de um vão de janela das casas
+  PARAPET: 0.45,            // parapeito (ameado) das casas de laje
+  EAVE: 0.28,               // beiral dos telhados de 4 águas
+  ROOF_PITCH: 0.36,         // altura da cumeeira = ROOF_PITCH × lado menor (≈ 36°)
+  AWNING_Y: 0.92,           // altura da borda presa dos toldos (térreo)
+  TILE: { stucco: 1.6, beige: 2.2, roof: 0.9, brick: 1.5, marble: 3.2, pave: [1.3, 0.9] },   // m por ladrilho das texturas reais / lajes
+  SHUTTERS: 0.45,           // fração das casas com venezianas
+  LIT_WINDOWS: 0.06,        // fração das janelas acesas (quentes)
+  ENV: 0.6,                 // envMapIntensity do material da cidade
+  BLOCK: { x: 46, a: 34 },  // tamanho dos quarteirões (ao longo do dorso / ao redor) — grade deformada
+  STREET: 2.3,              // largura das ruas (≈ 7 m no mundo)
+  AVENUE: 6,                // largura das avenidas (a cada AVENUE_EVERY quarteirões)
+  AVENUE_EVERY: 4,
+  WARP: 16,                 // deformação da grade das ruas (m)
+  FILL: { min: 0.86, max: 0.97 },        // fração da célula ocupada pela casa (o resto: becos)
+  MIX: { flat: 0.41, hip: 0.39, tall: 0.14, dome: 0.06 },     // arquétipos do tapete
+  STOREYS: { flat: [2, 4], hip: [2, 3], tall: [4, 6], dome: [2, 3] },
+  PLAZAS: 4,                // pracinhas espalhadas (com cúpula/obelisco/chafariz no centro)
+  PLAZA_R: { min: 18, max: 30 },
+  STALLS: 110,              // bancas do mercado (praça da entrega)
+  UMBRELLAS: 30,
+  CRUST_FADE: [5200, 7600], // m (mundo): a crosta passa de "chão de pedra" (perto) a "casinhas vistas do alto" (longe)
 };
 // Pele ESCULPIDA como uma única malha (src/elephant/sculpt.js): campo de distância com união suave
 // (smin polinomial) de elipsoides/cones arredondados, poligonizado por "surface nets" uma vez e
@@ -495,10 +521,11 @@ export const ELEPHANT_SCULPT = {
   TRI_COLOR_TILE: 1100,     // m (modelo-base) — ladrilho do mapa de cor triplanar
   TRI_NORMAL_TILE: 140,     // m (modelo-base) — ladrilho dos mapas de normal/rugosidade triplanares
   TRI_SHARPNESS: 4,         // expoente da mistura triplanar
-  LEATHER_TILE: 62,         // m (modelo-base) — ladrilho do couro enrugado (fabric_leather_02, normal + rugosidade); 2ª escala ×2,6
-  LEATHER_NORMAL: 0.9,      // intensidade do couro na normal
+  LEATHER_TILE: 96,         // m (modelo-base) — ladrilho do couro enrugado (fabric_leather_02, normal + rugosidade); 2ª escala ×2,6 (frequência baixa: dobras pesadas, não "pelo")
+  LEATHER_NORMAL: 0.5,      // intensidade do couro na normal (some com a distância: DETAIL_FADE)
   MUD_TILE: 360,            // m (modelo-base) — ladrilho da lama seca rachada (brown_mud_dry, normal + luminância); 2ª escala ×2,7
-  MUD_NORMAL: 0.55,         // intensidade das rachaduras na normal
+  MUD_NORMAL: 0.38,         // intensidade das rachaduras na normal
+  DETAIL_FADE: { leather: [450, 3200], mud: [900, 6500] },   // m (MUNDO) — o detalhe fino da pele (couro / rachaduras) esmaece entre estas distâncias da câmera
   MUD_TONE: 0.35,           // quanto a luminância da lama modula o cinza quente da pele
   SKIN_TINT: [1.12, 1.04, 0.97], // tinta (linear) sobre o albedo da pele: compensa o azul do céu no lado da sombra (cinza quente)
   NOD: 0.012,               // rad — aceno leve da cabeça

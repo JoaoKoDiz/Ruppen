@@ -47,10 +47,11 @@
 // =====================================================================
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
-import { ELEPHANT, ELEPHANT_MODEL, ELEPHANT_POLISH, ELEPHANT_MATERIALS, ELEPHANT_SCULPT, COLORS, SEED } from '../config.js';
+import { ELEPHANT, ELEPHANT_MODEL, ELEPHANT_POLISH, ELEPHANT_MATERIALS, ELEPHANT_SCULPT, ELEPHANT_CITY as CT, COLORS, SEED } from '../config.js';
 import { createRng, hashInt } from '../util/rng.js';
 import { createNoise } from '../util/noise.js';
 import { tex } from '../assets.js';
+import { SF, getArchMaterial, getArchetypes, cityAttrs, facBox, facCyl, whiteDome, rimRing, mHouse, goldDome, makeCrustTextures, patchCrustMaterial } from './architecture.js';
 import {
   foldValue, FOLD_CA, FOLD_SA, TRUNK_CURVE, trunkR, BODY_SX, BONES, BONE, EYES, EAR_PIVOT, TRUNK_ROOT, LEGS,
   getSkinGeometry, getTables, skinBody, skinHead, skinNeck, skinTop, skinTopY, castOut, sdf, gradient, foldAt,
@@ -72,6 +73,9 @@ const PALACE_BASE_TOP = 1700;    // topo do bloco principal do palácio (arcadas
 const PALACE_TIER_H = 90;        // andar recuado sobre o bloco
 const DOME_R = 122, DRUM_H = 52, DOME_CY = PALACE_BASE_TOP + PALACE_TIER_H + DRUM_H;   // cúpula dourada sobre o tambor
 const BRICK = { x: 215, z: -205, hx: 105, hz: 70 }, BRICK_TOP = 1690; // prédio de tijolos com arcos
+const PALACE_PLINTH = 1545;      // topo do soco de tijolos arcado do palácio
+const PALACE_T2 = { hx: PS.hx * 0.62, hz: PS.hz * 0.72 };   // 2º corpo (recuado) do palácio
+const DOME_HF = 1.12;            // altura da cúpula em bulbo / raio
 const PLAZA_TOP = 1518;          // piso da praça de mercado (centro do dorso)
 
 // ------------------------------------------------------------------
@@ -262,7 +266,7 @@ function makeSkinTextures() {
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (let i = 0; i < MT.SKIN_FINE_WRINKLES; i++) {
       const y0 = lrng() * H, kk = lrng.int(1, 3), amp = 4 + lrng() * 12, ph = lrng() * TAU, k2 = lrng.int(4, 9), a2 = 1 + lrng() * 3, ph2 = lrng() * TAU;
-      const x0 = lrng() * W, len = W * (0.15 + lrng() * 0.5), lw = 1.2 + lrng() * 2.4, al = 0.18 + lrng() * 0.3;
+      const x0 = lrng() * W, len = W * (0.15 + lrng() * 0.5), lw = 1.2 + lrng() * 2.4, al = 0.08 + lrng() * 0.14;   // discretas: de longe não viram "pelos"
       const yAt = (x) => y0 + amp * Math.sin(TAU * kk * x / W + ph) + a2 * Math.sin(TAU * k2 * x / W + ph2);
       for (const [col, dy, wMul] of [[`rgba(150,138,128,${al * 0.45})`, -lw * 1.4, 0.8], [`rgba(32,24,21,${al})`, 0, 1]]) {
         ctx.strokeStyle = col; ctx.lineWidth = lw * wMul;
@@ -471,117 +475,6 @@ function makeClothTextures() {
   return { map: canvasTexture(c), normal: linearTexture(normalCanvas(getWeave(), 8), R, R) };
 }
 
-// Regiões do atlas da cidade (u0,u1,v0,v1) com pequena margem contra sangria
-const INSET = 0.004;
-const REG = {
-  PAL: [0 + INSET, 0.5 - INSET, 0.5 + INSET, 1 - INSET],
-  BRK: [0.5 + INSET, 1 - INSET, 0.5 + INSET, 1 - INSET],
-  PLAIN: [0 + INSET, 0.25 - INSET, 0.25 + INSET, 0.5 - INSET],
-  TOWER: [0.25 + INSET, 0.5 - INSET, 0.25 + INSET, 0.5 - INSET],
-  PAVE: [0.5 + INSET, 0.75 - INSET, 0.25 + INSET, 0.5 - INSET],
-  TALL: [0.75 + INSET, 1 - INSET, 0.25 + INSET, 0.5 - INSET],
-  HOUSE: [0 + INSET, 0.5 - INSET, 0 + INSET, 0.25 - INSET],
-  ROOF: [0.5 + INSET, 0.75 - INSET, 0 + INSET, 0.25 - INSET],
-  ROOFT: [0.75 + INSET, 1 - INSET, 0 + INSET, 0.25 - INSET],   // telhas rosa/terracota já coloridas (instâncias do tapete)
-};
-// Janelas em arco desenhadas nas 3 camadas do atlas: L = { c: cor, h: altura (128 = plano; janela
-// rebaixada, moldura/peitoril salientes), r: rugosidade (vidro liso, parede fosca) }.
-function drawArchWindows(L, x0, y0, w, h, cols, rows, { wall, win, frame, ledge, winW = 0.42, winH = 0.6, door = false }) {
-  const layers = [
-    { ctx: L.c, wall, win, frame, ledge, extras: true },
-    { ctx: L.h, wall: wall ? '#808080' : null, win: '#3a3a3a', frame: frame ? '#9c9c9c' : null, ledge: ledge ? '#b4b4b4' : null, sill: '#a8a8a8' },
-    { ctx: L.r, wall: wall ? '#c8c8c8' : null, win: '#404040', frame: frame ? '#c0c0c0' : null, ledge: ledge ? '#c8c8c8' : null },
-  ];
-  const cw = w / cols, ch = h / rows;
-  for (const ly of layers) {
-    const ctx = ly.ctx; if (!ctx) continue;
-    if (ly.wall) { ctx.fillStyle = ly.wall; ctx.fillRect(x0, y0, w, h); }
-    for (let r = 0; r < rows; r++) {
-      if (ly.ledge) { ctx.fillStyle = ly.ledge; ctx.fillRect(x0, y0 + r * ch, w, Math.max(2, ch * 0.06)); }
-      for (let cI = 0; cI < cols; cI++) {
-        const cx = x0 + (cI + 0.5) * cw, top = y0 + r * ch + ch * (1 - winH) * 0.55;
-        const ww = cw * winW, hh = ch * winH;
-        const isDoor = door && r === rows - 1 && cI === Math.floor(cols / 2);
-        const wwF = isDoor ? ww * 1.3 : ww, hhF = isDoor ? ch * 0.8 : hh, topF = isDoor ? y0 + (r + 1) * ch - hhF : top;
-        // moldura clara fina (arco), vidro cinza-quente escuro, leve reflexo no alto e peitoril
-        if (ly.frame) { ctx.fillStyle = ly.frame; ctx.beginPath(); ctx.moveTo(cx - wwF / 2 - 2.5, topF + hhF + 2.5); ctx.lineTo(cx - wwF / 2 - 2.5, topF + wwF / 2); ctx.arc(cx, topF + wwF / 2, wwF / 2 + 2.5, Math.PI, 0); ctx.lineTo(cx + wwF / 2 + 2.5, topF + hhF + 2.5); ctx.closePath(); ctx.fill(); }
-        ctx.fillStyle = ly.win; ctx.beginPath(); ctx.moveTo(cx - wwF / 2, topF + hhF); ctx.lineTo(cx - wwF / 2, topF + wwF / 2); ctx.arc(cx, topF + wwF / 2, wwF / 2, Math.PI, 0); ctx.lineTo(cx + wwF / 2, topF + hhF); ctx.closePath(); ctx.fill();
-        if (!isDoor && ly.extras) {
-          ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.beginPath(); ctx.arc(cx, topF + wwF / 2, wwF / 2 - 1.5, Math.PI * 1.05, Math.PI * 1.75); ctx.lineTo(cx, topF + wwF / 2); ctx.closePath(); ctx.fill();
-          ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(cx - wwF / 2 - 3, topF + hhF + 1, wwF + 6, Math.max(1.5, wwF * 0.08));
-        }
-        if (!isDoor && ly.sill) { ctx.fillStyle = ly.sill; ctx.fillRect(cx - wwF / 2 - 3, topF + hhF + 1, wwF + 6, Math.max(1.5, wwF * 0.08)); }
-      }
-    }
-  }
-}
-// Atlas da cidade: cor + ALTURA (→ mapa de normais: janelas rebaixadas, molduras, pilastras do palácio,
-// juntas de argamassa dos tijolos, telhas em relevo, lajes do calçamento) + RUGOSIDADE (vidro liso 0.27,
-// paredes foscas ~0.78, tijolo 0.85, telhas 0.72).
-function makeCityAtlas() {
-  const S = 1024, c = makeCanvas(S, S), ctx = c.getContext('2d');
-  const hc = makeCanvas(S, S), hctx = hc.getContext('2d'), rc = makeCanvas(S, S), rctx = rc.getContext('2d');
-  const L = { c: ctx, h: hctx, r: rctx };
-  ctx.fillStyle = '#f4f1ea'; ctx.fillRect(0, 0, S, S);
-  hctx.fillStyle = '#808080'; hctx.fillRect(0, 0, S, S);
-  rctx.fillStyle = '#c8c8c8'; rctx.fillRect(0, 0, S, S);
-  // PAL: fileiras de janelas em arco (palácio branco) com pilastras entre as colunas
-  drawArchWindows(L, 0, 0, 512, 512, 22, 12, { wall: '#f6f3ec', win: '#3a3230', frame: '#dcd6cb', ledge: '#d3cdc2', winW: 0.46, winH: 0.68 });
-  ctx.fillStyle = 'rgba(0,0,0,0.07)'; hctx.fillStyle = '#9a9a9a';
-  for (let i = 1; i < 22; i++) { ctx.fillRect(i * 512 / 22 - 1, 0, 2, 512); hctx.fillRect(i * 512 / 22 - 2, 0, 4, 512); }
-  // BRK: tijolo vermelho com arcos creme (argamassa rebaixada)
-  ctx.fillStyle = '#a84b3b'; ctx.fillRect(512, 0, 512, 512);
-  hctx.fillStyle = '#8a8a8a'; hctx.fillRect(512, 0, 512, 512); rctx.fillStyle = '#d8d8d8'; rctx.fillRect(512, 0, 512, 512);
-  ctx.fillStyle = 'rgba(70,25,20,0.45)'; hctx.fillStyle = '#5c5c5c';
-  for (let yy = 0; yy < 512; yy += 8) {
-    ctx.fillRect(512, yy, 512, 1); hctx.fillRect(512, yy, 512, 1.5);
-    const off = (yy / 8) % 2 ? 10 : 0; for (let xx = off; xx < 512; xx += 20) { ctx.fillRect(512 + xx, yy, 1, 8); hctx.fillRect(512 + xx, yy, 1.5, 8); }
-  }
-  drawArchWindows(L, 512, 0, 512, 512, 16, 8, { wall: null, win: '#3f322d', frame: '#eadbc6', winW: 0.42, winH: 0.62 });
-  // PLAIN: creme com leve ruído (relevo quase nulo)
-  ctx.fillStyle = '#f5f2ec'; ctx.fillRect(0, 512, 256, 256);
-  const grain = noiseCanvas(128, 51, 6, 3, 200, 255);
-  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.5; ctx.drawImage(grain, 0, 512, 256, 256); ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
-  hctx.globalAlpha = 0.12; hctx.drawImage(grain, 0, 512, 256, 256); hctx.globalAlpha = 1;
-  // TOWER: janelas estreitas
-  drawArchWindows(L, 256, 512, 256, 256, 3, 6, { wall: '#f3efe7', win: '#3a3230', frame: '#d8d2c6', winW: 0.3, winH: 0.62 });
-  // PAVE: calçamento (lajes com juntas rebaixadas)
-  ctx.fillStyle = '#d9d0bd'; ctx.fillRect(512, 512, 256, 256);
-  hctx.fillStyle = '#5a5a5a'; hctx.fillRect(512, 512, 256, 256); rctx.fillStyle = '#d0d0d0'; rctx.fillRect(512, 512, 256, 256);
-  const prng = createRng(SEED + 77);
-  for (let yy = 512; yy < 768; yy += 32) for (let xx = 512; xx < 768; xx += 32) {
-    ctx.fillStyle = `rgba(120,100,80,${0.08 + prng() * 0.18})`; ctx.fillRect(xx + 1, yy + 1, 30, 30);
-    const lum = 120 + prng() * 20; hctx.fillStyle = `rgb(${lum},${lum},${lum})`; hctx.fillRect(xx + 2, yy + 2, 28, 28);
-  }
-  // TALL: prédio de vários andares (3x5 janelas em arco), sem porta
-  drawArchWindows(L, 768, 512, 256, 256, 3, 5, { wall: '#ffffff', win: '#3a3230', frame: '#e6e0d5', winW: 0.3, winH: 0.5 });
-  ctx.fillStyle = 'rgba(0,0,0,0.07)'; hctx.fillStyle = '#a0a0a0';
-  for (let r = 1; r < 5; r++) { ctx.fillRect(768, 512 + r * 51.2 - 1, 256, 2); hctx.fillRect(768, 512 + r * 51.2 - 1.5, 256, 3); }
-  // HOUSE: parede branca com 3x2 janelas + porta
-  drawArchWindows(L, 0, 768, 512, 256, 3, 2, { wall: '#ffffff', win: '#3a3230', frame: '#e6e0d5', winW: 0.26, winH: 0.44, door: true });
-  // ROOF: telhas claras (a cor do vértice tinge); ROOFT: telhas rosa/terracota já coloridas. Altura: cada
-  // telha é um arco saliente sobre fundo rebaixado.
-  const tiles = (x0, strokeCol) => {
-    ctx.strokeStyle = strokeCol; ctx.lineWidth = 2; hctx.strokeStyle = '#b0b0b0'; hctx.lineWidth = 3;
-    hctx.fillStyle = '#6a6a6a'; hctx.fillRect(x0, 768, 256, 256); rctx.fillStyle = '#b8b8b8'; rctx.fillRect(x0, 768, 256, 256);
-    for (let row = 0; row < 8; row++) {
-      const yy = 768 + row * 32 + 16; const off = row % 2 ? 16 : 0;
-      for (let xx = x0 + off; xx < x0 + 256 + 32; xx += 32) {
-        ctx.beginPath(); ctx.arc(xx, yy, 15, Math.PI, 0); ctx.stroke();
-        hctx.save(); hctx.beginPath(); hctx.rect(x0, 768, 256, 256); hctx.clip();
-        const g = hctx.createRadialGradient(xx, yy, 2, xx, yy, 15); g.addColorStop(0, '#b4b4b4'); g.addColorStop(1, '#787878');
-        hctx.fillStyle = g; hctx.beginPath(); hctx.arc(xx, yy, 15, Math.PI, 0); hctx.fill(); hctx.restore();
-      }
-    }
-  };
-  ctx.fillStyle = '#ffffff'; ctx.fillRect(512, 768, 256, 256); tiles(512, '#b8aea2');
-  ctx.fillStyle = '#c9775f'; ctx.fillRect(768, 768, 256, 256); tiles(768, 'rgba(90,40,30,0.5)');
-  ctx.save(); ctx.beginPath(); ctx.rect(768, 768, 256, 256); ctx.clip();
-  const rt = noiseCanvas(128, 93, 5, 3, 170, 255); ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.5; ctx.drawImage(rt, 768, 768, 256, 256);
-  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; ctx.restore();
-  return { map: canvasTexture(c), normal: canvasTexture(normalCanvas(canvasField(hc), 3), false), rough: canvasTexture(rc, false) };
-}
-
 function makeTasselTexture() {
   const W = 256, H = 512, c = makeCanvas(W, H), ctx = c.getContext('2d');
   // cúpula rosa com tachas douradas (metade de cima, v∈[0.5,1])
@@ -638,7 +531,7 @@ function makePompomTextures() {
   // base quase branca: a cor real vem da instância (evita escurecer duas vezes)
   ctx.fillStyle = '#ededed'; ctx.fillRect(0, 0, S, S);
   const blot = noiseCanvas(128, 61, 9, 3, 170, 255);
-  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.45; ctx.drawImage(blot, 0, 0, S, S);
+  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.3; ctx.drawImage(blot, 0, 0, S, S);
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
   const rng = createRng(SEED + 606);
   const b = makeCanvas(S, S), bctx = b.getContext('2d');
@@ -646,7 +539,7 @@ function makePompomTextures() {
   for (let i = 0; i < 4200; i++) {
     const x = rng() * S, y = rng() * S, a = rng() * TAU, L = 4 + rng() * 9, w = 0.7 + rng() * 1.2;
     const light = rng() < 0.5;
-    ctx.strokeStyle = light ? `rgba(255,255,255,${0.25 + rng() * 0.35})` : `rgba(40,40,40,${0.15 + rng() * 0.3})`;
+    ctx.strokeStyle = light ? `rgba(255,255,255,${0.08 + rng() * 0.12})` : `rgba(40,40,40,${0.05 + rng() * 0.1})`;   // variação suave (fios), sem padrão
     ctx.lineWidth = w; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(a) * L, y + Math.sin(a) * L); ctx.stroke();
     bctx.strokeStyle = light ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)'; bctx.lineWidth = w; bctx.lineCap = 'round';
     bctx.beginPath(); bctx.moveTo(x, y); bctx.lineTo(x + Math.cos(a) * L, y + Math.sin(a) * L); bctx.stroke();
@@ -655,36 +548,6 @@ function makePompomTextures() {
   return { map: canvasTexture(c), normal: linearTexture(normalCanvas(canvasField(b), 2.6), 1, 1) };
 }
 
-// "Crosta" de casinhas: ladrilho de quadradinhos pastel (malha 20×20 com jitter dentro da célula:
-// fecha perfeitamente) com frestas escuras, um lado de sombra e um fio de luz; de longe o dorso lê
-// como crosta rosa/branca fina (ref. 4). bump: quadrados claros sobre fundo escuro.
-function makeCrustTextures() {
-  const S = 1024, N = 20, cell = S / N;
-  const c = makeCanvas(S, S), ctx = c.getContext('2d');
-  const b = makeCanvas(S, S), bctx = b.getContext('2d');
-  ctx.fillStyle = '#a3928b'; ctx.fillRect(0, 0, S, S);
-  bctx.fillStyle = '#404040'; bctx.fillRect(0, 0, S, S);
-  const rng = createRng(SEED + 808);
-  const pale = ['#f7f1e8', '#f3ebe0', '#f1e2d4', '#f2d9cc', '#efd0c2', '#ebe0d0', '#faf5ee', '#e9d6c6', '#f4e6e0', '#e6c9bd', '#d9b5a8', '#f0dcd2'];
-  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    if (rng() < 0.06) continue;                               // fresta/ruela
-    const gap = cell * (0.12 + rng() * 0.14);
-    const w = cell - gap - rng() * cell * 0.18, h = cell - gap - rng() * cell * 0.18;
-    const x = i * cell + gap * 0.5 + rng() * (cell - w - gap), y = j * cell + gap * 0.5 + rng() * (cell - h - gap);
-    const col = pale[Math.floor(rng() * pale.length)];
-    ctx.fillStyle = col; ctx.fillRect(x, y, w, h);
-    // lado de sombra (embaixo/direita) e fio de luz (em cima)
-    ctx.fillStyle = 'rgba(80,50,45,0.26)'; ctx.fillRect(x, y + h - h * 0.26, w, h * 0.26); ctx.fillRect(x + w - w * 0.14, y, w * 0.14, h);
-    ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(x, y, w, Math.max(1, h * 0.08));
-    if (rng() < 0.3) { ctx.fillStyle = 'rgba(205,120,100,0.55)'; ctx.fillRect(x + w * 0.1, y + h * 0.1, w * 0.8, h * 0.45); }   // telhado rosa
-    const lum = 150 + rng() * 90;
-    bctx.fillStyle = `rgb(${lum},${lum},${lum})`; bctx.fillRect(x, y, w, h);
-  }
-  const grain = noiseCanvas(256, 93, 6, 3, 200, 255);
-  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.2; for (let y = 0; y < S; y += 256) for (let x = 0; x < S; x += 256) ctx.drawImage(grain, x, y, 256, 256);
-  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
-  return { map: canvasTexture(c), bump: canvasTexture(b, false) };
-}
 // Sprite macio para o jato d'água (disco radial branco → transparente).
 function makeSprayTexture() {
   const S = 64, c = makeCanvas(S, S), ctx = c.getContext('2d');
@@ -698,7 +561,7 @@ let shared = null;
 function getShared() {
   if (shared) return shared;
   const skin = makeSkinTextures(), trunk = makeTrunkTextures(), cloth = makeClothTextures(), gold = makeGoldTextures(), ivory = makeIvoryTextures();
-  const city = makeCityAtlas(), tassel = makeTasselTexture(), eye = makeEyeTexture(), pom = makePompomTextures();
+  const tassel = makeTasselTexture(), eye = makeEyeTexture(), pom = makePompomTextures();
   const crust = makeCrustTextures(), spray = makeSprayTexture();
   const NS = new THREE.Vector2(MT.SKIN_NORMAL_SCALE, MT.SKIN_NORMAL_SCALE);
   const mat = {
@@ -714,41 +577,41 @@ function getShared() {
     ivory: new THREE.MeshPhysicalMaterial({ map: ivory.map, normalMap: ivory.normal, normalScale: new THREE.Vector2(0.35, 0.35), roughness: MT.IVORY_ROUGHNESS, metalness: 0, clearcoat: MT.IVORY_CLEARCOAT, clearcoatRoughness: 0.4, sheen: 0.3, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xfff2dc), envMapIntensity: 0.8 }),
     // ouro-bronze escovado: metal puro (reflete o envMap); emissivo residual fraco para não ficar preto sem envMap
     gold: new THREE.MeshStandardMaterial({ color: MT.GOLD_COLOR, metalness: 1, roughness: 1, roughnessMap: gold.rough, normalMap: gold.normal, normalScale: new THREE.Vector2(0.35, 0.35), emissive: 0x3a2608, emissiveIntensity: MT.GOLD_EMISSIVE, envMapIntensity: MT.GOLD_ENV }),
-    // cidade: cor do vértice × atlas (paredes brancas no atlas → sem escurecer duas vezes); janelas rebaixadas e lisas
-    city: new THREE.MeshStandardMaterial({ map: city.map, normalMap: city.normal, normalScale: new THREE.Vector2(MT.CITY_NORMAL_SCALE, MT.CITY_NORMAL_SCALE), roughnessMap: city.rough, roughness: 1, vertexColors: true, metalness: 0, envMapIntensity: 0.5 }),
+    // cidade: material único com texturas reais + janelas em arco procedurais (architecture.js)
+    arch: getArchMaterial(),
     // borla: cúpula rosa (textura) + fios (cor por vértice sobre textura quase branca)
     pink: new THREE.MeshStandardMaterial({ map: tassel, vertexColors: true, roughness: 0.85, metalness: 0, envMapIntensity: 0.4 }),
     // olho: esclera molhada (clearcoat + roughness baixa); brilho branco acende via emissiveMap
     eye: new THREE.MeshPhysicalMaterial({ map: eye, emissiveMap: eye, emissive: 0xffffff, emissiveIntensity: 0.45, roughness: MT.EYE_ROUGHNESS, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 1 }),
     silver: new THREE.MeshStandardMaterial({ color: 0xbdb9b2, metalness: 1, roughness: 1, roughnessMap: gold.rough, normalMap: gold.normal, normalScale: new THREE.Vector2(0.3, 0.3), emissive: 0x2a2724, emissiveIntensity: 0.5, envMapIntensity: 0.55 }),
     // lã: sem brilho algum + pelos em relevo (a cor vem da instância)
-    // lã bouclé real (Poly Haven): a cor bege-clara da textura é neutralizada (color) para a instância tingir
-    pompom: new THREE.MeshStandardMaterial({ map: pom.map, normalMap: pom.normal, normalScale: new THREE.Vector2(1.1, 1.1), roughness: 1.0, metalness: 0, envMapIntensity: 0.4 }),
+    // lã felpuda procedural: fios em relevo na normal + leve variação de cor (a cor vem da instância)
+    pompom: new THREE.MeshStandardMaterial({ map: pom.map, normalMap: pom.normal, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 1.0, metalness: 0, envMapIntensity: 0.4 }),
     // crosta de casinhas do dorso (casca fina; alfa por vértice esmaece as bordas)
-    crust: new THREE.MeshStandardMaterial({ map: crust.map, bumpMap: crust.bump, bumpScale: 2.5, roughness: 0.85, metalness: 0, vertexColors: true, transparent: true, depthWrite: true, alphaTest: 0.02, envMapIntensity: 0.5 }),
+    crust: patchCrustMaterial(new THREE.MeshStandardMaterial({ map: crust.map, bumpMap: crust.bump, bumpScale: 2.5, roughness: 0.88, metalness: 0, vertexColors: true, transparent: true, depthWrite: true, alphaTest: 0.02, envMapIntensity: 0.5 })),
     // jato d'água: pontos aditivos brancos (a cor por vértice esmaece para névoa)
     spray: new THREE.PointsMaterial({ map: spray, size: EM.SPRAY_POINT_SIZE * (E.SCALE || 1), sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true, opacity: 0.5, fog: true }),
   };
   // Texturas reais (Poly Haven, CC0; src/assets.js) — carregam de forma assíncrona e entram nos
   // materiais quando TODAS as imagens chegaram (antes disso valem os mapas procedurais):
   //   pele (triplanar): fabric_leather_02 + brown_mud_dry;  panos/manga: poly_wool_herringbone;
-  //   pompons: wool_boucle (só a normal: a cor do bouclé é xadrez).
+  //   pompons: lã procedural (o bouclé real tem trama em grade e virava xadrez).
   const herr = (ru, rv, map) => tex('poly_wool_herringbone', map, { repeat: [ru, rv] });
   const real = {
     clothN: herr(MT.CLOTH_WEAVE_REPEAT, MT.CLOTH_WEAVE_REPEAT, 'nor_gl'), clothR: herr(MT.CLOTH_WEAVE_REPEAT, MT.CLOTH_WEAVE_REPEAT, 'rough'),
     trunkN: herr(MT.TRUNK_WEAVE_REPEAT.u, MT.TRUNK_WEAVE_REPEAT.v, 'nor_gl'), trunkR: herr(MT.TRUNK_WEAVE_REPEAT.u, MT.TRUNK_WEAVE_REPEAT.v, 'rough'),
-    pomN: tex('wool_boucle', 'nor_gl', { repeat: [2, 1] }),
   };
   const all = [...Object.values(real), ...Object.values(mat.skinTri.userData.real)];
   let upgraded = false;
   const upgrade = () => {
+    if (!mat.arch.userData.arch.uArchReady.value && mat.arch.userData.ready()) mat.arch.userData.arch.uArchReady.value = 1;
     if (upgraded || !all.every((t) => t && t.image && t.image.width)) return;
     upgraded = true;
     mat.skinTri.userData.onReady();
     mat.cloth.normalMap = real.clothN; mat.cloth.roughnessMap = real.clothR; mat.cloth.roughness = 1; mat.cloth.normalScale.set(0.8, 0.8);
     mat.trunk.normalMap = real.trunkN; mat.trunk.roughnessMap = real.trunkR; mat.trunk.roughness = 1; mat.trunk.normalScale.set(0.8, 0.8);
-    mat.pompom.normalMap = real.pomN;   // (a cor do bouclé é xadrez: tingida pela instância vira tartã → fica a lã procedural na cor)
-    for (const k of ['cloth', 'trunk', 'pompom']) mat[k].needsUpdate = true;
+    // pompons: SÓ lã procedural (o bouclé real tem trama em grade → xadrez/tartã na luz)
+    for (const k of ['cloth', 'trunk']) mat[k].needsUpdate = true;
   };
   shared = { mat, upgrade };
   return shared;
@@ -948,44 +811,17 @@ function fuzzySphere(r, ws, hs, amount) {
   return m;
 }
 
-// Casa em caixa: paredes com janelas (atlas HOUSE), telhado tingido (ROOF), base lisa.
-// upAxis: 'y' (cidade do dorso/presas) ou 'z' (terraços das orelhas: o lado de fora da orelha é +z).
-// facadeOut: a face de cima recebe a fachada com janelas (blocos das orelhas); tall: fachada de vários andares.
-function boxHouse(w, h, d, upAxis, wallColor, roofColor, facadeOut = false, tall = false, noBottom = false) {
-  let g = new THREE.BoxGeometry(w, h, d);
-  if (noBottom) { // remove a face de baixo (−y ou −z): afundada na pele, nunca se vê → 10 triângulos
-    const idx = Array.from(g.index.array), f0 = upAxis === 'y' ? 18 : 30; idx.splice(f0, 6); g.setIndex(idx);
-  }
-  const sideReg = tall ? REG.TALL : REG.HOUSE;
-  // ordem das faces na BoxGeometry: +x, -x, +y, -y, +z, -z (4 vértices cada)
-  const faces = { px: [0, 4], nx: [4, 8], py: [8, 12], ny: [12, 16], pz: [16, 20], nz: [20, 24] };
-  const roof = upAxis === 'y' ? faces.py : faces.pz, bottom = upAxis === 'y' ? faces.ny : faces.nz;
-  setColorRange(g, wallColor);
-  for (const k of Object.keys(faces)) {
-    const f = faces[k];
-    if (f === roof) { remapUV(g, facadeOut === 'plain' ? REG.PLAIN : facadeOut ? (tall ? REG.TALL : REG.HOUSE) : REG.ROOF, f[0], f[1]); setColorRange(g, roofColor, f[0], f[1]); }
-    else if (f === bottom) remapUV(g, REG.PLAIN, f[0], f[1]);
-    else remapUV(g, facadeOut ? REG.PLAIN : sideReg, f[0], f[1]);
-  }
+// Pinta uma face (0..5: +x, −x, +y, −y, +z, −z) de uma BoxGeometry/facBox com outra cor de vértice.
+function colorFace(g, f, color) {
+  const c = new THREE.Color(color), col = g.attributes.color;
+  for (let i = f * 4; i < f * 4 + 4; i++) col.setXYZ(i, c.r, c.g, c.b);
   return g;
 }
-// Telhado de duas águas (cume ao longo de x), base em y=0
-function roofWedge(w, d, h, color) {
-  const hw = w / 2, hd = d / 2;
-  const pos = [-hw, 0, hd, hw, 0, hd, hw, h, 0, -hw, h, 0, hw, 0, -hd, -hw, 0, -hd, -hw, h, 0, hw, h, 0, hw, 0, hd, hw, 0, -hd, hw, h, 0, -hw, 0, -hd, -hw, 0, hd, -hw, h, 0];
-  const idx = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 11, 12, 13];
-  const uv = [0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0.5, 1, 0, 0, 1, 0, 0.5, 1];
-  const g = new THREE.BufferGeometry();
-  g.setIndex(idx); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  g.computeVertexNormals(); remapUV(g, REG.ROOF); setColorRange(g, color);
-  return g;
-}
-// Caixa de arquitetura com região do atlas nas laterais, topo liso e cor de vértice
-function archBox(w, h, d, sideReg, color, { ru = 1, rv = 1, topReg = REG.PLAIN, topColor = color } = {}) {
-  const g = new THREE.BoxGeometry(w, h, d);
-  setColorRange(g, color);
-  remapUV(g, sideReg, 0, 8, ru, rv); remapUV(g, sideReg, 16, 24, ru, rv);
-  remapUV(g, topReg, 8, 12); setColorRange(g, topColor, 8, 12); remapUV(g, REG.PLAIN, 12, 16);
+// Fachada no TOPO de uma facBox (terraços dos flancos): a coordenada vertical das janelas corre ao longo de −z
+// local; se esse eixo apontar para baixo no mundo (flip), inverte-a para os arcos ficarem de pé.
+function uprightTop(g, flip, d) {
+  if (!flip) return g;
+  const fa = g.attributes.aFac; for (let i = 8; i < 12; i++) fa.setY(i, d - fa.getY(i));
   return g;
 }
 
@@ -1128,6 +964,9 @@ function makeTriplanarSkin(src) {
     triReady: { value: 0 }, leatherN: { value: src.normal }, leatherR: { value: src.rough }, mudN: { value: src.normal }, mudD: { value: src.rough },
     scLeather: { value: new THREE.Vector2(1 / SC.LEATHER_TILE, 1 / (SC.LEATHER_TILE * 2.618)) }, scMud: { value: new THREE.Vector2(1 / SC.MUD_TILE, 1 / (SC.MUD_TILE * 2.71)) },
     nsLeather: { value: SC.LEATHER_NORMAL }, nsMud: { value: SC.MUD_NORMAL }, mudTone: { value: SC.MUD_TONE },
+    // o detalhe fino (couro, rachaduras) esmaece com a distância (em metros do MUNDO): de longe a pele lê como
+    // dobras pesadas e lisas, sem o aspecto "felpudo"
+    fadeL: { value: new THREE.Vector2(SC.DETAIL_FADE.leather[0], SC.DETAIL_FADE.leather[1]) }, fadeM: { value: new THREE.Vector2(SC.DETAIL_FADE.mud[0], SC.DETAIL_FADE.mud[1]) },
   };
   // pronto quando as 4 imagens tiverem chegado (verificado a cada quadro pelo elefante)
   // (as texturas só entram nos uniformes depois de carregadas: antes disso ficam os mapas procedurais)
@@ -1145,12 +984,13 @@ varying vec3 vTriP;
 varying vec3 vTriN;
 uniform sampler2D triMap, triNormal, triRough, leatherN, leatherR, mudN, mudD;
 uniform float triScaleC, triScaleN, triNS, triSharp, triReady, nsLeather, nsMud, mudTone;
-uniform vec2 scLeather, scMud;
+uniform vec2 scLeather, scMud, fadeL, fadeM;
+float triKL = 1.0, triKM = 1.0;
 // normal em espaço tangente de uma projeção: couro (2 escalas) + lama rachada, mistura "whiteout"
 vec3 triTanN(vec2 p) {
   vec3 a = texture2D(leatherN, p * scLeather.x).xyz * 2.0 - 1.0, b = texture2D(leatherN, p * scLeather.y + 0.37).xyz * 2.0 - 1.0;
   vec3 c = texture2D(mudN, p * scMud.x + 0.61).xyz * 2.0 - 1.0;
-  vec2 xy = a.xy * nsLeather * 0.65 + b.xy * nsLeather * 0.45 + c.xy * nsMud;
+  vec2 xy = ( a.xy * 0.65 + b.xy * 0.45 ) * nsLeather * triKL + c.xy * nsMud * triKM;
   return normalize(vec3(xy, a.z * b.z * c.z));
 }
 // luminância da lama seca (2 escalas) relativa à média → modula o cinza quente procedural
@@ -1173,11 +1013,12 @@ vec3 triPerturb(vec3 eyePos, vec3 N, vec2 uv, vec3 mapN) {
   diffuseColor *= tc;
 }`)
       .replace('#include <roughnessmap_fragment>', `float roughnessFactor = roughness;
+{ float vd = length( vViewPosition ); triKL = 1.0 - smoothstep( fadeL.x, fadeL.y, vd ); triKM = 1.0 - smoothstep( fadeM.x, fadeM.y, vd ); }
 {
   vec3 tw = triW(); vec3 tp = vTriP * triScaleN;
   if (triReady > 0.5) {
     vec2 s = vec2(scLeather.x); float r = texture2D(leatherR, vTriP.zy * s.x).g * tw.x + texture2D(leatherR, vTriP.xz * s.x).g * tw.y + texture2D(leatherR, vTriP.xy * s.x).g * tw.z;
-    roughnessFactor *= clamp(0.62 + 0.45 * r, 0.6, 0.97);
+    roughnessFactor *= mix(0.86, clamp(0.62 + 0.45 * r, 0.6, 0.97), triKL);
   } else roughnessFactor *= texture2D(triRough, tp.zy).g * tw.x + texture2D(triRough, tp.xz).g * tw.y + texture2D(triRough, tp.xy).g * tw.z;
 }`)
       .replace('#include <normal_fragment_maps>', `{
@@ -1185,9 +1026,9 @@ vec3 triPerturb(vec3 eyePos, vec3 N, vec2 uv, vec3 mapN) {
   vec3 mx, my, mz;
   if (triReady > 0.5) { mx = triTanN(vTriP.zy); my = triTanN(vTriP.xz); mz = triTanN(vTriP.xy); }
   else {
-    mx = texture2D(triNormal, tp.zy).xyz * 2.0 - 1.0; mx.xy *= triNS;
-    my = texture2D(triNormal, tp.xz).xyz * 2.0 - 1.0; my.xy *= triNS;
-    mz = texture2D(triNormal, tp.xy).xyz * 2.0 - 1.0; mz.xy *= triNS;
+    mx = texture2D(triNormal, tp.zy).xyz * 2.0 - 1.0; mx.xy *= triNS * triKL;
+    my = texture2D(triNormal, tp.xz).xyz * 2.0 - 1.0; my.xy *= triNS * triKL;
+    mz = texture2D(triNormal, tp.xy).xyz * 2.0 - 1.0; mz.xy *= triNS * triKL;
   }
   vec3 nAcc = tw.x * triPerturb(-vViewPosition, normal, tp.zy, mx) + tw.y * triPerturb(-vViewPosition, normal, tp.xz, my) + tw.z * triPerturb(-vViewPosition, normal, tp.xy, mz);
   normal = normalize(nAcc);
@@ -1220,6 +1061,11 @@ export function createElephant(route, index, opts = {}) {
   const add = (key, g, bone = 0, color, cavity = true) => { const pg = prep(g, bone, color); if (key === 'skin' && cavity) bakeCavity(pg); parts[key].push(pg); return g; };
   const tmp = new V3(), tmp2 = new V3(), tmp3 = new V3();
   const fitted = getFitted(low);
+  // cidade mesclada (palácio, templos, praça, orelhas, presas, alto da cabeça): geometrias já com osso → um
+  // SkinnedMesh com o material "arch" (src/elephant/architecture.js)
+  const cityGeo = [];
+  const addCity = (g, bone = 0) => { cityAttrs(g); cityGeo.push(prep(g, bone)); return g; };
+  const addGold = (g, bone = 0) => add('gold', g, bone);
 
   // ====================== PELE ESCULPIDA (uma malha) ======================
   // corpo, pescoço, cabeça, tromba, patas e cauda: um único campo de distância poligonizado
@@ -1343,6 +1189,16 @@ export function createElephant(route, index, opts = {}) {
     }
     return best;
   };
+  // grade polar regular dentro de earShape(sMax): anéis de s constante × ângulos (no plano z)
+  const earPolarGrid = (sMax, NT, NS, z) => {
+    const pos = [], idx = [];
+    for (let i = 0; i <= NS; i++) { const s = (sMax * i) / NS; for (let j = 0; j <= NT; j++) { const th = (j / NT) * TAU, R = outlineDist(th) * s; pos.push(EAR_C.x + Math.cos(th) * R, EAR_C.y + Math.sin(th) * R, z); } }
+    for (let i = 0; i < NS; i++) for (let j = 0; j < NT; j++) { const a = i * (NT + 1) + j, b = a + NT + 1; idx.push(a, b, a + 1, a + 1, b, b + 1); }
+    const g = new THREE.BufferGeometry(); g.setIndex(idx); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array((pos.length / 3) * 2), 2));
+    return mergeVertices(g);   // solda a emenda θ = 0/2π e o centro
+  };
+  const EAR_BAY = 3.2, EAR_ST = 3.4;   // janelas das casas da orelha (casas grandes: ~9 vãos × 6 andares)
   const earScaleOf = (x, y) => { const dx = x - EAR_C.x, dy = y - EAR_C.y; return Math.hypot(dx, dy) / outlineDist(Math.atan2(dy, dx)); };
   // deformação da orelha: topo enrolando para fora, traseira abrindo, lobo de baixo abrindo um pouco,
   // leve concavidade no miolo e dobras esculpidas (lençóis quase verticais, ondulados)
@@ -1385,18 +1241,19 @@ export function createElephant(route, index, opts = {}) {
     // aba de pele (grossa na raiz, fina na borda: bisel)
     let ear = new THREE.ExtrudeGeometry(earShape(1), { depth: 28, bevelEnabled: true, bevelThickness: 18, bevelSize: 18, bevelSegments: 3, curveSegments: low ? 5 : 6 });
     ear.translate(0, 0, 18); earUV(ear); ear = tessellate(ear, low ? 80 : 52); mapVertices(ear, earWarp);
-    ear = mergeVertices(ear); ear.computeVertexNormals();
+    ear.deleteAttribute('normal'); ear = mergeVertices(ear); ear.computeVertexNormals();   // solda (normais suaves)
     add('skin', finish(ear), bone, undefined, false);
     // manto: miolo de tecido escuro + borda listrada (anel concêntrico), ambos no lado de fora
     const Z_BL = 67; // acima da face de fora da orelha (bisel chega a z≈64)
-    let core = new THREE.ExtrudeGeometry(earShape(RING_IN + 0.01), { depth: 6, bevelEnabled: false, curveSegments: 6 });
-    core.translate(0, 0, Z_BL); core = tessellate(core, low ? 90 : 70); coreUV(core);
-    mapVertices(core, earWarp); core = mergeVertices(core); core.computeVertexNormals();
+    // miolo: grade POLAR regular no espaço do contorno (sem os leques de triângulos finos da tampa extrudada)
+    // e vértices soldados → normais suaves: o tecido lê macio, sem facetas
+    const core = earPolarGrid(RING_IN + 0.01, low ? 72 : 104, low ? 16 : 24, Z_BL + 6); coreUV(core);
+    mapVertices(core, earWarp);
     add('cloth', finish(core), bone);
     const ringShape = earShape(RING_OUT); ringShape.holes.push(earShape(RING_IN));
     let ring = new THREE.ExtrudeGeometry(ringShape, { depth: 12, bevelEnabled: true, bevelThickness: 4, bevelSize: 4, bevelSegments: 1, curveSegments: 6 });
     ring.translate(0, 0, Z_BL - 2); ring = tessellate(ring, low ? 80 : 55); ringUV(ring, RING_OUT, RING_IN);
-    mapVertices(ring, earWarp); ring = mergeVertices(ring); ring.computeVertexNormals();
+    mapVertices(ring, earWarp); ring.deleteAttribute('normal'); ring = mergeVertices(ring); ring.computeVertexNormals();
     add('cloth', finish(ring), bone);
     // bloco de casinhas em terraços sobre o manto, na parte superior-externa: MUITAS fileiras de
     // caixinhas (profundidades 6–14), com 1–2 recortes e algumas torrinhas finas na borda de cima
@@ -1433,7 +1290,9 @@ export function createElephant(route, index, opts = {}) {
         const sw = dx * 0.86 * (tower ? 0.7 : hrng.range(SZ.min, SZ.max)), sh = dy * 0.8 * (tower ? 0.7 : hrng.range(SZ.min, SZ.max));
         const ox = hrng.range(-0.14, 0.14) * dx, oy = hrng.range(-0.12, 0.12) * dy, rot = hrng.range(-0.1, 0.1);
         const wall = hrng() < 0.85 ? hrng.pick(COLORS.houses) : hrng.pick([0xd9a593, 0xe7b39f, 0xf0d8c8]);
-        const b = boxHouse(sw, sh, h, 'z', wall, wall, hrng() < 0.4 ? true : 'plain', false, true);
+        // caixa: a face +z (para fora da orelha) é a fachada de janelas; o topo (+y), telhas ou laje
+        const b = facBox(sw, sh, h, { side: [SF.HOUSE, EAR_BAY, EAR_ST], top: hrng() < 0.55 ? [SF.ROOF] : [SF.FLAT], bottom: [SF.PLAIN], color: wall });
+        colorFace(b, 2, hrng.pick(COLORS.roofs));
         b.rotateZ(rot); b.translate(x + ox, y + oy, Z_BL + 4 + h / 2);
         mapVertices(b, earWarp);
         hg.push(b);
@@ -1444,9 +1303,9 @@ export function createElephant(route, index, opts = {}) {
     if (topRowY > -Infinity) for (let k = 0; k < 5; k++) {
       const col = 1 + Math.floor(((k + 0.5) / 5) * (COLS - 2)); const x = HOUSE_RECT.x0 + (col + 0.5) * dx;
       const th = 30 + hrng() * 40; if (!inCore(x, topRowY + th * 0.5)) continue;
-      const t = archBox(dx * 0.45, th, 9, REG.PLAIN, 0xf6f3ec, { topReg: REG.PLAIN }); t.translate(x, topRowY + th / 2, Z_BL + 4 + 4.5); mapVertices(t, earWarp); hg.push(t);
+      const t = facBox(dx * 0.45, th, 9, { side: [SF.PALACE, 4, 7], top: [SF.MARBLE], color: 0xf6f3ec }); t.translate(x, topRowY + th / 2, Z_BL + 4 + 4.5); mapVertices(t, earWarp); hg.push(t);
     }
-    if (hg.length) add('city', finish(mergeGeometries(hg, false)), bone);
+    if (hg.length) addCity(finish(mergeGeometries(hg, false)), bone);
   }
   // ============================ PLACA DOURADA ======================
   {
@@ -1569,15 +1428,18 @@ export function createElephant(route, index, opts = {}) {
     add('cloth', g);
   }
   // ============================ CIDADE DO DORSO ====================
-  // Dois níveis de detalhe: (a) uma casca-CROSTA fina (pele + 3) com textura de casinhas minúsculas,
-  // sempre visível: de longe/de cima o dorso lê como crosta rosa/branca; (b) um tapete de MILHARES de
-  // casinhas instanciadas (8–16 m de pé no mundo) por cima, escondido além de LOD_DISTANCE.
-  // Palácio ENORME (≈ 1/3 do corpo) com muralha arcada, cúpulas douradas, minaretes e torres rosa;
-  // prédio de tijolos e praça de mercado no centro (ponto da entrega); 2 templos menores; terraços
-  // pálidos pendurados nos flancos; mesquitas e torres espalhadas.
-  const city = [];
-  const goldCity = [];
-  const carpet = { flat: [], tile: [] };   // instâncias do tapete: {m: Matrix4, c: cor}
+  // Dois níveis de detalhe: (a) uma casca-CROSTA fina (pele + 3) sempre visível — de longe a textura
+  // de quarteirões vistos do alto (lajes pálidas, telhados rosa/terracota, ruas), de perto o chão de pedra
+  // das ruas; (b) um TAPETE de milhares de casas instanciadas em 4 arquétipos (laje com ameias, telhado
+  // de 4 águas, bloco alto com lojas e toldo, casa com cupulazinha) numa grade DEFORMADA que segue o dorso,
+  // com ruas estreitas, avenidas e pracinhas, escondido além de lodDistance. Palácio branco imenso de
+  // arcadas (soco de tijolos arcado, 2 andares com cornijas e balaustradas, tambor com janelas, cúpula
+  // dourada em bulbo com nervuras, 4 cúpulas menores, quiosques, 8 minaretes com 3 varandas, torres rosa
+  // de telhado cônico, muro de tijolos ameado); prédio de tijolos ameado e praça do mercado (ponto da
+  // entrega) com bancas de toldo colorido, guarda-sóis e chafariz; 2 templos; terraços nos flancos;
+  // mesquitas e torres espalhadas. Tudo num único material (architecture.js).
+  const carpet = { flat: [], hip: [], tall: [], dome: [] };   // instâncias do tapete: {m: Matrix4, c: cor}
+  const market = { stall: [], umbrella: [] };
   const tuskInst = [];                      // instâncias das casinhas das presas
   const rngCity = createRng(SEED + 9001 + index * 31);
   const RX = B.rx * BODY_SX;
@@ -1592,89 +1454,120 @@ export function createElephant(route, index, opts = {}) {
   const nearPlaza = (x, z) => x > PZ.x0 - 40 && x < PZ.x1 + 40 && Math.abs(z) < PZ.hz + 40;
   const TEMPLES = [{ x: 390, z: 235, hx: 80, hz: 58, h: 140, ang: 0.25 }, { x: -95, z: -335, hx: 72, hz: 56, h: 125, ang: -0.2 }];
   const inTemple = (x, z) => TEMPLES.some((t) => Math.abs(x - t.x) < t.hx + 30 && Math.abs(z - t.z) < t.hz + 30);
-  const PALE = [0xf8f4ec, 0xf4efe5, 0xf1e6d6, 0xf3dccd, 0xf0d0c0, 0xece2d2, 0xfaf6f0, 0xead9c8, 0xf6e9e2];
+  // tintas pastel das fachadas (multiplicam o reboco real): branco, creme, rosa-pálido, ocre, terracota clara
+  const PASTEL = [0xf7f3ec, 0xf5efe4, 0xf3e7d3, 0xf0dfc6, 0xf2ddd2, 0xefd0c3, 0xead29f, 0xe6c493, 0xe9bca4, 0xf6f0e8, 0xf1e4d0, 0xe8cdb8];
+  const pastel = (r) => PASTEL[Math.floor(r() * PASTEL.length) % PASTEL.length];
+  const ST = CT.STOREY;
+  // pracinhas espalhadas (fora do palácio, templos, mercado)
+  const plazas = [];
+  for (let tries = 0; tries < 200 && plazas.length < CT.PLAZAS; tries++) {
+    const x = rngCity.range(-RX * 0.72, RX * 0.7), z = rngCity.range(-B.rz * 0.55, B.rz * 0.55), r = rngCity.range(CT.PLAZA_R.min, CT.PLAZA_R.max);
+    if (inPalace(x, z) || inBrick(x, z) || nearPlaza(x, z) || inTemple(x, z) || TEMPLES.some((t) => Math.hypot(x - t.x, z - t.z) < r + 120)) continue;
+    if (Math.hypot(x - PALACE_X, z) < PS.hx + r + 140 || plazas.some((p) => Math.hypot(p.x - x, p.z - z) < p.r + r + 110)) continue;
+    const n = surfAt(x, z, tmp3); if (!n || n.y < 0.85 || insideNeckOrHead(tmp3)) continue;
+    plazas.push({ x, z, r });
+  }
+  const inSmallPlaza = (x, z) => plazas.some((p) => (x - p.x) ** 2 + (z - p.z) ** 2 < p.r * p.r);
+  // ---- tapete: grade (x ao longo do dorso, arco ao redor) deformada; ruas recortam as células ----
+  // c: coordenada deformada (m); a célula [c−half, c+half] é recortada pela rua do início do quarteirão
+  // (avenida a cada AVENUE_EVERY quarteirões) e termina no fim do quarteirão → { off, size } ou null.
+  const swOf = (k, seed) => ((((k + seed) % CT.AVENUE_EVERY) + CT.AVENUE_EVERY) % CT.AVENUE_EVERY === 0 ? CT.AVENUE : CT.STREET);
+  const clip1 = (c, half, blk, seed) => {
+    const k = Math.floor(c / blk), u = c - k * blk;
+    let lo = Math.max(u - half, swOf(k, seed)), hi = Math.min(u + half, blk);
+    if (hi - lo < half * 0.75) return null;
+    return { off: (lo + hi) / 2 - u, size: hi - lo };
+  };
+  const pickKind = (r) => { const M = CT.MIX; return r < M.flat ? 'flat' : r < M.flat + M.hip ? 'hip' : r < M.flat + M.hip + M.tall ? 'tall' : 'dome'; };
+  const storeysOf = (kind) => rngCity.int(CT.STOREYS[kind][0], CT.STOREYS[kind][1]);
+  const heightOf = (kind, n) => n * ST + (kind === 'hip' ? 0.12 : CT.PARAPET + 0.08);
+  const nCarpet = () => carpet.flat.length + carpet.hip.length + carpet.tall.length + carpet.dome.length;
+  const dummy = new THREE.Object3D();
+  // coloca uma instância: base (y=0 local) em p, "para cima" up, largura w (x), fundo d (z), giro yaw
+  const pushHouse = (kind, p, up, w, h, d, yaw, col) => {
+    if (kind === 'hip' && d > w) { const t = w; w = d; d = t; yaw += Math.PI / 2; }
+    dummy.position.copy(p); dummy.quaternion.copy(quatFromUp(up)).multiply(_qy.setFromAxisAngle(_up, yaw)); dummy.scale.set(w, h, d); dummy.updateMatrix();
+    carpet[kind].push({ m: dummy.matrix.clone(), c: col });
+  };
+  const _qy = new THREE.Quaternion();
   {
     const spacing0 = low ? EM.CITY_SPACING_LOW : EM.CITY_SPACING_HIGH;
-    const nrm = new V3(), qh = new THREE.Quaternion(), qy = new THREE.Quaternion(), dirv = new V3(), upMix = new V3();
-    const dummy = new THREE.Object3D();
+    const nrm = new V3(), dirv = new V3(), upMix = new V3(), pos = new V3(), dir2 = new V3(), pX = new V3(), pA = new V3();
     let row = 0;
     const phiMaxAll = EM.CITY_FLANK_ANGLE;
     for (let x = -RX * 0.97; x <= RX * 0.95; x += spacing0, row++) {
       const nx = x / RX; const k = Math.sqrt(Math.max(0.03, 1 - nx * nx));
       const arcR = (k * (B.ry + B.rz)) / 2;      // raio aproximado da seção transversal
-      // ângulo máximo a partir do zênite: desce pelos flancos no meio, menos nas pontas
       const phiMax = phiMaxAll * (0.7 + 0.3 * smooth(0.1, 0.5, k));
-      let phi = -phiMax + (row % 2 ? 0.5 : 0) * (spacing0 / arcR);
-      while (phi <= phiMax) {
-        // passo cresce nos flancos (onde só a crosta precisa ler de longe)
+      for (let a = -phiMax * arcR; a <= phiMax * arcR;) {
+        const phi = a / arcR;
+        // passo cresce nos flancos (onde a crosta já lê de longe)
         const spacing = spacing0 * (1 + 0.6 * smooth(0.45, phiMaxAll, Math.abs(phi)));
-        const dphi = spacing / arcR;
-        const p2 = phi + rngCity.range(-0.15, 0.15) * dphi, xx = x + rngCity.range(-0.15, 0.15) * spacing0;
-        phi += dphi;
+        const a0 = a; a += spacing;
+        // grade deformada (ruas curvas) → recorte das ruas
+        const cx = x + CT.WARP * noise.noise2(a0 / 170 + index * 3.1, x / 420), ca = a0 + CT.WARP * noise.noise2(x / 170 - index * 1.7, a0 / 420 + 9.3);
+        const ex = clip1(cx + 4000, spacing0 / 2, CT.BLOCK.x, index), ea = clip1(ca + 4000, spacing / 2, CT.BLOCK.a, index + 2);
+        if (!ex || !ea) continue;
+        const xx = x + ex.off, p2 = (a0 + ea.off) / arcR;
         const nx2 = xx / RX, k2 = Math.sqrt(Math.max(0.03, 1 - nx2 * nx2));
         dirv.set(nx2, Math.cos(p2) * k2, Math.sin(p2) * k2);
         if (!skinBody(dirv, tmp3, nrm, true)) continue;   // coberto por pescoço/patas/cabeça
         const lx = tmp3.x, lz = tmp3.z;
         if (insideNeckOrHead(tmp3)) continue;
-        if (Math.abs(nx2 - 0.0) < 0.075 && Math.abs(p2) > 1.05) continue; // trama da barriga
-        if (inPalace(lx, lz) || inBrick(lx, lz) || inPlaza(lx, lz) || inTemple(lx, lz)) continue;
-        // ruas: curvas de ruído (duas escalas) + avenida central para a frente da praça
-        const st = noise.noise2(lx / 230 + index * 3.1, lz / 230 + phi * 0.3);
-        if (Math.abs(st) < 0.03) continue;
-        const st2 = noise.noise2(lx / 95 + index * 1.7 + 40, lz / 95 - phi * 0.2);
-        if (Math.abs(st2) < 0.018) continue;
-        if (Math.abs(lz) < 8 && lx > PZ.x1) continue;
-        const flank = Math.abs(phi) / phiMax;
+        if (Math.abs(nx2) < 0.075 && Math.abs(p2) > 1.05) continue; // trama da barriga
+        if (inPalace(lx, lz) || inBrick(lx, lz) || inPlaza(lx, lz) || inTemple(lx, lz) || inSmallPlaza(lx, lz)) continue;
+        if (Math.abs(lz) < 9 && lx > PZ.x1) continue;      // avenida central: da praça para a frente
+        const flank = Math.abs(p2) / phiMax;
         if (rngCity() > 1 - 0.1 * flank * flank * flank) continue;
+        if (nCarpet() >= EM.CARPET_MAX) continue;
+        const fl = smooth(0.8, 1.4, Math.abs(p2));
+        // estiramento local da parametrização (direção → pele): a casa enche a célula real na pele
+        const sp = (xq, aq, out) => { const n3 = xq / RX, k3 = Math.sqrt(Math.max(0.03, 1 - n3 * n3)), p3 = aq / arcR; dir2.set(n3, Math.cos(p3) * k3, Math.sin(p3) * k3); return skinBody(dir2, out, null, true); };
+        sp(xx + 1, a0 + ea.off, pX); sp(xx, a0 + ea.off + 1, pA);
+        const jx = Math.min(2.2, Math.max(0.6, pX.distanceTo(tmp3))), ja = Math.min(2.2, Math.max(0.6, pA.distanceTo(tmp3)));
+        const fill = rngCity.range(CT.FILL.min, CT.FILL.max);
+        const w = ex.size * jx * fill, d = ea.size * ja * fill;
         const edge = nearPlaza(lx, lz);
-        const fl = smooth(0.8, 1.4, Math.abs(phi));
-        const foot = rngCity.range(EM.HOUSE_FOOT.min, EM.HOUSE_FOOT.max) * (1 + 0.35 * fl);
-        const w = foot * rngCity.range(0.85, 1.15), d = foot * rngCity.range(0.85, 1.15);
-        let h = rngCity.range(EM.HOUSE_H.min, EM.HOUSE_H.max) * (1 - 0.25 * flank);
-        if (edge) h = rngCity.range(22, 34);
-        else if (rngCity() < EM.TALL_BLOCK_CHANCE) h *= 1.6;
-        // nos flancos as casas inclinam um pouco para o "para cima" (terraços) e saem da pele em vez
-        // de afundar
+        let kind = edge ? 'tall' : pickKind(rngCity());
+        let n = storeysOf(kind); if (!edge) n = Math.max(1, n - Math.round(flank * flank * 1.5));
+        const h = heightOf(kind, n);
+        // nos flancos as casas inclinam um pouco para o "para cima" (terraços) e saem da pele
         upMix.copy(nrm).addScaledVector(_up, 0.45 * fl).normalize();
-        qh.copy(quatFromUp(upMix)).multiply(qy.setFromAxisAngle(_up, rngCity.range(-0.25, 0.25)));
-        if (edge) {   // prédios mais altos ao redor da praça: geometria mesclada (fachada de vários andares)
-          const wall = rngCity.pick(COLORS.houses), roof = rngCity.pick(COLORS.roofs);
-          const sink = 10; const b = boxHouse(w * 1.6, h + sink, d * 1.6, 'y', wall, roof, false, true, true);
-          b.translate(0, (h - sink) / 2, 0); placeGeom(b, tmp3, qh); city.push(b);
-          continue;
-        }
-        if (carpet.flat.length + carpet.tile.length >= EM.CARPET_MAX) continue;
-        // tapete: instância (caixa unitária afundada 30% na pele, acima da crosta)
-        dummy.position.copy(tmp3).addScaledVector(nrm, EM.CRUST_OFFSET - 0.3 * h * (1 - fl) + 0.15 * h * fl); dummy.quaternion.copy(qh); dummy.scale.set(w, h, d); dummy.updateMatrix();
-        const col = rngCity.pick(PALE);
-        (rngCity() < EM.ROOF_TILE_CHANCE ? carpet.tile : carpet.flat).push({ m: dummy.matrix.clone(), c: col });
+        pos.copy(tmp3).addScaledVector(nrm, EM.CRUST_OFFSET - 0.15 + 0.15 * h * fl);
+        let yaw = rngCity.range(-0.02, 0.02);
+        if (edge) {   // prédios da borda da praça: lojas e toldos voltados para a praça
+          const cxp = (PZ.x0 + PZ.x1) / 2, dxp = cxp - lx, dzp = -lz;
+          const tx = Math.abs(dxp) / (PZ.x1 - PZ.x0) > Math.abs(dzp) / (PZ.hz * 2) ? Math.sign(dxp) : 0;
+          yaw = tx ? (tx > 0 ? Math.PI / 2 : -Math.PI / 2) : (dzp > 0 ? 0 : Math.PI);
+        } else if (kind === 'tall' && rngCity() < 0.5) yaw += Math.PI;
+        const swap = edge && Math.abs(Math.sin(yaw)) > 0.5;
+        pushHouse(kind, pos, upMix, swap ? d : w, h, swap ? w : d, yaw, pastel(rngCity));
       }
     }
   }
   // --- o tapete transborda dos ombros para o pescoço (até a nuca / raiz das orelhas) ---
   {
     const spacing = (low ? EM.CITY_SPACING_LOW : EM.CITY_SPACING_HIGH) * 1.15;
-    const dummy = new THREE.Object3D(), nrm = new V3(), dn = new V3(), qh = new THREE.Quaternion(), qy = new THREE.Quaternion(), upMix = new V3();
+    const nrm = new V3(), dn = new V3(), upMix = new V3(), pos = new V3();
     const dlat = spacing / NC.ry;
     for (let lat = Math.PI / 2 - dlat * 0.5, row = 0; lat > -0.15; lat -= dlat, row++) {
       const ring = NC.rz * Math.cos(lat); const n = Math.max(1, Math.round((TAU * ring) / spacing));
       for (let j = 0; j < n; j++) {
-        if (carpet.flat.length + carpet.tile.length >= EM.CARPET_MAX) break;
-        const lon = ((j + (row % 2 ? 0.5 : 0)) / n) * TAU + rngCity.range(-0.1, 0.1) * (TAU / n);
-        const la = lat + rngCity.range(-0.15, 0.15) * dlat;
+        if (nCarpet() >= EM.CARPET_MAX) break;
+        const lon = ((j + (row % 2 ? 0.5 : 0)) / n) * TAU + rngCity.range(-0.06, 0.06) * (TAU / n);
+        const la = lat + rngCity.range(-0.08, 0.08) * dlat;
         dn.set(Math.cos(la) * Math.cos(lon), Math.sin(la), Math.cos(la) * Math.sin(lon));
         // só onde a pele é do próprio pescoço (fora do corpo e da cabeça)
         if (!skinNeck(dn, tmp3, nrm, true)) continue;
         if (tmp3.x > HD.cx - 60 && tmp3.y < HD.cy + HR * 0.9) continue;
         if (nrm.y < 0.1 && Math.abs(nrm.z) > 0.85) continue;   // flanco baixo do pescoço: pele (debaixo das orelhas)
-        const st = noise.noise2(tmp3.x / 230 + index * 3.1, tmp3.z / 230 + la * 0.3); if (Math.abs(st) < 0.03) continue;
-        if (rngCity() < 0.12) continue;
-        const foot = rngCity.range(EM.HOUSE_FOOT.min, EM.HOUSE_FOOT.max);
-        const w = foot * rngCity.range(0.85, 1.15), d = foot * rngCity.range(0.85, 1.15), h = rngCity.range(EM.HOUSE_H.min, EM.HOUSE_H.max) * 0.85;
+        const st = noise.noise2(tmp3.x / 230 + index * 3.1, tmp3.z / 230 + la * 0.3); if (Math.abs(st) < 0.035) continue;
+        if (rngCity() < 0.08) continue;
+        const kind = rngCity() < 0.55 ? 'flat' : 'hip';
+        const w = spacing * rngCity.range(0.78, 0.92), d = spacing * rngCity.range(0.78, 0.92), h = heightOf(kind, Math.max(1, storeysOf(kind) - 1));
         upMix.copy(nrm).addScaledVector(_up, 0.9 * smooth(0.7, 0.2, nrm.y)).normalize();
-        qh.copy(quatFromUp(upMix)).multiply(qy.setFromAxisAngle(_up, rngCity.range(-0.25, 0.25)));
-        dummy.position.copy(tmp3).addScaledVector(nrm, EM.CRUST_OFFSET).addScaledVector(upMix, -0.2 * h); dummy.quaternion.copy(qh); dummy.scale.set(w, h, d); dummy.updateMatrix();
-        (rngCity() < EM.ROOF_TILE_CHANCE ? carpet.tile : carpet.flat).push({ m: dummy.matrix.clone(), c: rngCity.pick(PALE) });
+        pos.copy(tmp3).addScaledVector(nrm, EM.CRUST_OFFSET).addScaledVector(upMix, -0.15);
+        pushHouse(kind, pos, upMix, w, h, d, rngCity.range(-0.05, 0.05), pastel(rngCity));
       }
     }
   }
@@ -1716,121 +1609,174 @@ export function createElephant(route, index, opts = {}) {
     { const n = new V3().fromBufferAttribute(g.attributes.normal, 18 * 37 + 18); if (n.y < 0) { flipWinding(g); g.computeVertexNormals(); } }
     crustGeom = g;
   }
-  // --- palácio (atrás do centro): bloco longo de arcadas brancas + andar recuado + tambor + cúpula
-  //     dourada; 2 cúpulas médias e 4 pequenas; 8 minaretes com varandas; 4 torres rosa de telhado
-  //     cônico; muro de tijolos arcado ---
+  // ---- peças comuns ----
+  const WHITE = 0xf6f3ec, MARB = [SF.MARBLE];
+  const at = (g, x, y, z, bone = 0) => { g.translate(x, y, z); return addCity(g, bone); };
+  // finial dourado: bola + bola menor + agulha
+  const finial = (x, y, z, s, bone = 0) => {
+    const k1 = new THREE.SphereGeometry(5 * s, 8, 5); k1.translate(x, y + 4 * s, z); addGold(k1, bone);
+    const k2 = new THREE.SphereGeometry(3.2 * s, 6, 4); k2.translate(x, y + 11 * s, z); addGold(k2, bone);
+    const sp = new THREE.ConeGeometry(1.8 * s, 22 * s, 6); sp.translate(x, y + 24 * s, z); addGold(sp, bone);
+  };
+  // varanda de minarete: laje de mármore + balaustrada vazada
+  const balcony = (x, y, z, r, bone = 0) => {
+    at(facCyl(r, r * 0.78, 6, 12, { side: MARB, cap: MARB, color: 0xece6dc }), x, y, z, bone);
+    at(facCyl(r, r, 8, 12, { side: [SF.BALUS, 8, 2.4], open: true, color: 0xf2eee6 }), x, y + 7, z, bone);
+  };
+  const minaret = (mx, y0, mz, h, r = 14, bone = 0) => {
+    at(facBox(r * 2.6, 44, r * 2.6, { side: [SF.PALACE, r * 1.3, 14], top: MARB }), mx, y0 + 22, mz, bone);
+    at(facCyl(r * 0.92, r * 1.15, h, 12, { side: [SF.PALACE, (TAU * r) / 6, 26], color: WHITE }), mx, y0 + h / 2, mz, bone);
+    for (const f of [0.55, 0.74, 0.9]) balcony(mx, y0 + h * f, mz, r * 1.75, bone);
+    at(facCyl(r * 0.72, r * 0.72, 24, 10, { side: [SF.PALACE, (TAU * r * 0.72) / 6, 24], color: WHITE }), mx, y0 + h + 12, mz, bone);
+    const cap = goldDome(r * 0.95, r * 1.3, 12, 6); cap.translate(mx, y0 + h + 24, mz); addGold(cap, bone);
+    finial(mx, y0 + h + 24 + r * 1.25, mz, 0.8, bone);
+  };
+  // --- palácio (atrás do centro) ---
   {
-    const px = PALACE_X; const yb = 1100; // base desce fundo (afunda no corpo; na garupa vira muralha arcada)
-    const base = archBox(PS.hx * 2, PALACE_BASE_TOP - yb, PS.hz * 2, REG.PAL, 0xf4f1ea); base.translate(px, (PALACE_BASE_TOP + yb) / 2, 0); city.push(base);
-    // soco de tijolos vermelhos com arcos ao redor da base
-    const sock = archBox(PS.hx * 2 + 14, 80, PS.hz * 2 + 14, REG.BRK, 0xffffff, { rv: 0.25 }); sock.translate(px, 1330, 0); city.push(sock);
-    // cornija + andar recuado
-    const cornice = archBox(PS.hx * 2 + 16, 14, PS.hz * 2 + 16, REG.PLAIN, 0xe9e3d8); cornice.translate(px, PALACE_BASE_TOP + 6, 0); city.push(cornice);
-    const tier = archBox(PS.hx * 1.1, PALACE_TIER_H, PS.hz * 1.3, REG.PAL, 0xf4f1ea, { rv: 0.25 }); tier.translate(px, PALACE_BASE_TOP + PALACE_TIER_H / 2, 0); city.push(tier);
-    const drum = new THREE.CylinderGeometry(DOME_R + 8, DOME_R + 8, DRUM_H, 36, 1, false); remapUV(drum, REG.PAL, 0, Infinity, 1, 0.085); setColorRange(drum, 0xf4f1ea);
-    drum.translate(px, PALACE_BASE_TOP + PALACE_TIER_H + DRUM_H / 2, 0); city.push(drum);
-    const dome = new THREE.SphereGeometry(DOME_R, 36, 20, 0, TAU, 0, Math.PI / 2); dome.translate(px, DOME_CY, 0); goldCity.push(dome);
-    const spire = new THREE.ConeGeometry(8, 60, 10); spire.translate(px, DOME_CY + DOME_R + 26, 0); goldCity.push(spire);
-    const knob = new THREE.SphereGeometry(10, 8, 6); knob.translate(px, DOME_CY + DOME_R + 2, 0); goldCity.push(knob);
-    // 2 cúpulas médias sobre tambores nas alas (ref. 4: fileira de cúpulas)
-    for (const dx of [-PS.hx + 95, PS.hx - 95]) {
-      const R2 = 74, DH = 40;
-      const dr = new THREE.CylinderGeometry(R2 + 6, R2 + 6, DH, 28, 1, false); remapUV(dr, REG.PAL, 0, Infinity, 1, 0.07); setColorRange(dr, 0xf4f1ea); dr.translate(px + dx, PALACE_BASE_TOP + DH / 2, 0); city.push(dr);
-      const d2 = new THREE.SphereGeometry(R2, 28, 14, 0, TAU, 0, Math.PI / 2); d2.translate(px + dx, PALACE_BASE_TOP + DH, 0); goldCity.push(d2);
-      const sp2 = new THREE.ConeGeometry(5, 40, 8); sp2.translate(px + dx, PALACE_BASE_TOP + DH + R2 + 18, 0); goldCity.push(sp2);
+    const px = PALACE_X, yb = 1100, P0 = PALACE_PLINTH, T1 = PALACE_BASE_TOP, T2 = PALACE_BASE_TOP + PALACE_TIER_H;
+    const W1 = PS.hx * 2, D1 = PS.hz * 2, W2 = PALACE_T2.hx * 2, D2 = PALACE_T2.hz * 2;
+    // soco de tijolos vermelhos ARCADO (o muro vermelho das referências) — afunda no corpo
+    at(facBox(W1 + 16, P0 - yb, D1 + 16, { side: [SF.BRICK, 7, 13], top: [SF.FLAT], color: 0xffffff }), px, (P0 + yb) / 2, 0);
+    at(facBox(W1 + 24, 5, D1 + 24, { side: MARB, top: MARB, color: 0xece6dc }), px, P0 + 2.5, 0);
+    // 1º corpo: bloco branco com fileiras de janelas em arco (pilastras + cornija por andar)
+    at(facBox(W1, T1 - P0 - 5, D1, { side: [SF.PALACE, 5.2, 8.6], top: [SF.PAVE], color: 0xf4f1ea }), px, (T1 + P0 + 5) / 2, 0);
+    at(facBox(W1 + 12, 7, D1 + 12, { side: MARB, top: MARB, color: 0xeee9df }), px, T1 + 3.5, 0);
+    at(rimRing(W1 + 10, D1 + 10, 8, 1.6, SF.BALUS, 2.3), px, T1 + 7, 0);
+    // 2º corpo recuado
+    at(facBox(W2, T2 - T1 - 7, D2, { side: [SF.PALACE, 4.6, 8.2], top: [SF.PAVE], color: 0xf4f1ea }), px, (T2 + T1 + 7) / 2, 0);
+    at(facBox(W2 + 10, 6, D2 + 10, { side: MARB, top: MARB, color: 0xeee9df }), px, T2 + 3, 0);
+    at(rimRing(W2 + 8, D2 + 8, 7, 1.4, SF.BALUS, 2.1), px, T2 + 6, 0);
+    // tambor com janelas em arco + cornija + cúpula dourada em bulbo com nervuras e finial
+    const DR = DOME_R + 8;
+    at(facCyl(DR, DR, DRUM_H, 40, { side: [SF.PALACE, (TAU * DR) / 24, DRUM_H], color: 0xf4f1ea }), px, T2 + DRUM_H / 2, 0);
+    at(facCyl(DR + 6, DR + 2, 6, 40, { side: MARB, cap: MARB, color: 0xeee9df }), px, DOME_CY - 3, 0);
+    const dome = goldDome(DOME_R, DOME_R * DOME_HF, low ? 32 : 44, 14); dome.translate(px, DOME_CY, 0); addGold(dome);
+    for (let i = 0; i < 16; i++) {   // nervuras
+      const a = (i / 16) * TAU, pts = [];
+      for (let k = 0; k <= 10; k++) { const t = (k / 10) * 0.93, r = DOME_R * Math.pow(1 - t, 0.62) * (1 + 0.1 * Math.sin(Math.PI * t)) + 1.5; pts.push(new V3(px + Math.cos(a) * r, DOME_CY + DOME_R * DOME_HF * t, Math.sin(a) * r)); }
+      addGold(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 12, 2.2, 4, false));
     }
-    // cúpulas menores nos cantos do bloco principal
-    for (const [cx, cz] of [[-PS.hx + 40, -PS.hz + 44], [-PS.hx + 40, PS.hz - 44], [PS.hx - 40, -PS.hz + 44], [PS.hx - 40, PS.hz - 44]]) {
-      const sd = new THREE.SphereGeometry(36, 16, 9, 0, TAU, 0, Math.PI / 2); sd.translate(px + cx, PALACE_BASE_TOP + 14, cz); goldCity.push(sd);
-      const sdr = new THREE.CylinderGeometry(38, 38, 16, 16); remapUV(sdr, REG.PLAIN); setColorRange(sdr, 0xf4f1ea); sdr.translate(px + cx, PALACE_BASE_TOP + 12, cz); city.push(sdr);
+    const ring = new THREE.TorusGeometry(DOME_R + 2, 3.5, 6, 48); ring.rotateX(Math.PI / 2); ring.translate(px, DOME_CY + 2, 0); addGold(ring);
+    finial(px, DOME_CY + DOME_R * DOME_HF - 4, 0, 2.2);
+    // 4 cúpulas menores (tambor com janelas) nos cantos do 2º corpo
+    for (const [sx, sz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) {
+      const cx = px + sx * (W2 / 2 - 34), cz = sz * (D2 / 2 - 34), R2 = 28;
+      at(facCyl(R2 + 3, R2 + 3, 28, 18, { side: [SF.PALACE, (TAU * (R2 + 3)) / 8, 28], color: 0xf4f1ea }), cx, T2 + 6 + 14, cz);
+      at(facCyl(R2 + 6, R2 + 4, 4, 18, { side: MARB, cap: MARB }), cx, T2 + 6 + 30, cz);
+      const d2 = goldDome(R2, R2 * 1.15, 18, 8); d2.translate(cx, T2 + 6 + 32, cz); addGold(d2);
+      finial(cx, T2 + 6 + 32 + R2 * 1.12, cz, 0.9);
     }
-    // minaretes altos com varandas (4 cantos + 2 atrás + 2 à frente)
+    // quiosques (chhatris) brancos de cupulazinha nos cantos do 1º corpo e no meio das alas
+    for (const [cx, cz] of [[-1, -1], [-1, 1], [1, -1], [1, 1], [0, -1], [0, 1]]) {
+      const qx = px + cx * (W1 / 2 - 26), qz = cz * (D1 / 2 - 24);
+      at(facBox(24, 20, 24, { side: [SF.PALACE, 8, 20], top: MARB, color: 0xf6f3ec }), qx, T1 + 7 + 10, qz);
+      at(whiteDome(12.5, 12, 6), qx, T1 + 7 + 20, qz);
+      finial(qx, T1 + 7 + 31, qz, 0.5);
+    }
+    // 8 minaretes com 3 varandas (4 cantos + 2 atrás + 2 à frente)
     const minPos = [[px - PS.hx - 30, -PS.hz - 30], [px - PS.hx - 30, PS.hz + 30], [px + PS.hx + 30, -PS.hz - 30], [px + PS.hx + 30, PS.hz + 30], [px - 70, -PS.hz - 50], [px - 70, PS.hz + 50], [px + 110, -PS.hz - 50], [px + 110, PS.hz + 50]];
-    for (let i = 0; i < minPos.length; i++) {
-      const [mx, mz] = minPos[i]; const h = (i < 4 ? 560 : 440) + rngCity.range(-15, 15); const y0 = 1380;
-      const shaft = new THREE.CylinderGeometry(14, 18, h, 12); remapUV(shaft, REG.PLAIN); setColorRange(shaft, 0xf6f3ec); shaft.translate(mx, y0 + h / 2, mz); city.push(shaft);
-      for (const f of [0.55, 0.74, 0.9]) {
-        const balc = new THREE.CylinderGeometry(26, 20, 12, 12); remapUV(balc, REG.PLAIN); setColorRange(balc, 0xe8e2d6); balc.translate(mx, y0 + h * f, mz); city.push(balc);
-        const rail = new THREE.CylinderGeometry(27, 27, 14, 12, 1, true); remapUV(rail, REG.TOWER, 0, Infinity, 1, 0.12); setColorRange(rail, 0xf2ede4); rail.translate(mx, y0 + h * f + 13, mz); city.push(rail);
-      }
-      const cap = new THREE.SphereGeometry(19, 12, 8, 0, TAU, 0, Math.PI / 2); cap.translate(mx, y0 + h, mz); goldCity.push(cap);
-      const pin = new THREE.ConeGeometry(4, 40, 6); pin.translate(mx, y0 + h + 30, mz); goldCity.push(pin);
-    }
-    // torres redondas ROSA de telhado cônico
+    minPos.forEach(([mx, mz], i) => minaret(mx, 1380, mz, (i < 4 ? 540 : 430) + rngCity.range(-15, 15), i < 4 ? 15 : 13));
+    // torres redondas ROSA de telhado cônico de telhas
     const pinkTower = (tx, ty0, tz, th) => {
-      const tw = new THREE.CylinderGeometry(34, 38, th, 14); remapUV(tw, REG.TOWER, 0, Infinity, 1, 0.99); setColorRange(tw, 0xf3ece3); tw.translate(tx, ty0 + th / 2, tz); city.push(tw);
-      const balc = new THREE.CylinderGeometry(46, 36, 16, 14); remapUV(balc, REG.PLAIN); setColorRange(balc, 0xe8e2d6); balc.translate(tx, ty0 + th - 30, tz); city.push(balc);
-      const roof = new THREE.ConeGeometry(44, 130, 14); remapUV(roof, REG.PLAIN); setColorRange(roof, 0xe8a0b4); roof.translate(tx, ty0 + th + 65, tz); city.push(roof);
-      const tip = new THREE.SphereGeometry(6, 8, 6); tip.translate(tx, ty0 + th + 130, tz); goldCity.push(tip);
+      at(facCyl(34, 38, th, 18, { side: [SF.PALACE, (TAU * 36) / 9, 24], color: 0xf3ece3 }), tx, ty0 + th / 2, tz);
+      at(facCyl(46, 36, 14, 18, { side: MARB, cap: MARB, color: 0xe9e3d8 }), tx, ty0 + th - 30, tz);
+      at(facCyl(46, 46, 9, 18, { side: [SF.BALUS, 9, 2.6], open: true }), tx, ty0 + th - 18, tz);
+      at(facCyl(0.5, 46, 130, 18, { side: [SF.ROOF], cap: [SF.PLAIN], color: 0xe9a1b0 }), tx, ty0 + th + 65, tz);
+      const tip = new THREE.SphereGeometry(6, 8, 6); tip.translate(tx, ty0 + th + 132, tz); addGold(tip);
     };
-    // muro LONGO de tijolos vermelhos com arcos à frente do palácio (entre o palácio e a praça)
+    // muro LONGO de tijolos vermelhos arcado e AMEADO à frente do palácio (entre o palácio e a praça)
     {
-      const wx = px + PS.hx + 52; surfAt(wx, 0, tmp3); const wy0 = tmp3.y - 40, wh = 120;
-      const wall = archBox(40, wh, PS.hz * 2 + 220, REG.BRK, 0xffffff, { rv: 0.3, topColor: 0xd9c7ab }); wall.translate(wx, wy0 + wh / 2, 0); city.push(wall);
-      const crown = archBox(48, 10, PS.hz * 2 + 228, REG.PLAIN, 0xe9d9c4); crown.translate(wx, wy0 + wh + 4, 0); city.push(crown);
+      const wx = px + PS.hx + 52; surfAt(wx, 0, tmp3); const wy0 = tmp3.y - 40, wh = 120, L = PS.hz * 2 + 220;
+      at(facBox(40, wh, L, { side: [SF.BRICK, 7, 14], top: [SF.FLAT], color: 0xffffff }), wx, wy0 + wh / 2, 0);
+      at(rimRing(44, L + 4, 10, 3, SF.CRENEL, 6, 0xfbe9e2), wx, wy0 + wh, 0);
       for (const tz of [-(PS.hz + 130), PS.hz + 130]) pinkTower(wx, wy0 - 20, tz, 300);
     }
     for (const tz of [-(PS.hz + 70), PS.hz + 70]) pinkTower(px - PS.hx - 60, 1310, tz, 260);
     // torres quadradas com telhado piramidal (rosa e vinho) nos fundos
     const tcol = [0xe8a0b4, 0xb0563d];
     for (const [i, tz] of [[0, -90], [1, 90]]) {
-      const tw = new THREE.BoxGeometry(54, 280, 54); setColorRange(tw, 0xf1ece3); remapUV(tw, REG.TOWER, 0, 8); remapUV(tw, REG.TOWER, 16, 24); remapUV(tw, REG.PLAIN, 8, 16);
-      tw.translate(px - PS.hx - 50, 1330 + 140, tz); city.push(tw);
-      const roof = new THREE.ConeGeometry(40, 90, 4); roof.rotateY(Math.PI / 4); remapUV(roof, REG.PLAIN); setColorRange(roof, tcol[i]); roof.translate(px - PS.hx - 50, 1330 + 280 + 45, tz); city.push(roof);
+      at(facBox(54, 280, 54, { side: [SF.PALACE, 9, 14], top: MARB, color: 0xf1ece3 }), px - PS.hx - 50, 1330 + 140, tz);
+      const roof = facCyl(0.5, 40, 90, 4, { side: [SF.ROOF], color: tcol[i] }); roof.rotateY(Math.PI / 4); at(roof, px - PS.hx - 50, 1330 + 280 + 45, tz);
     }
   }
-  // --- prédio alto de tijolos vermelhos com arcos, ao lado da praça ---
+  // --- prédio alto de tijolos vermelhos com arcos e ameias, ao lado da praça ---
   {
     surfAt(BRICK.x, BRICK.z, tmp3); const y0 = tmp3.y - 40;
-    const brick = archBox(BRICK.hx * 2, BRICK_TOP - y0, BRICK.hz * 2, REG.BRK, 0xffffff, { topColor: 0xc9b79c }); brick.translate(BRICK.x, (BRICK_TOP + y0) / 2, BRICK.z); city.push(brick);
-    const crown = archBox(BRICK.hx * 2 + 10, 14, BRICK.hz * 2 + 10, REG.PLAIN, 0xe9d9c4); crown.translate(BRICK.x, BRICK_TOP + 5, BRICK.z); city.push(crown);
-    // minarete fino colado ao prédio
-    const mh = 300; const shaft = new THREE.CylinderGeometry(9, 11, mh, 10); remapUV(shaft, REG.PLAIN); setColorRange(shaft, 0xf6f3ec); shaft.translate(BRICK.x + BRICK.hx + 16, y0 + mh / 2, BRICK.z + BRICK.hz - 10); city.push(shaft);
-    const cap = new THREE.SphereGeometry(13, 10, 7, 0, TAU, 0, Math.PI / 2); cap.translate(BRICK.x + BRICK.hx + 16, y0 + mh, BRICK.z + BRICK.hz - 10); goldCity.push(cap);
+    at(facBox(BRICK.hx * 2, BRICK_TOP - y0, BRICK.hz * 2, { side: [SF.BRICK, 6.5, 12], top: [SF.FLAT], color: 0xffffff }), BRICK.x, (BRICK_TOP + y0) / 2, BRICK.z);
+    at(facBox(BRICK.hx * 2 + 8, 5, BRICK.hz * 2 + 8, { side: MARB, top: MARB, color: 0xe9dccb }), BRICK.x, BRICK_TOP + 2.5, BRICK.z);
+    at(rimRing(BRICK.hx * 2 + 6, BRICK.hz * 2 + 6, 10, 2.5, SF.CRENEL, 7, 0xfbe9e2), BRICK.x, BRICK_TOP + 5, BRICK.z);
+    minaret(BRICK.x + BRICK.hx + 18, y0, BRICK.z + BRICK.hz - 12, 300, 10);
   }
-  // --- praça de mercado (terraço calçado no centro do dorso) com tendas coloridas ---
+  // --- praça de mercado (terraço calçado no centro do dorso; ponto da entrega): bancas de toldo
+  //     colorido, guarda-sóis e chafariz no centro ---
   {
-    surfAt((PZ.x0 + PZ.x1) / 2, 0, tmp3); const top = PLAZA_TOP;
-    const plaza = new THREE.BoxGeometry(PZ.x1 - PZ.x0, 80, PZ.hz * 2); setColorRange(plaza, 0xe4dccb); remapUV(plaza, REG.PLAIN, 0, 8); remapUV(plaza, REG.PLAIN, 12, 24); remapUV(plaza, REG.PAVE, 8, 12);
-    plaza.translate((PZ.x0 + PZ.x1) / 2, top - 40, 0); city.push(plaza);
-    const trng = createRng(SEED + 4242 + index);
-    for (let i = 0; i < 22; i++) {
-      const t = new THREE.ConeGeometry(trng.range(4, 6), 5, trng() < 0.5 ? 4 : 8); t.rotateY(Math.PI / 4); setColorRange(t, trng.pick(COLORS.pompoms)); remapUV(t, REG.PLAIN);
-      t.translate(PZ.x0 + 20 + trng() * (PZ.x1 - PZ.x0 - 40), top + 4, -PZ.hz + 16 + trng() * (PZ.hz * 2 - 32)); city.push(t);
+    const top = PLAZA_TOP, cx = (PZ.x0 + PZ.x1) / 2;
+    at(facBox(PZ.x1 - PZ.x0, 80, PZ.hz * 2, { side: [SF.BRICK, 6, 9], top: [SF.PAVE], color: 0xffffff }), cx, top - 40, 0);
+    // chafariz: tanque octogonal de mármore com água, coluna, taça e pináculo
+    at(facCyl(16, 17, 2.4, 16, { side: MARB, cap: MARB, color: 0xeee8de }), cx, top + 1.2, 0);
+    at(facCyl(15, 15, 0.3, 16, { side: MARB, cap: [SF.WATER] }), cx, top + 2.3, 0);
+    at(facCyl(1.6, 2.4, 7, 10, { side: MARB, cap: MARB }), cx, top + 5.8, 0);
+    at(facCyl(5.5, 2.4, 1.6, 12, { side: MARB, cap: [SF.WATER] }), cx, top + 9.6, 0);
+    at(whiteDome(1.4, 8, 4, 0xf2efe8, SF.MARBLE), cx, top + 10.4, 0);
+    // bancas em fileiras com corredores (e guarda-sóis nos corredores), longe do chafariz
+    const mr = createRng(SEED + 4242 + index);
+    const CAN = [0xf2ede2, 0xb0322a, 0x3d7a45, 0x2f5e9e, 0xd29a3a, 0xd9692e, 0xf2ede2, 0x8a3a6a, 0xe8d6b0];
+    for (let gx = PZ.x0 + 8; gx < PZ.x1 - 6 && market.stall.length < CT.STALLS; gx += 9) {
+      for (let gz = -PZ.hz + 7; gz < PZ.hz - 5 && market.stall.length < CT.STALLS; gz += 7.5) {
+        if (Math.hypot(gx - cx, gz) < 26 || mr() < 0.12) continue;
+        const s = mr.range(3.4, 4.4);
+        dummy.position.set(gx + mr.range(-0.8, 0.8), top, gz + mr.range(-0.6, 0.6)); dummy.quaternion.setFromAxisAngle(_up, mr() < 0.5 ? 0 : Math.PI); dummy.scale.set(s * mr.range(1, 1.25), s * 0.85, s); dummy.updateMatrix();
+        market.stall.push({ m: dummy.matrix.clone(), c: mr.pick(CAN) });
+      }
     }
-    // fonte no centro da praça
-    const fb = new THREE.CylinderGeometry(10, 11, 4, 12); remapUV(fb, REG.PLAIN); setColorRange(fb, 0xd9d0bd); fb.translate((PZ.x0 + PZ.x1) / 2, top + 2, 0); city.push(fb);
+    for (let i = 0; i < CT.UMBRELLAS; i++) {
+      const gx = mr.range(PZ.x0 + 6, PZ.x1 - 6), gz = mr.range(-PZ.hz + 6, PZ.hz - 6); if (Math.hypot(gx - cx, gz) < 22) continue;
+      const s = mr.range(3.6, 4.6);
+      dummy.position.set(gx, top, gz); dummy.quaternion.setFromAxisAngle(_up, mr() * TAU); dummy.scale.set(s, s * 0.9, s); dummy.updateMatrix();
+      market.umbrella.push({ m: dummy.matrix.clone(), c: mr.pick(CAN) });
+    }
   }
-  // --- torres esguias ---
-  const slimTower = (p, up, h, color, capGold = true, r = 6.5) => {
-    const q = quatFromUp(up);
-    const shaft = new THREE.CylinderGeometry(r, r * 1.25, h, 10); remapUV(shaft, REG.TOWER, 0, Infinity, 1, Math.min(0.99, h / 160)); setColorRange(shaft, color);
-    shaft.translate(0, h / 2 - 4, 0); placeGeom(shaft, p, q); city.push(shaft);
-    const top = new THREE.CylinderGeometry(r * 1.7, r * 1.4, 8, 10); remapUV(top, REG.PLAIN); setColorRange(top, color); top.translate(0, h - 4, 0); placeGeom(top, p, q); city.push(top);
-    if (capGold) { const cap = new THREE.SphereGeometry(r * 1.55, 8, 5, 0, TAU, 0, Math.PI / 2); cap.translate(0, h - 2, 0); placeGeom(cap, p, q); goldCity.push(cap); }
-    else { const cap = new THREE.ConeGeometry(r * 1.7, r * 3, 8); remapUV(cap, REG.PLAIN); setColorRange(cap, 0xb0563d); cap.translate(0, h + r * 1.2, 0); placeGeom(cap, p, q); city.push(cap); }
+  // --- pracinhas: calçamento + chafariz, obelisco ou quiosque de cúpula no centro ---
+  for (const [i, P] of plazas.entries()) {
+    const n = surfAt(P.x, P.z, tmp3); if (!n) continue;
+    const y = tmp3.y + EM.CRUST_OFFSET + 0.3;
+    at(facCyl(P.r, P.r + 1.5, 4, 28, { side: [SF.PLAIN], cap: [SF.PAVE], color: 0xf4efe6 }), P.x, y - 1.6, P.z);
+    if (i % 3 === 0) { at(facCyl(7, 7.5, 1.8, 12, { side: MARB, cap: [SF.WATER] }), P.x, y + 0.9, P.z); at(facCyl(0.9, 1.4, 5, 8, { side: MARB }), P.x, y + 2.5, P.z); }
+    else if (i % 3 === 1) { at(facBox(3, 2, 3, { side: MARB, top: MARB }), P.x, y + 1, P.z); at(facCyl(0.3, 1.1, 16, 4, { side: MARB }), P.x, y + 10, P.z); }
+    else { at(facBox(10, 8, 10, { side: [SF.PALACE, 3.3, 8], top: MARB, color: WHITE }), P.x, y + 4, P.z); at(whiteDome(5.2, 12, 6), P.x, y + 8, P.z); finial(P.x, y + 13, P.z, 0.3); }
+  }
+  // --- torres esguias (fuste com janelinhas, varanda e cúpula de ouro ou telhado cônico) ---
+  const slimTower = (p, up, h, color, capGold = true, r = 6.5, bone = 0) => {
+    const q = quatFromUp(up), place = (g) => { placeGeom(g, p, q); addCity(g, bone); };
+    const shaft = facCyl(r, r * 1.25, h, 10, { side: [SF.PALACE, (TAU * r) / 4, Math.max(2.5, r * 2.6)], color }); shaft.translate(0, h / 2 - 4, 0); place(shaft);
+    const tp = facCyl(r * 1.7, r * 1.4, Math.max(1.5, r * 1.2), 10, { side: MARB, cap: MARB, color }); tp.translate(0, h - 4, 0); place(tp);
+    if (capGold) { const cap = goldDome(r * 1.4, r * 1.9, 10, 5); cap.translate(0, h - 4 + r * 0.6, 0); placeGeom(cap, p, q); addGold(cap, bone); }
+    else { const cap = facCyl(0.2, r * 1.7, r * 3, 8, { side: [SF.ROOF], color: 0xb0563d }); cap.translate(0, h - 4 + r * 0.6 + r * 1.5, 0); place(cap); }
   };
-  // --- 2 templos menores (bloco arcado + soco de tijolos + tambor + cúpula dourada + 4 minaretes) ---
+  // --- 2 templos menores (bloco arcado + soco de tijolos + cornija + balaustrada + tambor + cúpula + 4 minaretes) ---
   for (const T of TEMPLES) {
     const n = surfAt(T.x, T.z, tmp3); if (!n) continue;
-    const y0 = tmp3.y - 36, q = new THREE.Quaternion().setFromAxisAngle(_up, T.ang), at = new V3(T.x, y0, T.z);
-    const blk = archBox(T.hx * 2, T.h, T.hz * 2, REG.PAL, 0xf4f1ea, { rv: Math.min(1, T.h / 300) }); blk.translate(0, T.h / 2, 0); placeGeom(blk, at, q); city.push(blk);
-    const sock = archBox(T.hx * 2 + 8, 36, T.hz * 2 + 8, REG.BRK, 0xffffff, { rv: 0.12 }); sock.translate(0, 18, 0); placeGeom(sock, at, q); city.push(sock);
+    const y0 = tmp3.y - 36, q = new THREE.Quaternion().setFromAxisAngle(_up, T.ang), P0 = new V3(T.x, y0, T.z);
+    const put = (g, y) => { g.translate(0, y, 0); placeGeom(g, P0, q); addCity(g); };
+    put(facBox(T.hx * 2 + 8, 40, T.hz * 2 + 8, { side: [SF.BRICK, 6, 11], top: [SF.FLAT] }), 20);
+    put(facBox(T.hx * 2, T.h - 40, T.hz * 2, { side: [SF.PALACE, 5, 8.4], top: [SF.FLAT], color: 0xf4f1ea }), 40 + (T.h - 40) / 2);
+    put(facBox(T.hx * 2 + 8, 5, T.hz * 2 + 8, { side: MARB, top: MARB }), T.h + 2.5);
+    put(rimRing(T.hx * 2 + 6, T.hz * 2 + 6, 7, 1.4, SF.BALUS, 2.1), T.h + 5);
     const dr = Math.min(T.hx, T.hz) * 0.62;
-    const drum = new THREE.CylinderGeometry(dr + 4, dr + 4, 30, 24); remapUV(drum, REG.PAL, 0, Infinity, 1, 0.06); setColorRange(drum, 0xf4f1ea); drum.translate(0, T.h + 15, 0); placeGeom(drum, at, q); city.push(drum);
-    const dome = new THREE.SphereGeometry(dr, 24, 12, 0, TAU, 0, Math.PI / 2); dome.translate(0, T.h + 30, 0); placeGeom(dome, at, q); goldCity.push(dome);
-    const sp = new THREE.ConeGeometry(4, 34, 8); sp.translate(0, T.h + 30 + dr + 15, 0); placeGeom(sp, at, q); goldCity.push(sp);
+    put(facCyl(dr + 4, dr + 4, 30, 24, { side: [SF.PALACE, (TAU * (dr + 4)) / 12, 30], color: 0xf4f1ea }), T.h + 5 + 15);
+    const dome = goldDome(dr, dr * 1.12, 24, 9); dome.translate(0, T.h + 35, 0); placeGeom(dome, P0, q); addGold(dome);
+    const fp = new V3(0, T.h + 35 + dr * 1.1, 0).applyQuaternion(q).add(P0); finial(fp.x, fp.y - 4, fp.z, 0.9);
     for (const [sx, sz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) {
-      const c = new V3(sx * (T.hx + 12), 0, sz * (T.hz + 12)).applyQuaternion(q).add(at);
-      slimTower(c, new V3(0, 1, 0), T.h * 1.4 + 90 + rngCity.range(0, 30), 0xf6f3ec, true, 7);
+      const c = new V3(sx * (T.hx + 12), 0, sz * (T.hz + 12)).applyQuaternion(q).add(P0);
+      slimTower(c, new V3(0, 1, 0), T.h * 1.4 + 90 + rngCity.range(0, 30), WHITE, true, 7);
     }
   }
-  // --- terraços PÁLIDOS pendurados nos flancos (refs. 3/4): retalhos de caixinhas em fileiras que
-  //     saem da pele quase na horizontal ---
+  // --- terraços PÁLIDOS nos flancos (refs. 3/4): fileiras de caixinhas que saem da pele quase na horizontal,
+  //     com a fachada de janelas voltada para fora ---
   for (const [sz, nx0, nx1] of [[-1, 0.06, 0.4], [-1, -0.6, -0.3], [1, 0.14, 0.48], [1, -0.54, -0.22]]) {
     const prng = createRng(SEED + 2600 + index * 5 + Math.round(nx0 * 100) + sz * 7);
     const phi0 = 1.22, phi1 = 1.72, rows = 8;
-    const cols = Math.round(((nx1 - nx0) * RX) / 15), nrm = new V3(), dirv = new V3(), upMix = new V3();
+    const cols = Math.round(((nx1 - nx0) * RX) / 15), nrm = new V3(), dirv = new V3(), upMix = new V3(), zW = new V3();
     const notch = { c0: prng.int(1, Math.max(1, cols - 4)), r0: prng.int(1, rows - 3), cw: prng.int(2, 3), rh: prng.int(2, 3) };
     for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
       if (c >= notch.c0 && c < notch.c0 + notch.cw && r >= notch.r0 && r < notch.r0 + notch.rh) continue;
@@ -1838,10 +1784,14 @@ export function createElephant(route, index, opts = {}) {
       const nx = nx0 + ((c + 0.5) / cols) * (nx1 - nx0), k = Math.sqrt(Math.max(0.03, 1 - nx * nx));
       const phi = sz * (phi0 + ((r + 0.5) / rows) * (phi1 - phi0));
       dirv.set(nx, Math.cos(phi) * k, Math.sin(phi) * k); if (!skinBody(dirv, tmp3, nrm, true)) continue;
-      const depth = prng.range(9, 18), w = 13, d = (((phi1 - phi0) / rows) * k * (B.ry + B.rz)) / 2 * 0.86;
+      const depth = prng.range(9, 18), w = 13 * prng.range(0.85, 1.0), d = (((phi1 - phi0) / rows) * k * (B.ry + B.rz)) / 2 * 0.86;
       upMix.copy(nrm).addScaledVector(_up, 0.25).normalize();
-      const b = boxHouse(w, depth + 4, d, 'y', prng.pick(PALE), prng.pick(PALE), true, false, true); b.translate(0, (depth - 4) / 2, 0);
-      placeGeom(b, tmp3.addScaledVector(nrm, EM.CRUST_OFFSET), quatFromUp(upMix)); city.push(b);
+      const q = quatFromUp(upMix);
+      const b = facBox(w, depth + 4, d, { side: [SF.PLAIN], top: [SF.HOUSE, CT.BAY, ST], bottom: false, color: pastel(prng) });
+      // a fachada (face de cima da caixa, voltada para fora do flanco) com os andares "de pé"
+      uprightTop(b, zW.set(0, 0, 1).applyQuaternion(q).y > 0, d);
+      b.translate(0, (depth - 4) / 2, 0);
+      placeGeom(b, tmp3.addScaledVector(nrm, EM.CRUST_OFFSET), q); addCity(b);
     }
   }
   // torres e pequenas mesquitas espalhadas pelo tapete de casas
@@ -1849,21 +1799,22 @@ export function createElephant(route, index, opts = {}) {
     const x = rngCity.range(-RX * 0.85, RX * 0.85), z = rngCity.range(-B.rz * 0.75, B.rz * 0.75);
     if (inPalace(x, z) || inBrick(x, z) || nearPlaza(x, z) || inTemple(x, z)) continue;
     const n = surfAt(x, z, tmp3); if (!n || n.y < 0.82 || insideNeckOrHead(tmp3)) continue;
-    if (i % 3 === 0) { // mesquita pequena: tambor + cúpula + minarete
-      const dr = rngCity.range(22, 34); const drum = new THREE.CylinderGeometry(dr, dr, 48, 16); remapUV(drum, REG.PAL, 0, Infinity, 1, 0.3); setColorRange(drum, 0xf6f1e8); drum.translate(0, 18, 0); placeGeom(drum, tmp3, quatFromUp(n)); city.push(drum);
-      const dome = new THREE.SphereGeometry(dr, 14, 8, 0, TAU, 0, Math.PI / 2); dome.translate(0, 42, 0); placeGeom(dome, tmp3, quatFromUp(n)); goldCity.push(dome);
-      slimTower(tmp3.clone().addScaledVector(n, -4).add(new V3(dr + 12, 0, 0)), n.clone(), 100 + rngCity.range(0, 60), 0xf6f3ec, true, 6);
+    const q = quatFromUp(n);
+    if (i % 3 === 0) { // mesquita pequena: tambor com janelas + cúpula + minarete
+      const dr = rngCity.range(22, 34);
+      const drum = facCyl(dr, dr, 48, 16, { side: [SF.PALACE, (TAU * dr) / 10, 24], color: 0xf6f1e8 }); drum.translate(0, 18, 0); placeGeom(drum, tmp3, q); addCity(drum);
+      const dome = goldDome(dr, dr * 1.1, 16, 7); dome.translate(0, 42, 0); placeGeom(dome, tmp3, q); addGold(dome);
+      slimTower(tmp3.clone().addScaledVector(n, -4).add(new V3(dr + 12, 0, 0)), n.clone(), 100 + rngCity.range(0, 60), WHITE, true, 6);
     } else slimTower(tmp3.clone().addScaledVector(n, -4), n.clone(), 80 + rngCity.range(0, 90), rngCity.pick([0xf6f3ec, 0xf1c9b1, 0xeadbc6]), rngCity() < 0.6, 6);
   }
   // (daqui em diante: peças presas ao osso da CABEÇA — presas e alto do crânio acenam com ela)
-  const cityMain = city.splice(0), goldMain = goldCity.splice(0);
-  // --- cidades das presas: a metade de cima de cada presa COBERTA de casinhas minúsculas (lado ≈
-  //     diâmetro/30, telhados vermelhos; instanciadas) + torres brancas com cúpulas; 3 anéis de ouro ---
+  // --- cidades das presas: a metade de cima de cada presa COBERTA de casinhas minúsculas de telhado
+  //     vermelho (instanciadas) + torres brancas com cúpulas; 3 anéis de ouro ---
   for (const [si, curve] of tuskCurves.entries()) {
     const rAt = (t) => (t < 0.06 ? lerp(92, 72, t / 0.06) : lerp(72, TK.tipRadius, (t - 0.06) / 0.91));
     const tan = new V3(), up = new V3(), sd = new V3(), P = new V3(), nrm = new V3();
     const trng = createRng(SEED + 1200 + index * 7 + si);
-    const span = EM.TUSK_HOUSE_SPAN, L = curve.getLength(), dummy = new THREE.Object3D(), qy = new THREE.Quaternion();
+    const span = EM.TUSK_HOUSE_SPAN, L = curve.getLength(), qy = new THREE.Quaternion();
     const maxN = Math.floor(EM.TUSK_HOUSE_MAX / 2);
     let count = 0;
     for (let t = 0.1; t < 0.955 && count < maxN;) {
@@ -1877,9 +1828,11 @@ export function createElephant(route, index, opts = {}) {
         const phi = ((k + 0.5) / nAcross) * 2 * span - span + trng.range(-0.3, 0.3) * (2 * span / nAcross);
         if (trng() < 0.07) continue;
         nrm.copy(up).multiplyScalar(Math.cos(phi)).addScaledVector(sd, Math.sin(phi)).normalize();
-        const w = hs * trng.range(0.8, 1.2), d = hs * trng.range(0.8, 1.2), h = hs * trng.range(0.8, 2.0) * (trng() < 0.05 ? 1.8 : 1);
-        dummy.position.copy(P).addScaledVector(nrm, r - 0.5); dummy.quaternion.copy(quatFromUp(nrm)).multiply(qy); dummy.scale.set(w, h, d); dummy.updateMatrix();
-        tuskInst.push({ m: dummy.matrix.clone(), c: trng.pick(PALE) }); count++;
+        let w = hs * trng.range(0.9, 1.3), d = hs * trng.range(0.8, 1.1);
+        const h = hs * trng.range(0.7, 1.6) * (trng() < 0.05 ? 1.8 : 1);
+        let yawq = qy; if (d > w) { const tt = w; w = d; d = tt; yawq = qy.clone().multiply(new THREE.Quaternion().setFromAxisAngle(_up, Math.PI / 2)); }
+        dummy.position.copy(P).addScaledVector(nrm, r - 0.5); dummy.quaternion.copy(quatFromUp(nrm)).multiply(yawq); dummy.scale.set(w, h, d); dummy.updateMatrix();
+        tuskInst.push({ m: dummy.matrix.clone(), c: trng() < 0.75 ? trng.pick([0xf8f5ef, 0xf5efe4, 0xf3e7d3]) : pastel(trng) }); count++;
       }
       t = tNext;
     }
@@ -1888,39 +1841,39 @@ export function createElephant(route, index, opts = {}) {
       if (TUSK_RINGS.some((tr) => Math.abs(t - tr) < 0.035)) continue;
       curve.getPointAt(t, P); curve.getTangentAt(t, tan); surfaceUp(tan, up);
       const side = trng.range(-0.5, 0.5); sd.crossVectors(tan, up).normalize(); nrm.copy(up).multiplyScalar(Math.cos(side)).addScaledVector(sd, Math.sin(side)).normalize();
-      slimTower(tmp2.copy(P).addScaledVector(nrm, rAt(t) - 2), nrm.clone(), (0.5 + trng.range(0, 0.5)) * 2 * rAt(t), 0xf6f3ec, true, 0.055 * rAt(t) + 1.5);
+      slimTower(tmp2.copy(P).addScaledVector(nrm, rAt(t) - 2), nrm.clone(), (0.5 + trng.range(0, 0.5)) * 2 * rAt(t), WHITE, true, 0.055 * rAt(t) + 1.5, BONE.head);
     }
   }
   // --- torres no alto da cabeça (atrás da placa) ---
   for (const lon of [-0.62, -0.36, -0.12, 0.12, 0.36, 0.62]) {
     const d = headDir(1.28, lon, new V3()); headPoint(d, tmp);
-    slimTower(tmp.clone().addScaledVector(d, -6), new V3(0, 1, 0), 70 + rngCity.range(0, 50), rngCity.pick([0xf6f3ec, 0xeadbc6]), rngCity() < 0.6, 5);
+    slimTower(tmp.clone().addScaledVector(d, -6), new V3(0, 1, 0), 70 + rngCity.range(0, 50), rngCity.pick([0xf6f3ec, 0xeadbc6]), rngCity() < 0.6, 5, BONE.head);
   }
-  // casinhas no topo da cabeça entre as torres
-  for (let i = 0; i < (low ? 60 : 160); i++) {
+  // casinhas no topo da cabeça entre as torres (telhado de 4 águas ou laje)
+  for (let i = 0; i < (low ? 60 : 150); i++) {
     const d = headDir(rngCity.range(1.1, 1.46), rngCity.range(-0.85, 0.85), new V3()); headPoint(d, tmp);
-    const w = rngCity.range(5, 9), dd = rngCity.range(5, 9), h = rngCity.range(5, 12);
-    const b = boxHouse(w, h + 10, dd, 'y', rngCity.pick(COLORS.houses), rngCity.pick(COLORS.roofs), false, false, true); b.translate(tmp.x, tmp.y + (h - 10) / 2, tmp.z); city.push(b);
+    const w = rngCity.range(5, 9), dd = rngCity.range(5, 9), n = rngCity.int(2, 4);
+    const b = mHouse(w, n * ST, dd, { wall: pastel(rngCity), roof: rngCity.pick(COLORS.roofs), kind: rngCity() < 0.6 ? 'hip' : 'flat', sink: 10 });
+    b.rotateY(rngCity.range(-0.3, 0.3)); b.translate(tmp.x, tmp.y, tmp.z); addCity(b, BONE.head);
   }
-  if (city.length) add('city', mergeGeometries(city, false), BONE.head);
-  if (cityMain.length) add('city', mergeGeometries(cityMain, false));
-  for (const g of goldCity) add('gold', g, BONE.head);
-  for (const g of goldMain) add('gold', g);
 
   // ============================ MONTAGEM ===========================
-  const order = ['skin', 'trunk', 'cloth', 'ivory', 'gold', 'city', 'pink', 'eye', 'silver'];
+  const order = ['skin', 'trunk', 'cloth', 'ivory', 'gold', 'pink', 'eye', 'silver'];
   const merged = [], mats = [];
   for (const k of order) { if (!parts[k].length) continue; merged.push(mergeGeometries(parts[k], false)); mats.push(S.mat[k]); }
   const geom = mergeGeometries(merged, true);
   geom.computeBoundingSphere();
-  // dois SkinnedMesh com o MESMO esqueleto: a pele esculpida (geometria compartilhada, material
-  // triplanar) e as demais partes (grupos de material)
+  const cityGeom = mergeGeometries(cityGeo, false);
+  cityGeom.computeBoundingSphere();
+  // três SkinnedMesh com o MESMO esqueleto: a pele esculpida (geometria compartilhada, material
+  // triplanar), as demais partes (grupos de material) e a cidade mesclada (material "arch")
   const skinMesh = new THREE.SkinnedMesh(skinGeom, S.mat.skinTri); skinMesh.name = 'skin';
   const mesh = new THREE.SkinnedMesh(geom, mats); mesh.name = 'parts';
-  rig.add(bones[0]); rig.add(skinMesh); rig.add(mesh);
+  const cityMesh = new THREE.SkinnedMesh(cityGeom, S.mat.arch); cityMesh.name = 'city';
+  rig.add(bones[0]); rig.add(skinMesh); rig.add(mesh); rig.add(cityMesh);
   group.updateMatrixWorld(true);
   const skeleton = new THREE.Skeleton(bones);
-  for (const m of [skinMesh, mesh]) {
+  for (const m of [skinMesh, mesh, cityMesh]) {
     m.bind(skeleton);
     // esfera envolvente fixa (folgada): evita o cálculo com skinning de todos os vértices
     m.boundingSphere = m.geometry.boundingSphere.clone(); m.boundingSphere.radius *= 1.12;
@@ -1928,34 +1881,28 @@ export function createElephant(route, index, opts = {}) {
   }
   const headAttach = (o) => { o.position.copy(HEAD_POS).negate(); bones[BONE.head].add(o); return o; };
 
-  // ---- tapete de casas do dorso (2 InstancedMesh: lajes pálidas / telhados rosa-terracota),
+  // ---- tapete de casas do dorso (4 InstancedMesh, um por arquétipo) + mercado (bancas, guarda-sóis),
   //      casinhas das presas (1 InstancedMesh) e a casca-crosta ----
   const carpetGroup = new THREE.Group(); carpetGroup.name = 'carpet';
   let carpetCount = 0;
   {
-    const unitHouse = (roofReg) => {
-      const g = new THREE.BoxGeometry(1, 1.3, 1); g.translate(0, 0.35, 0);   // base em y=−0.3 (afundada), topo em y=1
-      const idx = Array.from(g.index.array); idx.splice(18, 6); g.setIndex(idx);   // sem a face de baixo
-      setColorRange(g, 0xffffff);
-      remapUV(g, REG.HOUSE, 0, 8); remapUV(g, REG.HOUSE, 16, 24); remapUV(g, roofReg, 8, 12); remapUV(g, REG.PLAIN, 12, 16);
-      return g;
-    };
+    const AT = getArchetypes();
     const col = new THREE.Color();
-    const makeInst = (list, reg) => {
-      const inst = new THREE.InstancedMesh(unitHouse(reg), S.mat.city, list.length);
+    const makeInst = (geo, list, name) => {
+      const inst = new THREE.InstancedMesh(geo, S.mat.arch, list.length); inst.name = name;
       list.forEach((it, i) => { inst.setMatrixAt(i, it.m); inst.setColorAt(i, col.set(it.c)); });
       inst.instanceMatrix.needsUpdate = true; if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-      inst.frustumCulled = true; return inst;
+      inst.computeBoundingSphere(); inst.frustumCulled = true; return inst;
     };
     // tapete do dorso: grupo próprio (some além de LOD_DISTANCE; a crosta fica)
-    for (const [key, reg] of [['flat', REG.PLAIN], ['tile', REG.ROOFT]]) { if (carpet[key].length) carpetGroup.add(makeInst(carpet[key], reg)); }
+    for (const k of ['flat', 'hip', 'tall', 'dome']) if (carpet[k].length) carpetGroup.add(makeInst(AT[k], carpet[k], 'carpet_' + k));
+    for (const k of ['stall', 'umbrella']) if (market[k].length) carpetGroup.add(makeInst(AT[k], market[k], 'market_' + k));
     rig.add(carpetGroup);
     // casinhas das presas (sempre visíveis: são poucas)
-    if (tuskInst.length) headAttach(makeInst(tuskInst, REG.ROOFT));
-    // casca-crosta
-    // crosta: casca transparente a 3 m da pele — recebe sombra mas não projeta (evitaria linhas duplas na pele)
-    if (crustGeom) { const cm = new THREE.Mesh(crustGeom, S.mat.crust); cm.frustumCulled = true; cm.castShadow = false; cm.receiveShadow = true; cm.userData.shadowsSet = true; rig.add(cm); }
-    carpetCount = carpet.flat.length + carpet.tile.length;
+    if (tuskInst.length) headAttach(makeInst(AT.hipRed, tuskInst, 'tusk_houses'));
+    // casca-crosta: casca transparente a 3 m da pele — recebe sombra mas não projeta (evitaria linhas duplas na pele)
+    if (crustGeom) { const cm = new THREE.Mesh(crustGeom, S.mat.crust); cm.name = 'crust'; cm.frustumCulled = true; cm.castShadow = false; cm.receiveShadow = true; cm.userData.shadowsSet = true; rig.add(cm); }
+    carpetCount = nCarpet();
   }
   // ---- tachas da placa (instâncias) ----
   {
@@ -2142,7 +2089,7 @@ export function createElephant(route, index, opts = {}) {
       const q = (px / RX) ** 2 + (pz / B.rz) ** 2;
       if (q < 1 && px < 560) {
         if (inPlaza(px, pz)) h = Math.max(h, PLAZA_TOP);
-        else if (inPalace(px, pz)) { h = Math.max(h, Math.abs(px - PALACE_X) < PS.hx * 0.55 && Math.abs(pz) < PS.hz * 0.65 ? PALACE_BASE_TOP + PALACE_TIER_H : Math.abs(px - PALACE_X) < PS.hx && Math.abs(pz) < PS.hz ? PALACE_BASE_TOP : h); const rr = Math.hypot(px - PALACE_X, pz); if (rr < DOME_R + 8) h = Math.max(h, DOME_CY + Math.sqrt(Math.max(0, DOME_R * DOME_R - rr * rr))); }
+        else if (inPalace(px, pz)) { const ax = Math.abs(px - PALACE_X), az = Math.abs(pz); h = Math.max(h, ax < PALACE_T2.hx && az < PALACE_T2.hz ? PALACE_BASE_TOP + PALACE_TIER_H + 6 : ax < PS.hx && az < PS.hz ? PALACE_BASE_TOP + 7 : ax < PS.hx + 8 && az < PS.hz + 8 ? PALACE_PLINTH : h); const rr = Math.hypot(px - PALACE_X, pz); if (rr < DOME_R + 8) h = Math.max(h, rr < DOME_R ? DOME_CY + DOME_HF * Math.sqrt(Math.max(0, DOME_R * DOME_R - rr * rr)) : DOME_CY); }
         else if (inBrick(px, pz)) h = Math.max(h, BRICK_TOP);
         else if (inTemple(px, pz)) { const T = TEMPLES.find((tt) => Math.abs(px - tt.x) < tt.hx + 30 && Math.abs(pz - tt.z) < tt.hz + 30); h += T.h; }
         else if (_sn2.y > 0.3) h += EM.CRUST_OFFSET + (nearPlaza(px, pz) ? 28 : HOUSE_AVG);
