@@ -20,7 +20,8 @@
 //
 //  Contrato:
 //    createLighting(scene, renderer, { quality, shadowRange? }) → {
-//      sun, hemi, ambient, sunDirection, environment (Texture | null), shadowsEnabled, setEnvIntensity(k),
+//      sun, hemi, ambient, sunDirection, environment (Texture | null — getter: muda quando o HDRI chega),
+//      envReady (Promise<boolean>), hdriInfo, shadowsEnabled, setEnvIntensity(k),
 //      update(camera | Vector3),            // por quadro: move o sol/caixa de sombras para perto do jogador e
 //                                           // afina a névoa com a altitude (RENDER.FOG_ALTITUDE)
 //      enableShadows(root),                 // liga castShadow/receiveShadow (+ envMap PBR) em tudo o que deve ter
@@ -37,6 +38,7 @@
 // =====================================================================
 import * as THREE from 'three';
 import { COLORS, SUN_DIR, WORLD, RENDER } from '../config.js';
+import { loadHDRI } from '../assets.js';
 
 export const sunDirection = new THREE.Vector3(SUN_DIR.x, SUN_DIR.y, SUN_DIR.z).normalize();
 
@@ -111,9 +113,16 @@ ${AERIAL_GLSL}
 installAerialPerspective();
 
 // ------------------------- mapa de ambiente ------------------------------
-// Esfera invertida pequena (o PMREMGenerator renderiza com near 0,1 / far 100) com o
-// gradiente do céu em espaço perceptual (igual ao sky.js), mar abaixo do horizonte e um
-// halo de sol HDR. Sai em linear (render target do PMREM), sem tone mapping.
+// Esfera invertida pequena (o PMREMGenerator renderiza com near 0,1 / far 100). Duas fontes:
+//  • procedural (imediato): gradiente do céu em espaço perceptual (igual ao sky.js), mar abaixo do
+//    horizonte e um halo de sol HDR;
+//  • HDRI real (Poly Haven, kloofendal_48d_partly_cloudy_puresky, via assets.js → loadHDRI, assíncrono):
+//    girado em torno de Y para que o sol dele caia no azimute de SUN_DIR, normalizado para a mesma
+//    luminância média do céu procedural (o look geral não muda, só ganha nuvens/variação reais nos
+//    reflexos), sol limitado (RENDER.HDRI.SUN_CLAMP: o DirectionalLight já é o sol direto) e misturado
+//    ao procedural (RENDER.HDRI.MIX). Abaixo do horizonte continua o mar procedural.
+// Quando o HDRI chega, um novo PMREM é gerado e trocado em scene.environment e em todo material que
+// usava o antigo (mesmo tamanho → mesmo programa, sem recompilar). Sai em linear, sem tone mapping.
 const ENV_VERT = /* glsl */`
 varying vec3 vDir;
 void main() {
@@ -124,6 +133,8 @@ const ENV_FRAG = /* glsl */`
 precision highp float;
 uniform vec3 uZenith, uHorizon, uOcean, uSunDir, uSunColor;
 uniform float uSunGlow;
+uniform sampler2D tHDRI;
+uniform float uHdriMix, uHdriScale, uHdriAzimuth, uHdriClamp;
 varying vec3 vDir;
 void main() {
   vec3 d = normalize(vDir);
@@ -134,37 +145,91 @@ void main() {
   float haze = exp(-hh * 7.5) * 0.70 + exp(-hh * 40.0) * 0.30;
   col = mix(col, hz, clamp(haze, 0.0, 1.0));
   col = pow(col, vec3(2.2));
-  // abaixo do horizonte: névoa junto à linha d'água → azul do oceano (reflexo "de baixo" no ouro)
-  vec3 sea = mix(uHorizon, uOcean, smoothstep(0.0, 0.35, -h));
-  col = h < 0.0 ? sea : col;
   // sol: halo largo discreto + disco HDR
   float s = max(dot(d, uSunDir), 0.0);
   float glow = pow(s, 64.0) * 0.25 + pow(s, 600.0) * 0.8 + smoothstep(0.9993, 0.9998, s) * 4.0;
-  col += uSunColor * glow * uSunGlow;
+  col += uSunColor * glow * uSunGlow * (1.0 - uHdriMix);
+  // HDRI real girado (azimute) — só o hemisfério de cima; a linha do horizonte funde no mar
+  if (uHdriMix > 0.0) {
+    vec3 dh = normalize(vec3(d.x, max(h, 0.002), d.z));
+    vec2 uv = vec2(fract((atan(dh.z, dh.x) - uHdriAzimuth) * 0.15915494 + 0.5), asin(clamp(dh.y, -1.0, 1.0)) * 0.31830989 + 0.5);
+    vec3 hdr = texture2D(tHDRI, uv).rgb * uHdriScale;
+    float l = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
+    hdr *= min(1.0, uHdriClamp / max(l, 1e-6));
+    col = mix(col, hdr, uHdriMix);
+  }
+  // abaixo do horizonte: névoa junto à linha d'água → azul do oceano (reflexo "de baixo" no ouro)
+  vec3 sea = mix(uHorizon, uOcean, smoothstep(0.0, 0.35, -h));
+  col = mix(col, sea, smoothstep(0.004, -0.004, h));
   gl_FragColor = vec4(col, 1.0);
 }`;
 
-export function createEnvironmentMap(renderer) {
+function envUniforms() {
+  return {
+    uZenith: { value: new THREE.Color(COLORS.skyZenith) },
+    uHorizon: { value: new THREE.Color(COLORS.skyHorizon) },
+    uOcean: { value: new THREE.Color(COLORS.oceanMid) },
+    uSunDir: { value: sunDirection.clone() },
+    uSunColor: { value: new THREE.Color(COLORS.sunLight) },
+    uSunGlow: { value: RENDER.ENV_SUN_GLOW },
+    tHDRI: { value: null },
+    uHdriMix: { value: 0 }, uHdriScale: { value: 1 }, uHdriAzimuth: { value: 0 }, uHdriClamp: { value: RENDER.HDRI.SUN_CLAMP },
+  };
+}
+
+function renderEnvironment(renderer, uniforms) {
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envScene = new THREE.Scene();
-  const mat = new THREE.ShaderMaterial({
-    uniforms: {
-      uZenith: { value: new THREE.Color(COLORS.skyZenith) },
-      uHorizon: { value: new THREE.Color(COLORS.skyHorizon) },
-      uOcean: { value: new THREE.Color(COLORS.oceanMid) },
-      uSunDir: { value: sunDirection.clone() },
-      uSunColor: { value: new THREE.Color(COLORS.sunLight) },
-      uSunGlow: { value: RENDER.ENV_SUN_GLOW },
-    },
-    vertexShader: ENV_VERT, fragmentShader: ENV_FRAG,
-    side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
-  });
+  const mat = new THREE.ShaderMaterial({ uniforms, vertexShader: ENV_VERT, fragmentShader: ENV_FRAG, side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false });
   mat.toneMapped = false;
-  const geo = new THREE.SphereGeometry(40, 48, 24);
+  const geo = new THREE.SphereGeometry(40, 64, 32);
   envScene.add(new THREE.Mesh(geo, mat));
   const rt = pmrem.fromScene(envScene, 0.04);
+  rt.texture.name = 'ruppen.env';
   pmrem.dispose(); geo.dispose(); mat.dispose();
-  return rt.texture;
+  return rt;
+}
+
+export function createEnvironmentMap(renderer) {
+  return renderEnvironment(renderer, envUniforms()).texture;
+}
+
+// Luminância média (ponderada pelo ângulo sólido) do hemisfério de cima do céu procedural (espelha ENV_FRAG sem o sol).
+function proceduralSkyLuminance() {
+  const z = new THREE.Color(COLORS.skyZenith), hc = new THREE.Color(COLORS.skyHorizon);
+  const P = (c) => [c.r, c.g, c.b].map((x) => Math.pow(x, 1 / 2.2));
+  const zn = P(z), hz = P(hc);
+  let sum = 0, wsum = 0;
+  for (let i = 0; i < 90; i++) {
+    const lat = ((i + 0.5) / 90) * Math.PI / 2, hh = Math.sin(lat), w = Math.cos(lat);
+    const t = Math.pow(hh, 0.48), haze = Math.min(1, Math.exp(-hh * 7.5) * 0.7 + Math.exp(-hh * 40) * 0.3);
+    const c = [0, 1, 2].map((k) => Math.pow((hz[k] + (zn[k] - hz[k]) * t) * (1 - haze) + hz[k] * haze, 2.2));
+    sum += (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) * w; wsum += w;
+  }
+  return sum / wsum;
+}
+
+// Analisa o HDRI (equirretangular, linhas de cima para baixo, flipY): direção do sol (pixel mais brilhante)
+// e luminância média do céu (hemisfério de cima, ponderada pelo ângulo sólido, sem o sol).
+function analyzeHDRI(tex) {
+  const { width: W, height: H, data } = tex.image;
+  const half = tex.type === THREE.HalfFloatType;
+  const val = half ? (i) => THREE.DataUtils.fromHalfFloat(data[i]) : (i) => data[i];
+  let best = -1, bi = 0, bj = 0, sum = 0, wsum = 0;
+  const step = 2;
+  for (let r = 0; r < H / 2; r += 1) {
+    const lat = (0.5 - (r + 0.5) / H) * Math.PI; // linha 0 = zênite
+    const w = Math.cos(lat);
+    for (let c = 0; c < W; c += (r % step === 0 ? 1 : W)) {
+      const i = 4 * (r * W + c);
+      const l = 0.2126 * val(i) + 0.7152 * val(i + 1) + 0.0722 * val(i + 2);
+      if (l > best) { best = l; bi = r; bj = c; }
+      if (l < 20) { sum += l * w; wsum += w; }
+    }
+  }
+  const lat = (0.5 - (bi + 0.5) / H) * Math.PI;
+  const azimuth = ((bj + 0.5) / W - 0.5) * 2 * Math.PI; // = atan2(z, x) no mapeamento equirretangular do three
+  return { sunAzimuth: azimuth, sunElevation: lat, peak: best, meanSky: sum / Math.max(wsum, 1e-6) };
 }
 
 // ------------------------------ sombras ----------------------------------
@@ -238,13 +303,38 @@ export function createLighting(scene, renderer = null, opts = {}) {
   scene.fog = new THREE.FogExp2(COLORS.fog, WORLD.FOG_DENSITY);
   scene.background = new THREE.Color(COLORS.skyHorizon);
 
-  // ---- mapa de ambiente
-  let environment = null;
+  // ---- mapa de ambiente: procedural já, HDRI real quando carregar (troca transparente)
+  let environment = null, envTarget = null;
   let envScale = RENDER.ENV_INTENSITY;
+  let envReady = Promise.resolve(false);
+  let hdriInfo = null;
   if (renderer) {
-    environment = createEnvironmentMap(renderer);
+    envTarget = renderEnvironment(renderer, envUniforms());
+    environment = envTarget.texture;
     scene.environment = environment;                       // fallback (Lambert/Phong e objetos ainda não varridos)
     scene.environmentIntensity = RENDER.ENV_INTENSITY_FALLBACK;
+    if (RENDER.HDRI.MIX > 0 && opts.hdri !== false) {
+      envReady = loadHDRI().then((hdri) => {
+        const info = analyzeHDRI(hdri);
+        const target = Math.atan2(sunDirection.z, sunDirection.x);
+        const u = envUniforms();
+        u.tHDRI.value = hdri;
+        u.uHdriMix.value = RENDER.HDRI.MIX;
+        u.uHdriAzimuth.value = target - info.sunAzimuth;
+        u.uHdriScale.value = (proceduralSkyLuminance() / Math.max(info.meanSky, 1e-6)) * RENDER.HDRI.BRIGHTNESS;
+        const next = renderEnvironment(renderer, u);
+        const old = environment;
+        environment = next.texture;
+        if (scene.environment === old) scene.environment = environment;
+        scene.traverse((o) => {
+          if (!o.isMesh && !o.isPoints) return;
+          for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m && m.envMap === old) m.envMap = environment;
+        });
+        envTarget = next; // o PMREM procedural não é descartado: algum material fora da cena pode ainda apontar para ele (retarget troca depois)
+        hdriInfo = { ...info, azimuthOffset: u.uHdriAzimuth.value, scale: u.uHdriScale.value };
+        return true;
+      }).catch((e) => { console.warn('[lighting] HDRI indisponível, mantendo o céu procedural: ' + (e?.message || e)); return false; });
+    }
   }
 
   // ---- sombras
@@ -306,14 +396,21 @@ export function createLighting(scene, renderer = null, opts = {}) {
     sun.position.copy(focus).addScaledVector(sunDirection, RENDER.SHADOW.DEPTH);
   }
 
+  // material varrido antes da troca procedural → HDRI (clonado depois, p.ex.) ainda com o PMREM antigo
+  function retarget(o) {
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m && m.userData.envBase !== undefined && m.envMap && m.envMap !== environment && m.envMap.name === 'ruppen.env') m.envMap = environment;
+  }
   // Varredura: envMap explícito nos materiais PBR + sombras nos objetos novos.
   function sweep(root) {
-    if (environment) root.traverse((o) => { if (o.isMesh && !o.userData.envSet) { o.userData.envSet = true; applyEnvironment(o, environment, envScale); } });
+    if (environment) root.traverse((o) => { if (o.isMesh && !o.userData.envSet) { o.userData.envSet = true; applyEnvironment(o, environment, envScale); } else if (o.isMesh) retarget(o); });
     return shadowsEnabled ? enableShadows(root) : 0;
   }
 
   return {
-    sun, hemi, ambient, sunDirection, environment, shadowsEnabled, quality,
+    sun, hemi, ambient, sunDirection, shadowsEnabled, quality,
+    get environment() { return environment; },
+    envReady,                                  // Promise<boolean>: true quando o PMREM do HDRI substituiu o procedural
+    get hdriInfo() { return hdriInfo; },
     update,
     enableShadows: sweep,
     refreshShadows(root, dt = 0) {

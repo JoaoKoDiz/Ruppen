@@ -576,7 +576,9 @@ export function createClouds(scene, worldData, opts = {}) {
   const anchorVals = anchors.map((a) => a.position.clone());
   const headingVals = new Float32Array(NUM_ANCHORS);
 
-  const volumetric = quality !== 'low';
+  // #clouds=puffs (ou opts.volumetric = false) força os billboards também em high/ultra
+  const forcePuffs = opts.volumetric === false || (typeof location !== 'undefined' && /(?:^|[#&])clouds=puffs(?:&|$)/.test(location.hash));
+  const volumetric = quality !== 'low' && !forcePuffs;
   // ------------------------- nuvens volumétricas -------------------------
   const vol = volumetric ? createVolumetricClouds(group, worldData, { anchorCount: NUM_ANCHORS, sunDirection, scene }) : null;
   let postTried = false;

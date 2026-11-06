@@ -131,8 +131,9 @@ export const CLOUDS = {
     BASE_MIN: 160, BASE_MAX: 650,   // altura da base plana (m)
     FOOT_TOP: 1800,            // topo dos montes do banco das patas (m)
     FOOT_COVER: 2.2,           // reforço da cobertura do banco das patas (resiste mais à erosão: banco contínuo)
-    FOOT_RING: 2150,           // raio médio do anel de nuvem ao redor das patas (m, local do elefante)
+    FOOT_RING: 2300,           // raio médio do anel de nuvem ao redor das patas (m, local do elefante)
     LEG_CLEAR: [0.92, 1.25],    // a densidade cai dentro deste cilindro (× raio da pata) — pernas visíveis no banco
+    NEAR_FADE: [25, 220],      // m — a densidade some perto da câmera (sem "parede" colada na lente)
     CULL_DIST: 40000,          // m — além disso a nuvem não é desenhada
     FADE_START: 30000,         // m — começa a desvanecer
     DENSITY: 0.03,             // coeficiente de extinção máximo (1/m): cúmulo denso, silhueta nítida
@@ -141,7 +142,7 @@ export const CLOUDS = {
     EROSION: 0.82,             // quanto o ruído base corrói a forma dos lóbulos
     DETAIL_EROSION: 0.55,      // idem para o detalhe (couve-flor nos topos, fiapos nas bases)
     EDGE_SHARP: 0.26,          // a densidade satura em d = EDGE_SHARP (borda nítida, miolo uniforme)
-    MAX_STEPS: 80,             // passos primários (inclui saltos no vazio)
+    MAX_STEPS: 110,            // passos primários (inclui saltos no vazio)
     LIGHT_STEPS: 5,            // passos de luz em direção ao sol
     LIGHT_STEP0: 28,           // m — 1º passo de luz (dobra a cada passo)
     STEP_MIN: 9,               // m — passo mínimo
@@ -175,13 +176,16 @@ export const LAYERS = { DEFAULT: 0, NO_FOG: 1 };
 export const ISLANDS = {
   // --- malha de terreno adaptativa (quadtree restrita: densa na costa, cristas e picos) ---
   TERRAIN_LEVELS: 11,      // níveis do quadtree (folha mínima = 2·boundRadius / 2^níveis ≈ 3–5 m)
-  TERRAIN_LEAVES_HIGH: 18000, // folhas por ilha (≈ 3,3 triângulos/folha → ~60k tris) em quality=high
+  TERRAIN_LEAVES_HIGH: 16500, // folhas por ilha antes da restrição 2:1 (→ ~62k tris) em quality=high
   TERRAIN_LEAVES_LOW: 8000,
+  LAND_LEAF_MAX: 90,       // m — folha máxima em terra (triângulos grandes viram vincos na AO de tela)
+  COAST_LEAF: 11,          // m — folhas da malha na linha d'água/falésias (refinadas antes do resto)
   DEEP_CULL_Y: -45,        // m — folhas inteiras abaixo disto não são desenhadas (o mar é opaco ali)
   RASTER: 256,             // células da grade regular de cobertura (posicionar árvores/pedras, relevo local)
   // --- detalhe de renderização (só visual: a jogabilidade continua em island.heightAt) ---
   EROSION_M: 24,           // m — profundidade máx. das ravinas (só cava: nunca acima de heightAt + ~3 m)
-  CLIFF_TOP: [3.2, 9.7],   // m — altura da borda das falésias costeiras (costa sem praia → com rocha)
+  CLIFF_TOP: [4, 11],      // m — heightAt onde fica a borda das falésias costeiras (costa sem praia → rocha)
+  CLIFF_RAISE: 5,          // m — a borda é erguida até isto (< DOVE.ALT_MIN): faces de ~10–18 m sobre o mar
   DETAIL_FADE: [160, 750, 1100, 5200], // m — detalhe fino some de [0]→[1], o grosso de [2]→[3]
   TEX_SIZE_HIGH: 512,      // px — texturas procedurais de detalhe (tileáveis)
   TEX_SIZE_LOW: 256,
@@ -395,7 +399,7 @@ export const ELEPHANT_MODEL = {
   EAR_HOUSE_GRID: { rows: 22, cols: 16 },   // bloco de casinhas em terraços no manto (muitas fileiras pequenas)
   EAR_HOUSE_RECT: { x0: -0.95, x1: -0.26, y0: -0.6, y1: -0.05 },   // região do bloco (frações da largura/altura da orelha; x<0 = para trás, y<0 = para baixo): parte SUPERIOR-EXTERNA (ref. 1)
   TRUNK_ROOT_RADIUS: 235,   // m — raio da tromba na raiz (afunila até TRUNK.baseRadius a ~25% do comprimento)
-  CITY_SPACING_HIGH: 7.6,   // m — passo da malha de casas do dorso no alto (quality=high); cresce para ~1,5× nos flancos
+  CITY_SPACING_HIGH: 7.9,   // m — passo da malha de casas do dorso no alto (quality=high); cresce para ~1,5× nos flancos
   CITY_SPACING_LOW: 11,
   CITY_FLANK_ANGLE: 1.25,   // rad — até que ângulo (a partir do zênite) as casas INSTANCIADAS descem pelos flancos
   CRUST_FLANK_ANGLE: 1.7,   // rad — até onde desce a casca-crosta (textura de casinhas) pelos flancos
@@ -413,7 +417,7 @@ export const ELEPHANT_MODEL = {
   TUSK_HOUSE_DIV: 30,       // lado da casinha da presa = diâmetro local / TUSK_HOUSE_DIV
   TUSK_HOUSE_GAP: 2.0,      // passo entre casinhas da presa (× lado)
   TUSK_HOUSE_SPAN: 1.35,    // rad — meio-ângulo coberto pelas casas (±: quase toda a metade de cima da presa)
-  TUSK_HOUSE_MAX: 1800,     // limite de casinhas por par de presas (orçamento de triângulos)
+  TUSK_HOUSE_MAX: 1400,     // limite de casinhas por par de presas (orçamento de triângulos)
   TUSK_TOWERS: 9,           // torres brancas por presa
   FOLD_BODY: 20,            // m — amplitude das dobras esculpidas do corpo (geometria)
   FOLD_HEAD: 8,             // m — idem cabeça
@@ -456,7 +460,7 @@ export const ELEPHANT_MATERIALS = {
   CLOTH_WEAVE_REPEAT: 25,   // repetições da trama tecida por ladrilho do atlas dos panos (≈ 50–60 m no mundo)
   TRUNK_WEAVE_REPEAT: { u: 50, v: 40 },
   CLOTH_ROUGHNESS: 0.9,
-  TASSEL_STRANDS: 150,      // fios da franja da borla (tubos finos; low = 90)
+  TASSEL_STRANDS: 110,      // fios da franja da borla (tubos finos; low = 90)
   TASSEL_STRAND_LENGTH: { min: 380, max: 450 },
   TASSEL_STRAND_RADIUS: 4.2,
   POMPOM_FUZZ: 0.4,        // deslocamento dos tufos (fuzzySphere)
@@ -490,6 +494,12 @@ export const ELEPHANT_SCULPT = {
   TRI_COLOR_TILE: 1100,     // m (modelo-base) — ladrilho do mapa de cor triplanar
   TRI_NORMAL_TILE: 140,     // m (modelo-base) — ladrilho dos mapas de normal/rugosidade triplanares
   TRI_SHARPNESS: 4,         // expoente da mistura triplanar
+  LEATHER_TILE: 62,         // m (modelo-base) — ladrilho do couro enrugado (fabric_leather_02, normal + rugosidade); 2ª escala ×2,6
+  LEATHER_NORMAL: 0.9,      // intensidade do couro na normal
+  MUD_TILE: 360,            // m (modelo-base) — ladrilho da lama seca rachada (brown_mud_dry, normal + luminância); 2ª escala ×2,7
+  MUD_NORMAL: 0.55,         // intensidade das rachaduras na normal
+  MUD_TONE: 0.35,           // quanto a luminância da lama modula o cinza quente da pele
+  SKIN_TINT: [1.12, 1.04, 0.97], // tinta (linear) sobre o albedo da pele: compensa o azul do céu no lado da sombra (cinza quente)
   NOD: 0.012,               // rad — aceno leve da cabeça
   KNEE_FLEX: 0.2,           // rad — flexão do joelho na fase de balanço
   HIP_SWING: 0.12,          // rad — balanço das patas a partir do quadril
@@ -507,7 +517,11 @@ export const RENDER = {
   PIXEL_RATIO: { low: 1, high: 1.5, ultra: 2 }, // teto de devicePixelRatio por nível (main.js)
   ENV_INTENSITY: 1.0,        // multiplica o envMapIntensity de cada MeshStandard/Physical (1 = respeita o peso do material: pele 0,4, ouro 1,2)
   ENV_INTENSITY_FALLBACK: 0.5,  // scene.environmentIntensity (Lambert/Phong e objetos ainda não varridos)
-  ENV_SUN_GLOW: 2.5,         // brilho (HDR) do halo do sol no mapa de ambiente → reflexo quente no ouro
+  ENV_SUN_GLOW: 2.5,         // brilho (HDR) do halo do sol no mapa de ambiente procedural → reflexo quente no ouro
+  // HDRI real (assets/hdri/kloofendal_48d_partly_cloudy_puresky_1k.hdr) como fonte do PMREM (lighting.js): girado para o
+  // sol cair em SUN_DIR, normalizado para a luminância média do céu procedural × BRIGHTNESS, sol limitado a SUN_CLAMP
+  // (luminância linear; o DirectionalLight é o sol direto) e misturado ao procedural por MIX. Não é usado como fundo.
+  HDRI: { MIX: 0.8, BRIGHTNESS: 1.0, SUN_CLAMP: 14 },
   SUN_INTENSITY: 3.4,        // DirectionalLight — luz-chave dominante (volumes esculpidos)
   HEMI_INTENSITY: 2.6,       // HemisphereLight — preenchimento azul-cinza: lado da sombra do elefante em cinza médio
   HEMI_SKY: 0xcbd9ee, HEMI_GROUND: 0x8494a6, // chão = luz refletida pelo mar/nuvens (barriga não fica preta)
@@ -558,12 +572,12 @@ export const RENDER = {
     // escala fina: raio no mundo = NEAR·(dist/NEAR_DIST)^EXP (≈ 2 m a 10 m, 7 m a 120 m, 20 m a 1,2 km, 40 m a 5 km)
     RADIUS_NEAR: 2.0, RADIUS_NEAR_DIST: 10, RADIUS_EXP: 0.48,
     RADIUS_MIN: 0.5, RADIUS_MAX: 120, // limites da escala fina (m)
-    LARGE_K: 0.06,           // escala larga: raio = dist × K (constante na tela ≈ 6% da altura com fov 62°)
-    MAX_PX: 0.13, MIN_PX: 1.5, // raio projetado máximo (fração da altura da tela) / mínimo (px)
-    INTENSITY: 1.6,          // ganho da oclusão fina
-    INTENSITY_LARGE: 1.3,    // ganho da oclusão larga
-    BIAS: 0.08,              // cosseno mínimo (evita auto-oclusão em superfícies curvas)
-    POWER: 1.25,             // contraste da AO
+    LARGE_K: 0.12,           // escala larga: raio = dist × K (constante na tela ≈ 12% da altura com fov 62°)
+    MAX_PX: 0.2, MIN_PX: 1.5, // raio projetado máximo (fração da altura da tela) / mínimo (px)
+    INTENSITY: 3.5,          // ganho da oclusão fina
+    INTENSITY_LARGE: 3.0,    // ganho da oclusão larga
+    BIAS: 0.07,              // cosseno mínimo (evita auto-oclusão em superfícies curvas)
+    POWER: 1.4,              // contraste da AO
     STRENGTH: 0.9,           // mistura final: cor × mix(1, ao, STRENGTH × visibilidade)
     FADE: [18000, 40000],    // m — some com a distância
     BLUR_SHARP: 0.06,        // tolerância relativa de profundidade do blur bilateral

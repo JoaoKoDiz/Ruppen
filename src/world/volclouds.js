@@ -424,6 +424,7 @@ void main() {
   vec3 col = vec3(0.0);
   float tW = 0.0, wSum = 0.0;
   float lastSun = 1.0;
+  float run = 0.0, lastStep = 0.0;   // passos vazios seguidos (dentro dos lóbulos mas sem densidade): o passo cresce
   for (int i = 0; i < MAX_STEPS; i++) {
     if (t >= tExit || T < 0.02) break;
     float dtF = clamp(t * STEP_K, STEP_MIN, STEP_MAX);
@@ -432,11 +433,20 @@ void main() {
     vec3 p = ro + rd * t;
     float sdf;
     float b = shapeAt(p, sdf);
-    if (sdf > dtF) { t += sdf + dtF * 0.3 * jitter; continue; }    // vazio: salta até o lóbulo mais próximo
-    if (b > 0.0) {
-      float d = densityAt(p, b, true);
-      if (d > 0.002) {
-        float sigma = d * gDens * smoothstep(0.0, 45.0, t);  // não "cega" a câmera colada na nuvem
+    if (sdf > dtF) { t += sdf + dtF * 0.3 * jitter; run = 0.0; lastStep = 0.0; continue; }    // vazio: salta até o lóbulo mais próximo
+    float d = b > 0.0 ? densityAt(p, b, true) : 0.0;
+    if (d <= 0.002) {
+      run += 1.0;
+      lastStep = dtF * (1.0 + min(run, 8.0) * 0.5);
+      t += lastStep;
+      continue;
+    }
+    // achou nuvem depois de passos longos: recua para pegar a superfície com o passo fino
+    if (run > 1.5) { t -= lastStep * 0.6; run = 0.0; lastStep = 0.0; continue; }
+    run = 0.0;
+    {
+      {
+        float sigma = d * gDens * smoothstep(NEAR_FADE0, NEAR_FADE1, t);  // some perto da câmera (voando dentro da nuvem: interior limpo em volta)
         // luz em direção ao sol (pulada nas partes já muito escondidas: reaproveita a última)
         float sunE = lastSun;
         if (T > 0.22) {
@@ -450,7 +460,7 @@ void main() {
             acc += ls; ls *= 2.0;
           }
           tau *= gDens;
-          sunE = exp(-tau) * ph0 + 0.5 * exp(-tau * 0.5) * ph1 + 0.25 * exp(-tau * 0.2) * ph2;
+          sunE = exp(-tau) * ph0 + 0.5 * exp(-tau * 0.5) * ph1 + 0.22 * exp(-tau * 0.25) * ph2;
           if (gFoot) sunE *= bodyShadow(p);
           lastSun = sunE;
         }
@@ -472,7 +482,7 @@ void main() {
         T *= 1.0 - a;
       }
     }
-    t += dt;
+    t += dt; lastStep = dt;
   }
   float alpha = clamp((1.0 - T) / 0.98, 0.0, 1.0) * vBMax.w;
   if (alpha < 0.004) discard;
@@ -563,7 +573,7 @@ function genFootBank(rng) {
   const R = V.FOOT_RING;
   const top = V.FOOT_TOP;
   // manta contínua (mar de nuvens) sob o elefante e em volta: elipsoide largo e baixo
-  lobes.push({ x: rng.range(-150, 150), y: 0, z: rng.range(-150, 150), r: R * 1.55, sq: 0.2 });
+  lobes.push({ x: rng.range(-150, 150), y: 0, z: rng.range(-150, 150), r: R * 1.22, sq: 0.22 });
   // 4 lóbulos nas patas (a nuvem "abraça" os pés)
   for (const [sx, sz] of [[1, -1], [1, 1], [-1, -1], [-1, 1]]) {
     const r = rng.range(950, 1150), sq = rng.range(0.62, 0.75);
@@ -659,7 +669,7 @@ export function createVolumetricClouds(group, worldData, opts = {}) {
     PHASE_G: f(V.PHASE_G), PHASE_BACK: f(V.PHASE_BACK), PHASE_BACK_W: f(V.PHASE_BACK_W), POWDER: f(V.POWDER),
     LEG_R: f(LEG_RADIUS), LEG_PX: f(LEG_PIVOT_X), LEG_PY: f(LEG_PIVOT_Y), LEG_PZ: f(LEG_PIVOT_Z),
     LEG_CLEAR0: f(V.LEG_CLEAR[0]), LEG_CLEAR1: f(V.LEG_CLEAR[1]),
-    EDGE_SHARP: f(V.EDGE_SHARP), FOOT_COVER: f(V.FOOT_COVER), AMB_PROBE: f(V.AMB_PROBE), BODY_CY: f(BODY.cy), BODY_RX: f(BODY.rx), BODY_RY: f(BODY.ry), BODY_RZ: f(BODY.rz), BODY_SHADOW: f(V.BODY_SHADOW),
+    EDGE_SHARP: f(V.EDGE_SHARP), FOOT_COVER: f(V.FOOT_COVER), NEAR_FADE0: f(V.NEAR_FADE[0]), NEAR_FADE1: f(V.NEAR_FADE[1]), AMB_PROBE: f(V.AMB_PROBE), BODY_CY: f(BODY.cy), BODY_RX: f(BODY.rx), BODY_RY: f(BODY.ry), BODY_RZ: f(BODY.rz), BODY_SHADOW: f(V.BODY_SHADOW),
   };
   const makeMat = (side) => {
     const m = new THREE.ShaderMaterial({
@@ -763,7 +773,8 @@ export function createVolumetricClouds(group, worldData, opts = {}) {
     dispose() { this.rt?.dispose(); this.quad?.dispose(); }
   }
 
-  return {
+  const api = {
+    enabled: true,            // depuração/medição: false esconde as nuvens volumétricas
     meshes: [meshFront, meshBack],
     stats,
     clouds,
@@ -858,10 +869,11 @@ export function createVolumetricClouds(group, worldData, opts = {}) {
           a.clearUpdateRanges(); a.addUpdateRange(0, Math.max(1, n) * 4); a.needsUpdate = true;
         }
       }
-      meshFront.visible = nf > 0 && !passMode; meshBack.visible = nb > 0;
+      meshFront.visible = nf > 0 && !passMode && api.enabled; meshBack.visible = nb > 0 && api.enabled;
       stats.visible = nf + nb; stats.inside = nb;
     },
   };
+  return api;
 }
 
 export { LEG_NAMES };

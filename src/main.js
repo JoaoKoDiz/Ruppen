@@ -53,8 +53,9 @@ const sky = createSky(scene, { quality: worldQuality });
 const ocean = createOcean(scene, { quality: worldQuality });
 const islands = createIslands(scene, WORLD_DATA, { quality: worldQuality });
 const clouds = createClouds(scene, WORLD_DATA, { quality: worldQuality });
-// composer: cena (MSAA + depth) → SSAO → bloom → grade → SMAA; low = render direto. #ao=0 desliga a AO, #postdebug=1|2 mostra o buffer de AO
-const post = createPost(renderer, scene, camera, { quality, ao: params.ao !== '0', debug: num('postdebug', 0) });
+// composer: cena (MSAA + depth) → SSAO → bloom → grade → SMAA; low = render direto. #ao=0 desliga a AO, #postdebug=1|2 mostra o buffer de AO, #msaa=N
+const post = createPost(renderer, scene, camera, { quality, ao: params.ao !== '0', debug: num('postdebug', 0), msaa: params.msaa !== undefined ? num('msaa', 4) : undefined }); // #msaa=0: captura headless rápida
+clouds.attachPost?.(post); // nuvens volumétricas como passe 'beforeGrade' do pós (oclusão pela depth da cena); no-op em low
 const elephants = WORLD_DATA.routes.map((route, i) => createElephant(route, i, { quality: worldQuality }));
 for (const e of elephants) scene.add(e.group);
 
@@ -140,6 +141,7 @@ window.addEventListener('resize', () => {
 });
 
 // ----------------------- ganchos de depuração/teste ---------------------
+await Promise.race([lighting.envReady, new Promise((r) => setTimeout(r, 8000))]); // PMREM do HDRI real (o jogo já roda com o procedural)
 window.__ready = true;
 window.__step = async (n = 1, dt = 1 / 60) => { for (let i = 0; i < n; i++) { tick(dt); } post.render(); };
 window.__stats = () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures, player: flight.state.position.toArray().map((v) => Math.round(v)), target: delivery.target?.name, deliveries: delivery.count });

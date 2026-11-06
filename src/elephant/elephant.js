@@ -28,15 +28,20 @@
 //  em dois níveis de detalhe (casca-crosta texturizada sempre visível + tapete instanciado até
 //  LOD_DISTANCE), presas cobertas de casinhas minúsculas (instâncias) com anéis grossos de contas,
 //  orelhas orgânicas com borda de 7 listras e bloco pequeno de casinhas, e jato d'água periódico.
-//  Estrutura: UM SkinnedMesh com 9 ossos (raiz, 4 patas, 2 orelhas, tromba,
-//  cauda) e grupos de material (pele, tecido da tromba, panos, marfim, ouro,
-//  cidade, borla, olhos, prata) + 4 InstancedMesh (tapete de casas ×2, tachas,
-//  pompons). Tudo o que é rígido vai preso ao osso raiz; o que anima vai preso
-//  ao osso da parte. Resultado: 16 draw calls e ≈ 309 k triângulos por elefante com o tapete visível
-//  (quality=high, sem contar a passada de sombra).
-//  Materiais PBR (ELEPHANT_MATERIALS): pele com normal micro (rugas + fendas + poros), roughnessMap fosco,
-//  rugas finas onduladas pintadas e AO de cavidade por vértice tirado da própria malha esculpida.
-//
+//  Rodada 4 (realismo): a pele é UMA malha contínua esculpida num campo de distância (src/elephant/
+//  sculpt.js): união suave de tronco (barriga caída, cernelha, crista da espinha, peito, ombros,
+//  quadris, garupa), pescoço, cabeça (domos, testa, bochechas, queixo, bainhas das presas, raízes das
+//  orelhas), tromba, patas (joelho/jarrete, sola chata) e cauda, poligonizada por surface nets UMA vez
+//  e compartilhada pelos 7 elefantes; dobras em lençóis sobrepostos deslocadas na normal, vincos
+//  fundos nas junções, AO de cavidade nos vértices e mapas da pele em TRIPLANAR (procedurais + couro
+//  e lama seca reais do Poly Haven), sem UV nem emendas.
+//  Estrutura: DOIS SkinnedMesh com o MESMO esqueleto de 17 ossos (raiz, quadril+joelho ×4, cabeça,
+//  4 da tromba, cauda, 2 orelhas; pesos da pele pela região dominante do campo): a pele esculpida e as
+//  demais partes (grupos de material: pele das orelhas/pálpebras, manga da tromba, panos, marfim,
+//  ouro, cidade, borla, olhos, prata) + InstancedMesh (tapete de casas ×2, casinhas das presas, tachas,
+//  pompons — estes três presos ao osso da cabeça) + crosta. Faixas dos tornozelos, unhas e manga da
+//  tromba são lançadas na pele esculpida; cidade, crosta, placa, olhos e guirlanda usam as consultas
+//  de superfície do campo. ≈ 17 draw calls e ≈ 360 k triângulos por elefante com o tapete visível.
 //  Espaço local: +X = frente, +Y = cima, +Z = lado direito; origem no
 //  nível do mar entre as patas (ver config.js / ARCHITECTURE.md).
 // =====================================================================
@@ -45,6 +50,7 @@ import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometr
 import { ELEPHANT, ELEPHANT_MODEL, ELEPHANT_POLISH, ELEPHANT_MATERIALS, ELEPHANT_SCULPT, COLORS, SEED } from '../config.js';
 import { createRng, hashInt } from '../util/rng.js';
 import { createNoise } from '../util/noise.js';
+import { tex } from '../assets.js';
 import {
   foldValue, FOLD_CA, FOLD_SA, TRUNK_CURVE, trunkR, BODY_SX, BONES, BONE, EYES, EAR_PIVOT, TRUNK_ROOT, LEGS,
   getSkinGeometry, getTables, skinBody, skinHead, skinNeck, skinTop, skinTopY, castOut, sdf, gradient, foldAt,
@@ -716,13 +722,35 @@ function getShared() {
     eye: new THREE.MeshPhysicalMaterial({ map: eye, emissiveMap: eye, emissive: 0xffffff, emissiveIntensity: 0.45, roughness: MT.EYE_ROUGHNESS, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 1 }),
     silver: new THREE.MeshStandardMaterial({ color: 0xbdb9b2, metalness: 1, roughness: 1, roughnessMap: gold.rough, normalMap: gold.normal, normalScale: new THREE.Vector2(0.3, 0.3), emissive: 0x2a2724, emissiveIntensity: 0.5, envMapIntensity: 0.55 }),
     // lã: sem brilho algum + pelos em relevo (a cor vem da instância)
+    // lã bouclé real (Poly Haven): a cor bege-clara da textura é neutralizada (color) para a instância tingir
     pompom: new THREE.MeshStandardMaterial({ map: pom.map, normalMap: pom.normal, normalScale: new THREE.Vector2(1.1, 1.1), roughness: 1.0, metalness: 0, envMapIntensity: 0.4 }),
     // crosta de casinhas do dorso (casca fina; alfa por vértice esmaece as bordas)
     crust: new THREE.MeshStandardMaterial({ map: crust.map, bumpMap: crust.bump, bumpScale: 2.5, roughness: 0.85, metalness: 0, vertexColors: true, transparent: true, depthWrite: true, alphaTest: 0.02, envMapIntensity: 0.5 }),
     // jato d'água: pontos aditivos brancos (a cor por vértice esmaece para névoa)
     spray: new THREE.PointsMaterial({ map: spray, size: EM.SPRAY_POINT_SIZE * (E.SCALE || 1), sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true, opacity: 0.5, fog: true }),
   };
-  shared = { mat };
+  // Texturas reais (Poly Haven, CC0; src/assets.js) — carregam de forma assíncrona e entram nos
+  // materiais quando TODAS as imagens chegaram (antes disso valem os mapas procedurais):
+  //   pele (triplanar): fabric_leather_02 + brown_mud_dry;  panos/manga: poly_wool_herringbone;
+  //   pompons: wool_boucle (só a normal: a cor do bouclé é xadrez).
+  const herr = (ru, rv, map) => tex('poly_wool_herringbone', map, { repeat: [ru, rv] });
+  const real = {
+    clothN: herr(MT.CLOTH_WEAVE_REPEAT, MT.CLOTH_WEAVE_REPEAT, 'nor_gl'), clothR: herr(MT.CLOTH_WEAVE_REPEAT, MT.CLOTH_WEAVE_REPEAT, 'rough'),
+    trunkN: herr(MT.TRUNK_WEAVE_REPEAT.u, MT.TRUNK_WEAVE_REPEAT.v, 'nor_gl'), trunkR: herr(MT.TRUNK_WEAVE_REPEAT.u, MT.TRUNK_WEAVE_REPEAT.v, 'rough'),
+    pomN: tex('wool_boucle', 'nor_gl', { repeat: [2, 1] }),
+  };
+  const all = [...Object.values(real), ...Object.values(mat.skinTri.userData.real)];
+  let upgraded = false;
+  const upgrade = () => {
+    if (upgraded || !all.every((t) => t && t.image && t.image.width)) return;
+    upgraded = true;
+    mat.skinTri.userData.onReady();
+    mat.cloth.normalMap = real.clothN; mat.cloth.roughnessMap = real.clothR; mat.cloth.roughness = 1; mat.cloth.normalScale.set(0.8, 0.8);
+    mat.trunk.normalMap = real.trunkN; mat.trunk.roughnessMap = real.trunkR; mat.trunk.roughness = 1; mat.trunk.normalScale.set(0.8, 0.8);
+    mat.pompom.normalMap = real.pomN;   // (a cor do bouclé é xadrez: tingida pela instância vira tartã → fica a lã procedural na cor)
+    for (const k of ['cloth', 'trunk', 'pompom']) mat[k].needsUpdate = true;
+  };
+  shared = { mat, upgrade };
   return shared;
 }
 
@@ -1043,7 +1071,7 @@ function getFitted(low) {
     const nails = [];
     legAxis(sx, sz, -14, o);
     for (const a of [-1.05, -0.52, 0, 0.52, 1.05]) {
-      dir.set(sx * Math.cos(a), 0, Math.sin(a)); fitOut(o, dir, -6, 400, P, false);
+      dir.set(Math.cos(a), 0, Math.sin(a)); fitOut(o, dir, -6, 400, P, false);   // unhas sempre à frente (+X)
       nails.push({ p: P.clone(), d: dir.clone() });
     }
     out.nails.push(nails);
@@ -1089,10 +1117,22 @@ function getFitted(low) {
 // derivadas de tela (funciona com skinning). AO de cavidade na cor do vértice.
 function makeTriplanarSkin(src) {
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, envMapIntensity: MT.SKIN_ENV });
+  // detalhe real (Poly Haven, CC0): couro enrugado (normal + rugosidade, 2 escalas) e lama seca
+  // rachada (normal + luminância da cor, 2 escalas) — carregados de forma assíncrona: até chegarem,
+  // usa os mapas procedurais (triReady = 0)
+  const real = { leatherN: tex('fabric_leather_02', 'nor_gl'), leatherR: tex('fabric_leather_02', 'rough'), mudN: tex('brown_mud_dry', 'nor_gl'), mudD: tex('brown_mud_dry', 'diff') };
+  m.color.setRGB(SC.SKIN_TINT[0], SC.SKIN_TINT[1], SC.SKIN_TINT[2]);
   const uni = {
     triMap: { value: src.map }, triNormal: { value: src.normal }, triRough: { value: src.rough },
     triScaleC: { value: 1 / SC.TRI_COLOR_TILE }, triScaleN: { value: 1 / SC.TRI_NORMAL_TILE }, triNS: { value: MT.SKIN_NORMAL_SCALE }, triSharp: { value: SC.TRI_SHARPNESS },
+    triReady: { value: 0 }, leatherN: { value: src.normal }, leatherR: { value: src.rough }, mudN: { value: src.normal }, mudD: { value: src.rough },
+    scLeather: { value: new THREE.Vector2(1 / SC.LEATHER_TILE, 1 / (SC.LEATHER_TILE * 2.618)) }, scMud: { value: new THREE.Vector2(1 / SC.MUD_TILE, 1 / (SC.MUD_TILE * 2.71)) },
+    nsLeather: { value: SC.LEATHER_NORMAL }, nsMud: { value: SC.MUD_NORMAL }, mudTone: { value: SC.MUD_TONE },
   };
+  // pronto quando as 4 imagens tiverem chegado (verificado a cada quadro pelo elefante)
+  // (as texturas só entram nos uniformes depois de carregadas: antes disso ficam os mapas procedurais)
+  m.userData.real = real;
+  m.userData.onReady = () => { for (const k of Object.keys(real)) uni[k].value = real[k]; uni.triReady.value = 1; };
   m.userData.triplanar = uni;
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uni);
@@ -1103,8 +1143,21 @@ function makeTriplanarSkin(src) {
       .replace('#include <common>', `#include <common>
 varying vec3 vTriP;
 varying vec3 vTriN;
-uniform sampler2D triMap, triNormal, triRough;
-uniform float triScaleC, triScaleN, triNS, triSharp;
+uniform sampler2D triMap, triNormal, triRough, leatherN, leatherR, mudN, mudD;
+uniform float triScaleC, triScaleN, triNS, triSharp, triReady, nsLeather, nsMud, mudTone;
+uniform vec2 scLeather, scMud;
+// normal em espaço tangente de uma projeção: couro (2 escalas) + lama rachada, mistura "whiteout"
+vec3 triTanN(vec2 p) {
+  vec3 a = texture2D(leatherN, p * scLeather.x).xyz * 2.0 - 1.0, b = texture2D(leatherN, p * scLeather.y + 0.37).xyz * 2.0 - 1.0;
+  vec3 c = texture2D(mudN, p * scMud.x + 0.61).xyz * 2.0 - 1.0;
+  vec2 xy = a.xy * nsLeather * 0.65 + b.xy * nsLeather * 0.45 + c.xy * nsMud;
+  return normalize(vec3(xy, a.z * b.z * c.z));
+}
+// luminância da lama seca (2 escalas) relativa à média → modula o cinza quente procedural
+float triMud(vec2 p) {
+  float l = dot(texture2D(mudD, p * scMud.x + 0.61).rgb, vec3(0.299, 0.587, 0.114)) * 0.6 + dot(texture2D(mudD, p * scMud.y + 0.2).rgb, vec3(0.299, 0.587, 0.114)) * 0.4;
+  return mix(1.0, clamp(l / 0.11, 0.35, 1.8), mudTone);
+}
 vec3 triW() { vec3 w = pow(abs(normalize(vTriN)), vec3(triSharp)); return w / (w.x + w.y + w.z); }
 vec3 triPerturb(vec3 eyePos, vec3 N, vec2 uv, vec3 mapN) {
   vec3 q0 = dFdx(eyePos), q1 = dFdy(eyePos); vec2 st0 = dFdx(uv), st1 = dFdy(uv);
@@ -1116,18 +1169,26 @@ vec3 triPerturb(vec3 eyePos, vec3 N, vec2 uv, vec3 mapN) {
       .replace('#include <map_fragment>', `{
   vec3 tw = triW(); vec3 tp = vTriP * triScaleC;
   vec4 tc = texture2D(triMap, tp.zy) * tw.x + texture2D(triMap, tp.xz) * tw.y + texture2D(triMap, tp.xy) * tw.z;
+  if (triReady > 0.5) tc.rgb *= triMud(vTriP.zy) * tw.x + triMud(vTriP.xz) * tw.y + triMud(vTriP.xy) * tw.z;
   diffuseColor *= tc;
 }`)
       .replace('#include <roughnessmap_fragment>', `float roughnessFactor = roughness;
 {
   vec3 tw = triW(); vec3 tp = vTriP * triScaleN;
-  roughnessFactor *= texture2D(triRough, tp.zy).g * tw.x + texture2D(triRough, tp.xz).g * tw.y + texture2D(triRough, tp.xy).g * tw.z;
+  if (triReady > 0.5) {
+    vec2 s = vec2(scLeather.x); float r = texture2D(leatherR, vTriP.zy * s.x).g * tw.x + texture2D(leatherR, vTriP.xz * s.x).g * tw.y + texture2D(leatherR, vTriP.xy * s.x).g * tw.z;
+    roughnessFactor *= clamp(0.62 + 0.45 * r, 0.6, 0.97);
+  } else roughnessFactor *= texture2D(triRough, tp.zy).g * tw.x + texture2D(triRough, tp.xz).g * tw.y + texture2D(triRough, tp.xy).g * tw.z;
 }`)
       .replace('#include <normal_fragment_maps>', `{
   vec3 tw = triW(); vec3 tp = vTriP * triScaleN;
-  vec3 mx = texture2D(triNormal, tp.zy).xyz * 2.0 - 1.0; mx.xy *= triNS;
-  vec3 my = texture2D(triNormal, tp.xz).xyz * 2.0 - 1.0; my.xy *= triNS;
-  vec3 mz = texture2D(triNormal, tp.xy).xyz * 2.0 - 1.0; mz.xy *= triNS;
+  vec3 mx, my, mz;
+  if (triReady > 0.5) { mx = triTanN(vTriP.zy); my = triTanN(vTriP.xz); mz = triTanN(vTriP.xy); }
+  else {
+    mx = texture2D(triNormal, tp.zy).xyz * 2.0 - 1.0; mx.xy *= triNS;
+    my = texture2D(triNormal, tp.xz).xyz * 2.0 - 1.0; my.xy *= triNS;
+    mz = texture2D(triNormal, tp.xy).xyz * 2.0 - 1.0; mz.xy *= triNS;
+  }
   vec3 nAcc = tw.x * triPerturb(-vViewPosition, normal, tp.zy, mx) + tw.y * triPerturb(-vViewPosition, normal, tp.xz, my) + tw.z * triPerturb(-vViewPosition, normal, tp.xy, mz);
   normal = normalize(nAcc);
 }`);
@@ -1494,7 +1555,7 @@ export function createElephant(route, index, opts = {}) {
   // ============================ TRAMA DA BARRIGA ===================
   {
     const pos = [], uv = [], idx = [];
-    const nx0 = -0.12, rows = [nx0 - 0.045, nx0 + 0.045]; const N = 64;
+    const nx0 = 0.0, rows = [nx0 - 0.045, nx0 + 0.045]; const N = 64;
     const k = Math.sqrt(1 - nx0 * nx0); const phi0 = Math.acos(Math.min(1, 0.42 / k));
     for (let r = 0; r < 2; r++) for (let i = 0; i <= N; i++) {
       const phi = phi0 + (i / N) * (TAU - 2 * phi0); const kk = Math.sqrt(1 - rows[r] * rows[r]);
@@ -1555,7 +1616,7 @@ export function createElephant(route, index, opts = {}) {
         if (!skinBody(dirv, tmp3, nrm, true)) continue;   // coberto por pescoço/patas/cabeça
         const lx = tmp3.x, lz = tmp3.z;
         if (insideNeckOrHead(tmp3)) continue;
-        if (Math.abs(nx2 + 0.12) < 0.075 && Math.abs(p2) > 1.05) continue; // trama da barriga
+        if (Math.abs(nx2 - 0.0) < 0.075 && Math.abs(p2) > 1.05) continue; // trama da barriga
         if (inPalace(lx, lz) || inBrick(lx, lz) || inPlaza(lx, lz) || inTemple(lx, lz)) continue;
         // ruas: curvas de ruído (duas escalas) + avenida central para a frente da praça
         const st = noise.noise2(lx / 230 + index * 3.1, lz / 230 + phi * 0.3);
@@ -1637,7 +1698,7 @@ export function createElephant(route, index, opts = {}) {
       const edge = noise.noise2(nx * 3 + index * 1.3, phi * 2.2) * 0.25;
       let a = 1 - smooth(phiMax - 0.55, phiMax - 0.05, Math.abs(phi) + edge);
       a *= 1 - smooth(0.92, 0.985, -nx + edge * 0.4);                       // garupa: borda esmaecida
-      if (Math.abs(nx + 0.12) < 0.075 && Math.abs(phi) > 1.05) a = 0;       // trama da barriga
+      if (Math.abs(nx - 0.0) < 0.075 && Math.abs(phi) > 1.05) a = 0;       // trama da barriga
       if (!own) a = 0;                                                      // sob pescoço/patas
       col.push(1, 1, 1, a);
     });
@@ -2062,6 +2123,7 @@ export function createElephant(route, index, opts = {}) {
       if (vp) { _sv.copy(vp); carpetGroup.visible = _sv.distanceTo(state.position) < ent.lodDistance; }
       else carpetGroup.visible = true;
       updateSpray(time);
+      S.upgrade();   // texturas reais assim que carregarem
       for (const c of colliders) c.center.copy(c.local).applyMatrix4(rig.matrixWorld);
       ent.deliveryMarker.set((PZ.x0 + PZ.x1) / 2, ent.cityTopLocal + 260, 0).applyMatrix4(group.matrixWorld);
     },

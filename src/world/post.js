@@ -20,7 +20,7 @@
 //  d = log2(1 + w) / log2(far + 1) (w = −z de vista), então w = exp2(d · log2(far + 1)) − 1 (POST_DEPTH_GLSL).
 //  Céu: d ≥ 0,99995 (o domo não grava depth; o clear é 1).
 //
-//  Contrato: createPost(renderer, scene, camera, { quality, ao = true, debug = 0 }) → {
+//  Contrato: createPost(renderer, scene, camera, { quality, ao = true, debug = 0, msaa = RENDER.MSAA }) → {
 //    render(), setSize(), update(), dispose(),
 //    composer | null, bloom | null, grade | null, smaa | null, quality,
 //    sceneTarget   : WebGLRenderTarget | null — cor da cena (sRGB de tela) + .depthTexture
@@ -345,7 +345,7 @@ export function createPost(renderer, scene, camera, opts = {}) {
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
   const perspectiveDepth = !renderer.capabilities.logarithmicDepthBuffer;
   const floatColor = renderer.extensions.has('EXT_color_buffer_float') || renderer.extensions.has('EXT_color_buffer_half_float');
-  const samples = Math.min(RENDER.MSAA, renderer.capabilities.maxSamples || 0);
+  const samples = Math.min(opts.msaa ?? RENDER.MSAA, renderer.capabilities.maxSamples || 0); // opts.msaa: só para capturas headless rápidas
 
   // ---- render target da cena: cor "de tela" + depth float (log)
   const depthTexture = new THREE.DepthTexture(size.x, size.y, THREE.FloatType);

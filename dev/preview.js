@@ -58,6 +58,7 @@ async function loadEnv() {
   const sky = skyM.createSky(scene, { quality: worldQuality }); updaters.push((t, dt) => sky.update(camera, t));
   const ocean = oceanM.createOcean(scene, { quality: worldQuality }); updaters.push((t, dt) => ocean.update(camera, t));
   const clouds = cloudsM.createClouds(scene, WORLD_DATA, { quality: worldQuality }); updaters.push((t, dt) => clouds.update(camera, t, dt));
+  clouds.attachPost?.(post);
   if (kind === 'all') {
     const islM = await import('../src/world/islands.js');
     const isl = islM.createIslands(scene, WORLD_DATA, { quality: worldQuality }); updaters.push((t, dt) => isl.update?.(camera, t));
@@ -137,6 +138,7 @@ function frame() {
 }
 frame();
 window.addEventListener('resize', () => { renderer.setSize(window.innerWidth, window.innerHeight, false); camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); post.setSize(); });
+await Promise.race([lighting.envReady, new Promise((r) => setTimeout(r, 8000))]); // PMREM do HDRI real
 window.__ready = true;
 window.__step = async (n = 1, dt = 1 / 60) => { for (let i = 0; i < n; i++) tick(dt); post.render(); };
 window.__stats = () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures });
