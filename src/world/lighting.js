@@ -7,13 +7,20 @@
 //     (o ouro reflete o céu/sol; o lado da sombra fica azulado, nunca preto);
 //   • hemisfério + ambiente reduzidos (o envMap já dá a luz do céu) e FogExp2.
 //  Contrato:
-//    createLighting(scene, renderer, { quality }) → {
-//      sun, hemi, ambient, sunDirection, environment (Texture | null), shadowsEnabled,
+//    createLighting(scene, renderer, { quality, shadowRange? }) → {
+//      sun, hemi, ambient, sunDirection, environment (Texture | null), shadowsEnabled, setEnvIntensity(k),
 //      update(camera | Vector3),            // por quadro: move o sol/caixa de sombras para perto do jogador
-//      enableShadows(root),                 // liga castShadow/receiveShadow em tudo o que deve ter sombra
+//      enableShadows(root),                 // liga castShadow/receiveShadow (+ envMap PBR) em tudo o que deve ter
 //      refreshShadows(root, dt),            // chama enableShadows a cada RENDER.SHADOW.REFRESH_S s (objetos novos)
 //    }
 //    enableShadows(root) também é exportada solta.  Opt-out por objeto: obj.userData.noShadow = true.
+//
+//  envMap por material: o three.js (r163+) SOBRESCREVE material.envMapIntensity com
+//  scene.environmentIntensity sempre que material.envMap é null. Para respeitar os pesos
+//  escolhidos pelos módulos (pele 0,5, ouro 1,2…), a travessia de enableShadows/refreshShadows
+//  liga material.envMap = environment explicitamente nos MeshStandard/Physical e usa
+//  envMapIntensity = (valor do material) × RENDER.ENV_INTENSITY. Lambert/Phong continuam
+//  no fallback scene.environment × scene.environmentIntensity (só irradiância difusa).
 // =====================================================================
 import * as THREE from 'three';
 import { COLORS, SUN_DIR, WORLD, RENDER } from '../config.js';
@@ -96,6 +103,21 @@ function shadowEligible(obj) {
   return true;
 }
 
+// envMap explícito nos materiais PBR (ver cabeçalho). Guarda o peso original em userData.envBase.
+function applyEnvironment(obj, env, scale) {
+  const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+  for (const m of mats) {
+    if (!m || !m.isMeshStandardMaterial) continue;
+    if (m.userData.envBase === undefined) {
+      if (m.envMap) continue; // o módulo escolheu o próprio envMap: não mexe
+      m.userData.envBase = m.envMapIntensity;
+      m.envMap = env;
+      m.needsUpdate = true;
+    }
+    m.envMapIntensity = m.userData.envBase * scale;
+  }
+}
+
 // Liga castShadow/receiveShadow numa única travessia. Marca os objetos já tratados
 // (userData.shadowsSet) para que as travessias periódicas sejam baratas e não
 // sobrescrevam escolhas feitas por outros módulos.
@@ -114,29 +136,32 @@ export function enableShadows(root) {
 }
 
 export function createLighting(scene, renderer = null, opts = {}) {
-  const quality = opts.quality || 'high';
-  const shadowCfg = RENDER.SHADOW[quality] === undefined ? RENDER.SHADOW.high : RENDER.SHADOW[quality];
+  const quality = ['low', 'high', 'ultra'].includes(opts.quality) ? opts.quality : 'high';
+  // opts.shadowRange: substitui o ±range do nível (o preview ajusta a caixa ao tamanho do objeto em foco)
+  const shadowCfg = RENDER.SHADOW[quality] && (opts.shadowRange ? { ...RENDER.SHADOW[quality], range: opts.shadowRange } : RENDER.SHADOW[quality]);
 
-  // Luz suave como nas referências: sol moderado, muita luz de céu (envMap + hemisfério) → sombras cinza-azuladas.
+  // Sol dominante + pouca luz de preenchimento: o lado da sombra do elefante fica cinza-escuro
+  // azulado (envMap do céu + hemisfério fraco), o lado do sol esculpe as rugas e os volumes.
   const sun = new THREE.DirectionalLight(COLORS.sunLight, RENDER.SUN_INTENSITY);
   sun.position.copy(sunDirection).multiplyScalar(RENDER.SHADOW.DEPTH);
   sun.target.position.set(0, 0, 0);
   scene.add(sun, sun.target);
 
-  const hemi = new THREE.HemisphereLight(0xd9e6f6, 0x5b7392, RENDER.HEMI_INTENSITY);
+  const hemi = new THREE.HemisphereLight(RENDER.HEMI_SKY, RENDER.HEMI_GROUND, RENDER.HEMI_INTENSITY);
   scene.add(hemi);
-  const ambient = new THREE.AmbientLight(0xb6c9e0, RENDER.AMBIENT_INTENSITY);
+  const ambient = new THREE.AmbientLight(RENDER.AMBIENT_COLOR, RENDER.AMBIENT_INTENSITY);
   scene.add(ambient);
 
   scene.fog = new THREE.FogExp2(COLORS.fog, WORLD.FOG_DENSITY);
   scene.background = new THREE.Color(COLORS.skyHorizon);
 
-  // ---- mapa de ambiente (só MeshStandardMaterial/Physical usam scene.environment)
+  // ---- mapa de ambiente
   let environment = null;
+  let envScale = RENDER.ENV_INTENSITY;
   if (renderer) {
     environment = createEnvironmentMap(renderer);
-    scene.environment = environment;
-    scene.environmentIntensity = RENDER.ENV_INTENSITY;
+    scene.environment = environment;                       // fallback (Lambert/Phong e objetos ainda não varridos)
+    scene.environmentIntensity = RENDER.ENV_INTENSITY_FALLBACK;
   }
 
   // ---- sombras
@@ -144,14 +169,17 @@ export function createLighting(scene, renderer = null, opts = {}) {
   let texel = 1;
   if (shadowsEnabled) {
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap; // r187: PCFSoftShadowMap foi removido; o PCF já filtra num disco de Vogel (shadow.radius)
     sun.castShadow = true;
     const s = sun.shadow;
     s.mapSize.set(shadowCfg.mapSize, shadowCfg.mapSize);
+    s.radius = shadowCfg.radius;
+    s.intensity = RENDER.SHADOW.INTENSITY;
     const cam = s.camera;
     cam.left = -shadowCfg.range; cam.right = shadowCfg.range;
     cam.bottom = -shadowCfg.range; cam.top = shadowCfg.range;
-    cam.near = 1; cam.far = RENDER.SHADOW.DEPTH * 2;
+    // caixa justa ao longo do raio do sol: de DEPTH acima do foco (topos das cidades nas costas) até BELOW abaixo
+    cam.near = 1; cam.far = RENDER.SHADOW.DEPTH + RENDER.SHADOW.BELOW;
     cam.updateProjectionMatrix();
     s.bias = shadowCfg.bias;
     s.normalBias = shadowCfg.normalBias;
@@ -191,22 +219,32 @@ export function createLighting(scene, renderer = null, opts = {}) {
     sun.position.copy(focus).addScaledVector(sunDirection, RENDER.SHADOW.DEPTH);
   }
 
+  // Varredura: envMap explícito nos materiais PBR + sombras nos objetos novos.
+  function sweep(root) {
+    if (environment) root.traverse((o) => { if (o.isMesh && !o.userData.envSet) { o.userData.envSet = true; applyEnvironment(o, environment, envScale); } });
+    return shadowsEnabled ? enableShadows(root) : 0;
+  }
+
   return {
-    sun, hemi, ambient, sunDirection, environment, shadowsEnabled,
+    sun, hemi, ambient, sunDirection, environment, shadowsEnabled, quality,
     update,
-    enableShadows(root) { return shadowsEnabled ? enableShadows(root) : 0; },
+    enableShadows: sweep,
     refreshShadows(root, dt = 0) {
-      if (!shadowsEnabled) return 0;
       refreshAcc += dt;
       if (refreshAcc < RENDER.SHADOW.REFRESH_S) return 0;
       refreshAcc = 0;
-      return enableShadows(root);
+      return sweep(root);
+    },
+    // ajuste fino em tempo de execução (console / ferramentas de captura)
+    setEnvIntensity(k, root = scene) {
+      envScale = k;
+      root.traverse((o) => { if (!o.isMesh) return; const ms = Array.isArray(o.material) ? o.material : [o.material]; for (const m of ms) if (m && m.userData.envBase !== undefined) m.envMapIntensity = m.userData.envBase * k; });
     },
   };
 }
 
 export function applyRendererDefaults(renderer) {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = RENDER.EXPOSURE; // levemente abaixo de 1: brancos não estouram, contraste menor
+  renderer.toneMappingExposure = RENDER.EXPOSURE;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 }

@@ -244,15 +244,34 @@ function makeSkinTextures() {
   const W = 1024, H = 1024;
   const c = makeCanvas(W, H), ctx = c.getContext('2d');
   // base: cinza-castanho QUENTE (refs.: ~#6b625f ao sol), sem tinta azul
-  ctx.fillStyle = '#7d726c'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = hex(MT.SKIN_COLOR); ctx.fillRect(0, 0, W, H);
   const blot = noiseCanvas(128, 17, 3, 4, 170, 255);
   ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.35; ctx.drawImage(blot, 0, 0, W, H);
-  ctx.globalAlpha = 0.3; ctx.drawImage(getCrease().col, 0, 0, W, H);   // AO dos vincos orgânicos (vales escuros)
+  ctx.globalAlpha = 0.5; ctx.drawImage(getCrease().col, 0, 0, W, H);   // AO dos vincos orgânicos (vales escuros)
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
-  // manchas (mottling): rosado nas zonas finas da pele, castanho em placas, poeira clara por cima
-  ctx.drawImage(tintedNoise(256, 121, 5, 3, 0x8d6f69, 0.55, 0.8, 0.45), 0, 0, W, H);
-  ctx.drawImage(tintedNoise(256, 122, 7, 3, 0x5a4b44, 0.56, 0.82, 0.28), 0, 0, W, H);
-  ctx.drawImage(tintedNoise(256, 123, 3.5, 3, 0x9c9287, 0.58, 0.85, 0.32), 0, 0, W, H);
+  // manchas (mottling): rosado-castanho nas zonas finas da pele, castanho escuro em placas, poeira por cima
+  ctx.drawImage(tintedNoise(256, 121, 5, 3, 0x7a605a, 0.55, 0.8, 0.4), 0, 0, W, H);
+  ctx.drawImage(tintedNoise(256, 122, 7, 3, 0x463a35, 0.56, 0.82, 0.3), 0, 0, W, H);
+  ctx.drawImage(tintedNoise(256, 123, 3.5, 3, 0x84796f, 0.6, 0.86, 0.26), 0, 0, W, H);
+  // rugas finas onduladas (ref.: linhas paralelas sinuosas por cima das dobras grandes): segmentos de
+  // linhas escuras com um fio de luz logo acima (relevo pintado), tileáveis (desenhadas com wrap em x e y)
+  {
+    const lrng = createRng(SEED + 131);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (let i = 0; i < MT.SKIN_FINE_WRINKLES; i++) {
+      const y0 = lrng() * H, kk = lrng.int(1, 3), amp = 4 + lrng() * 12, ph = lrng() * TAU, k2 = lrng.int(4, 9), a2 = 1 + lrng() * 3, ph2 = lrng() * TAU;
+      const x0 = lrng() * W, len = W * (0.15 + lrng() * 0.5), lw = 1.2 + lrng() * 2.4, al = 0.18 + lrng() * 0.3;
+      const yAt = (x) => y0 + amp * Math.sin(TAU * kk * x / W + ph) + a2 * Math.sin(TAU * k2 * x / W + ph2);
+      for (const [col, dy, wMul] of [[`rgba(150,138,128,${al * 0.45})`, -lw * 1.4, 0.8], [`rgba(32,24,21,${al})`, 0, 1]]) {
+        ctx.strokeStyle = col; ctx.lineWidth = lw * wMul;
+        for (const ox of [0, -W]) for (const oy of [0, -H, H]) {
+          ctx.beginPath();
+          for (let x = x0; x <= x0 + len; x += 6) { const xx = x + ox, yy = yAt(x) + dy + oy; if (x === x0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy); }
+          ctx.stroke();
+        }
+      }
+    }
+  }
   // poros/granulado fino
   ctx.globalAlpha = 0.1; const grain = noiseCanvas(256, 23, 24, 2, 120, 255);
   ctx.globalCompositeOperation = 'multiply'; for (let y = 0; y < H; y += 256) for (let x = 0; x < W; x += 256) ctx.drawImage(grain, x, y, 256, 256);
@@ -389,7 +408,7 @@ function makeClothTextures() {
   // --- manto (y 0..512): miolo (y 0..256, v 0.75..1) tecido ESCURO quente com linhas onduladas
   //     laranja discretas; borda (y 256..512, v 0.5..0.75) = faixa LISTRADA laranja/creme/rosa
   //     (v cresce da borda externa para dentro: as listras ficam concêntricas ao contorno da orelha) ---
-  ctx.fillStyle = '#4a403f'; ctx.fillRect(0, 0, S, 256);
+  ctx.fillStyle = hex(MT.EAR_CLOTH_COLOR); ctx.fillRect(0, 0, S, 256);
   // vincos orgânicos suaves no tecido escuro (o mesmo campo da pele, mais contrastado) + 4 linhas
   // onduladas laranja/rosa muito discretas
   ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.45; ctx.drawImage(getCrease().col, 0, 0, 512, 512, 0, 0, S, 256);
@@ -683,7 +702,7 @@ function getShared() {
   const mat = {
     // pele: PBR fosca e empoeirada; micro-rugas/fendas/poros no mapa de normais (repetido 8×), rugosidade
     // absoluta no roughnessMap (roughness=1 → o mapa manda), dobras grandes na geometria
-    skin: new THREE.MeshStandardMaterial({ map: skin.map, normalMap: skin.normal, normalScale: NS, roughnessMap: skin.rough, roughness: 1, metalness: 0, envMapIntensity: MT.SKIN_ENV }),
+    skin: new THREE.MeshStandardMaterial({ map: skin.map, vertexColors: true, normalMap: skin.normal, normalScale: NS, roughnessMap: skin.rough, roughness: 1, metalness: 0, envMapIntensity: MT.SKIN_ENV }),
     // manga listrada da tromba: tecido (trama tecida na normal)
     trunk: new THREE.MeshStandardMaterial({ map: trunk.map, normalMap: trunk.normal, normalScale: new THREE.Vector2(0.6, 0.6), roughness: MT.CLOTH_ROUGHNESS, metalness: 0, envMapIntensity: 0.45 }),
     cloth: new THREE.MeshStandardMaterial({ map: cloth.map, normalMap: cloth.normal, normalScale: new THREE.Vector2(0.6, 0.6), roughness: MT.CLOTH_ROUGHNESS, metalness: 0, envMapIntensity: 0.45 }),
@@ -697,9 +716,9 @@ function getShared() {
     pink: new THREE.MeshStandardMaterial({ map: tassel, vertexColors: true, roughness: 0.85, metalness: 0, envMapIntensity: 0.4 }),
     // olho: esclera molhada (clearcoat + roughness baixa); brilho branco acende via emissiveMap
     eye: new THREE.MeshPhysicalMaterial({ map: eye, emissiveMap: eye, emissive: 0xffffff, emissiveIntensity: 0.45, roughness: MT.EYE_ROUGHNESS, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 1 }),
-    silver: new THREE.MeshStandardMaterial({ color: 0xd4d8de, metalness: 1, roughness: 0.3, roughnessMap: gold.rough, emissive: 0x1e2226, emissiveIntensity: 0.5, envMapIntensity: MT.GOLD_ENV }),
+    silver: new THREE.MeshStandardMaterial({ color: 0xc9c6c2, metalness: 1, roughness: 1, roughnessMap: gold.rough, normalMap: gold.normal, normalScale: new THREE.Vector2(0.3, 0.3), emissive: 0x24221f, emissiveIntensity: 0.5, envMapIntensity: 0.75 }),
     // lã: sem brilho algum + pelos em relevo (a cor vem da instância)
-    pompom: new THREE.MeshStandardMaterial({ map: pom.map, normalMap: pom.normal, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 1.0, metalness: 0, envMapIntensity: 0.4 }),
+    pompom: new THREE.MeshStandardMaterial({ map: pom.map, normalMap: pom.normal, normalScale: new THREE.Vector2(1.1, 1.1), roughness: 1.0, metalness: 0, envMapIntensity: 0.4 }),
     // crosta de casinhas do dorso (casca fina; alfa por vértice esmaece as bordas)
     crust: new THREE.MeshStandardMaterial({ map: crust.map, bumpMap: crust.bump, bumpScale: 2.5, roughness: 0.85, metalness: 0, vertexColors: true, transparent: true, depthWrite: true, envMapIntensity: 0.5 }),
     // jato d'água: pontos aditivos brancos (a cor por vértice esmaece para névoa)
@@ -846,6 +865,38 @@ function tessellate(g, maxLen, maxIter = 12) {
   const out = new THREE.BufferGeometry();
   out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); out.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   out.computeVertexNormals(); return out;
+}
+
+// AO de cavidade por vértice (cor do vértice) a partir da própria malha: c = (média dos vizinhos − p)·n,
+// normalizado pelo percentil 90 de |c| da peça → vincos esculpidos (côncavos) escurecem, cristas clareiam
+// de leve. Uma passada de suavização tira o ruído de malha. Multiplica a cor que já houver.
+function bakeCavity(g, dark = MT.SKIN_CAVITY_AO, lift = MT.SKIN_RIDGE_LIFT) {
+  const idx = g.index; if (!idx) return g;
+  const p = g.attributes.position, nrm = g.attributes.normal, n = p.count, I = idx.array;
+  const sum = new Float32Array(n * 3), cnt = new Float32Array(n), elen = new Float32Array(n);
+  for (let t = 0; t < I.length; t += 3) for (let e = 0; e < 3; e++) {
+    const a = I[t + e], b = I[t + (e + 1) % 3];
+    const dx = p.getX(b) - p.getX(a), dy = p.getY(b) - p.getY(a), dz = p.getZ(b) - p.getZ(a), L = Math.hypot(dx, dy, dz);
+    sum[a * 3] += dx; sum[a * 3 + 1] += dy; sum[a * 3 + 2] += dz; cnt[a]++; elen[a] += L;
+    sum[b * 3] -= dx; sum[b * 3 + 1] -= dy; sum[b * 3 + 2] -= dz; cnt[b]++; elen[b] += L;
+  }
+  const c = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    if (!cnt[i]) continue;
+    const L = elen[i] / cnt[i] || 1;
+    c[i] = (sum[i * 3] * nrm.getX(i) + sum[i * 3 + 1] * nrm.getY(i) + sum[i * 3 + 2] * nrm.getZ(i)) / cnt[i] / L;
+  }
+  const abs = Array.from(c, Math.abs).sort((x, y) => x - y), p90 = abs[Math.floor(abs.length * 0.9)] || 1;
+  // suavização (média com os vizinhos de aresta)
+  const sm = new Float32Array(n), sc = new Float32Array(n);
+  for (let t = 0; t < I.length; t += 3) for (let e = 0; e < 3; e++) { const a = I[t + e], b = I[t + (e + 1) % 3]; sm[a] += c[b]; sc[a]++; sm[b] += c[a]; sc[b]++; }
+  const col = g.attributes.color;
+  for (let i = 0; i < n; i++) {
+    const v = (0.5 * c[i] + 0.5 * (sc[i] ? sm[i] / sc[i] : c[i])) / p90;
+    const f = v > 0 ? 1 - dark * smooth(0, 1.2, v) : 1 + lift * smooth(0, 1.2, -v);
+    col.setXYZ(i, col.getX(i) * f, col.getY(i) * f, col.getZ(i) * f);
+  }
+  return g;
 }
 
 function pointInPolygon(x, y, poly) {
@@ -1023,7 +1074,9 @@ export function createElephant(route, index, opts = {}) {
 
   // partes por material (grupos do SkinnedMesh)
   const parts = { skin: [], trunk: [], cloth: [], ivory: [], gold: [], city: [], pink: [], eye: [], silver: [] };
-  const add = (key, g, bone = 0, color) => { parts[key].push(prep(g, bone, color)); return g; };
+  // pele: oclusão de cavidade (AO dos vincos esculpidos) gravada na cor do vértice
+  // (malhas em grade regular apenas: a orelha tesselada tem triângulos desiguais → cavity = ruído; cavity=false)
+  const add = (key, g, bone = 0, color, cavity = true) => { const pg = prep(g, bone, color); if (key === 'skin' && cavity) bakeCavity(pg); parts[key].push(pg); return g; };
   const tmp = new V3(), tmp2 = new V3(), tmp3 = new V3();
 
   // ============================ CORPO ==============================
@@ -1291,7 +1344,7 @@ export function createElephant(route, index, opts = {}) {
     let ear = new THREE.ExtrudeGeometry(earShape(1), { depth: 28, bevelEnabled: true, bevelThickness: 18, bevelSize: 18, bevelSegments: 3, curveSegments: low ? 5 : 6 });
     ear.translate(0, 0, 18); earUV(ear); ear = tessellate(ear, low ? 80 : 42); mapVertices(ear, earWarp);
     ear = mergeVertices(ear); ear.computeVertexNormals();
-    add('skin', finish(ear), bone);
+    add('skin', finish(ear), bone, undefined, false);
     // manto: miolo de tecido escuro + borda listrada (anel concêntrico), ambos no lado de fora
     const Z_BL = 67; // acima da face de fora da orelha (bisel chega a z≈64)
     let core = new THREE.ExtrudeGeometry(earShape(RING_IN + 0.01), { depth: 6, bevelEnabled: false, curveSegments: 6 });

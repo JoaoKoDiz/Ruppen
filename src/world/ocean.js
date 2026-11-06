@@ -186,37 +186,51 @@ void main() {
   vec2 p = vWorldPos.xz;
   float t = uTime;
 
-  // ---- normal: 3 escalas do mapa de normais (com rolagem e rotação) + 2 vagas
-  //      analíticas longas. O detalhe some com a distância e em ângulos rasantes
-  //      (evita cintilação); longe o mar fica liso e reflete o horizonte.
-  float graze = pow(saturate(V.y), 0.6);
-  float fadeFine = graze / (1.0 + dist * (1.0 / 260.0) + dist * dist * (1.0 / 4.0e6));
-  float fadeMed  = (0.3 + 0.7 * graze) / (1.0 + dist * (1.0 / 1600.0));
-  float fadeBig  = (0.5 + 0.5 * graze) / (1.0 + dist * (1.0 / 14000.0));
+  // ---- normal: 4 oitavas do mapa de normais (rolagem + rotação) + 1 vaga
+  //      analítica longa. Cada oitava some quando a pegada do pixel no mar
+  //      (fwidth das coordenadas de mundo) passa de uma fração do seu
+  //      comprimento de onda — detalhe fino só perto da câmera, vagas largas e
+  //      macias no meio, mar liso longe (reflete o horizonte e funde na névoa).
+  //      A inclinação "perdida" vira rugosidade do brilho do sol (tipo Toksvig).
+  vec2 fpv = max(abs(dFdx(p)), abs(dFdy(p)));
+  float fp = max(max(fpv.x, fpv.y), dist * 0.0006); // m por pixel (mínimo ~ ângulo do pixel)
+  float graze = pow(saturate(V.y), 0.5);
+  float w0 = (1.0 - smoothstep(0.015, 0.09, fp / 7.0)) * (1.0 - smoothstep(120.0, 320.0, dist));
+  float w1 = 1.0 - smoothstep(0.015, 0.09, fp / 24.0);
+  float w2 = 1.0 - smoothstep(0.015, 0.10, fp / 75.0);
+  float w3 = 1.0 - smoothstep(0.02, 0.14, fp / 260.0);
+  float wS = 1.0 - smoothstep(0.03, 0.20, fp / 210.0);
   const mat2 rotA  = mat2(0.866, 0.5, -0.5, 0.866);
   const mat2 rotAi = mat2(0.866, -0.5, 0.5, 0.866);
   const mat2 rotB  = mat2(0.342, -0.940, 0.940, 0.342);
   const mat2 rotBi = mat2(0.342, 0.940, -0.940, 0.342);
   // deformação lenta do domínio (quebra a repetição visível dos tiles)
-  vec2 warp = (texture2D(uNormals, p * (1.0 / 900.0) + vec2(t * 0.0003, 0.0)).rb - 0.5) * 60.0;
+  vec2 warp = (texture2D(uNormals, p * (1.0 / 1400.0) + vec2(t * 0.0002, 0.0)).rb - 0.5) * 90.0;
   vec2 pw = p + warp;
+  const float A0 = 0.09, A1 = 0.11, A2 = 0.13, A3 = 0.17, AS = 0.035;
   vec2 s = vec2(0.0);
-  // capilares/marola fina ~9 m e ~14 m (duas direções, rolagem rápida)
-  s += slopeAt(p * (1.0 / 9.0) + t * vec2(0.055, -0.035)) * 0.13 * fadeFine;
-  s += rotBi * slopeAt(rotB * pw * (1.0 / 14.0) + t * vec2(0.03, 0.045)) * 0.11 * fadeFine;
-  // marola média ~45 m
-  s += rotAi * slopeAt(rotA * pw * (1.0 / 45.0) + t * vec2(-0.012, 0.016)) * 0.20 * fadeMed;
-  // vagas ~110 m e ~260 m (suaves e largas — mar de alto-mar calmo das referências)
-  s += rotBi * slopeAt(rotB * p * (1.0 / 110.0) + t * vec2(0.005, 0.004)) * 0.20 * fadeMed;
-  s += slopeAt(pw * (1.0 / 260.0) + t * vec2(0.0022, -0.0016)) * 0.30 * fadeBig;
-  // vagas analíticas longas (dispersão de água profunda: ω = sqrt(g·k))
-  vec2 d1 = normalize(vec2(0.82, 0.45)), d2 = normalize(vec2(-0.35, 0.92));
-  float k1 = PI2 / 90.0, k2 = PI2 / 31.0;
-  float w1 = sqrt(9.81 * k1), w2 = sqrt(9.81 * k2);
-  s += d1 * (0.9 * k1 * cos(dot(d1, p) * k1 - w1 * t)) * fadeMed;
-  s += d2 * (0.14 * k2 * cos(dot(d2, p) * k2 - w2 * t + 1.7)) * fadeFine;
+  // capilares ~7 m (só bem perto)
+  s += slopeAt(p * (1.0 / 7.0) + t * vec2(0.06, -0.04)) * A0 * w0;
+  // marola ~24 m
+  s += rotBi * slopeAt(rotB * pw * (1.0 / 24.0) + t * vec2(0.026, 0.034)) * A1 * w1;
+  // ondas ~75 m
+  s += rotAi * slopeAt(rotA * pw * (1.0 / 75.0) + t * vec2(-0.010, 0.013)) * A2 * w2;
+  // vagas largas e macias ~260 m (mar calmo de alto-mar das referências)
+  s += slopeAt(pw * (1.0 / 260.0) + t * vec2(0.0022, -0.0016)) * A3 * w3;
+  // ondulação longa analítica: dois trens cruzados com envelope de ruído
+  // (grupos de ondas — nunca faixas regulares até o horizonte)
+  float env = texture2D(uNormals, p * (1.0 / 2300.0) + vec2(0.0, t * 0.00004)).a;
+  env = 0.25 + 1.5 * smoothstep(0.3, 0.8, env);
+  vec2 d1 = normalize(vec2(0.82, 0.45)), d2 = normalize(vec2(0.15, 0.99));
+  float k1 = PI2 / 210.0, w1a = sqrt(9.81 * k1);
+  float k2 = PI2 / 133.0, w2a = sqrt(9.81 * k2);
+  float ph1 = dot(d1, p) * k1 - w1a * t + 0.8 * sin(dot(vec2(-0.45, 0.82), p) * (PI2 / 1700.0));
+  float ph2 = dot(d2, p) * k2 - w2a * t + 1.3;
+  s += (d1 * (AS * cos(ph1)) + d2 * (AS * 0.55 * cos(ph2))) * env * wS;
   vec3 N = normalize(vec3(-s.x, 1.0, -s.y));
   float detail = length(s); // quanta inclinação resta (0 longe)
+  // variância de inclinação filtrada (rugosidade extra do brilho longe)
+  float lost = A0 * A0 * (1.0 - w0) + A1 * A1 * (1.0 - w1) + A2 * A2 * (1.0 - w2) + A3 * A3 * (1.0 - w3) + AS * AS * (1.0 - wS);
 
   float ndl = dot(N, uSunDir);
   float ndv = max(dot(N, V), 1e-3);
@@ -226,10 +240,14 @@ void main() {
   R.y = max(R.y, 0.012); // nunca "reflete o mar": abaixo do horizonte vira horizonte
   float hazeScale = 1.0 - 0.30 * smoothstep(1500.0, 6000.0, uCamHeight);
   vec3 skyRefl = skyRadiance(normalize(R), uSunDir, hazeScale);
+  // mesmo véu leitoso que o céu aplica junto ao horizonte (o mar longe funde na névoa)
+  skyRefl = mix(skyRefl, SKY_HAZE_COL, 0.35 * exp(-max(R.y, 0.0) * 28.0) * hazeScale);
   // Fresnel de Schlick (F0 = 0.02), com a normal um pouco suavizada para não cintilar
-  vec3 Nf = normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.35));
+  vec3 Nf = normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.25));
   float ndvF = max(dot(Nf, V), 0.0);
-  float F = 0.02 + 0.98 * pow(1.0 - ndvF, 5.0);
+  // (o termo rasante é atenuado: num mar com ondas parte das facetas rasantes fica
+  //  oculta/sombreada — o mar baixo continua azul em vez de virar espelho branco)
+  float F = 0.02 + 0.98 * pow(1.0 - ndvF, 5.0) * 0.78;
 
   // ---- cor da água (subsuperfície): azul-marinho profundo + variação lenta em
   //      grande escala; luz difusa do céu (hemisfério) + verde-azulado nas cristas
@@ -245,15 +263,14 @@ void main() {
   float crest = saturate(detail * 2.5) * saturate(dot(N, normalize(V + uSunDir)) * 1.4 - 0.4);
   float sss = pow(towardSun, 2.0) * crest;
   water = mix(water, uShallow, sss * 0.45 + saturate(1.0 - N.y * 1.2) * 0.06);
-  vec3 col = water * irr;
+  vec3 col = water * irr * 1.35;
   col = mix(col, skyRefl, F);
 
   // ---- brilho do sol: GGX com rugosidade pela distância (glitter fino perto,
   //      trilha larga longe onde a normal foi suavizada)
   vec3 H = normalize(uSunDir + V);
   float ndh = max(dot(N, H), 0.0);
-  float farness = saturate(dist / 15000.0);
-  float rough = mix(0.075, 0.28, farness) + 0.06 * (1.0 - graze);
+  float rough = sqrt(0.07 * 0.07 + lost * 2.2) + 0.04 * (1.0 - graze);
   float ndlS = max(ndl, 0.0);
   float Fh = 0.02 + 0.98 * pow(1.0 - max(dot(H, V), 0.0), 5.0);
   float spec = D_GGX(ndh, rough) * V_Smith(ndlS, ndv, rough) * Fh * ndlS;
@@ -262,7 +279,7 @@ void main() {
 
   // leve dessaturação: o mar das referências é azul-aço, não azul puro
   float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  col = mix(col, vec3(lum), 0.16);
+  col = mix(col, vec3(lum), 0.20);
 
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>

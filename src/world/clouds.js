@@ -25,6 +25,7 @@ const FOOT_PUFFS = CLOUDS.FOOT_PUFFS; // puffs do banco por elefante (quality=hi
 const LEG_HEIGHT = (ELEPHANT.LEG.topY - ELEPHANT.LEG.bottomY) * (ELEPHANT.SCALE || 1); // m (mundo)
 const FOOT_X = ELEPHANT.LEG.offsetX * (ELEPHANT.SCALE || 1); // posição das patas (local, m)
 const FOOT_Z = ELEPHANT.LEG.offsetZ * (ELEPHANT.SCALE || 1);
+const LEG_R = ELEPHANT.LEG.radius * (ELEPHANT.SCALE || 1);     // raio da pata (m, mundo)
 const WIND = new THREE.Vector3(1.1, 0, 0.45); // deriva das nuvens do mundo (m/s)
 const RING_SPIN = 0.0045;            // rad/s de rotação lenta dos anéis das patas
 const SORT_INTERVAL = 0.5;
@@ -239,7 +240,8 @@ varying float vSize;
 
 void main() {
   #include <logdepthbuf_fragment>
-  float cellIdx = mod(vVar, 8.0);
+  // vVar é interpolado: arredonda (senão 7,99999 ≠ 8 escolhe outra célula por pixel → pontilhado)
+  float cellIdx = mod(floor(vVar + 0.5), 8.0);
   vec2 cell = vec2(mod(cellIdx, 4.0), floor(cellIdx / 4.0));
   vec2 uv = (vUv + cell) * vec2(0.25, 0.5);
   vec4 tx = texture2D(uMap, uv);
@@ -253,22 +255,25 @@ void main() {
   float dens = tx.b;
   // difusa envolvente pelo relevo do puff (lado do sol claro, lado oposto na sombra)
   float ndl = dot(N, vSunB);
-  float wrapL = saturate(ndl * 0.55 + 0.45);
+  // contraluz: o relevo de CADA puff quase não conta (senão o banco vira "escamas"
+  // com miolo escuro e borda clara em cada puff); a variação vem da altura na nuvem
+  float relief = 1.0 - 0.75 * vBacklit;
+  float wrapL = mix(0.62, saturate(ndl * 0.65 + 0.35), relief);
   // "powder"/espalhamento múltiplo: miolo denso um pouco mais escuro, bordas finas claras
-  float powder = 1.0 - 0.34 * dens * dens;
+  float powder = 1.0 - (0.40 - 0.22 * vBacklit) * dens * dens;
   // auto-sombra da massa acima: base da nuvem escura, topo claro
-  float heightLit = mix(0.30, 1.0, vShade);
-  // silver lining: borda (baixa densidade) virada para o sol, em contraluz
-  float edge = pow(1.0 - dens, 2.0);
+  float heightLit = mix(0.16, 1.0, pow(vShade, 0.8));
+  // silver lining: borda fina (baixa densidade) dos puffs do contorno superior, em contraluz
+  float edge = pow(1.0 - dens, 3.0) * smoothstep(0.02, 0.35, tx.a);
   vec2 sd = vSunB.xy / max(length(vSunB.xy), 1e-3);
-  float rim = edge * saturate(dot(N.xy, sd) * 1.5) * vBacklit;
+  float rim = edge * saturate(dot(N.xy, sd) * 1.5) * vBacklit * smoothstep(0.45, 0.95, vShade);
   // retroespalhamento: visto com o sol atrás da câmera, a nuvem fica uniformemente clara
   float frontLit = saturate(vSunB.z) * 0.35;
-  vec3 sun = uSunColor * (wrapL * powder * heightLit + frontLit * heightLit + rim * 1.6);
+  vec3 sun = uSunColor * (wrapL * powder * heightLit + frontLit * heightLit + rim * 1.3);
   // ambiente do céu: topo/lados virados para cima recebem branco-azulado, bases azul-cinza
   float up = saturate(N.y * 0.5 + 0.5);
-  vec3 amb = mix(uShade, uAmbTop, up * (0.35 + 0.65 * vShade));
-  amb *= 1.0 - 0.18 * dens;
+  vec3 amb = mix(uShade, uAmbTop, mix(0.5, up, relief) * (0.35 + 0.65 * vShade));
+  amb *= (1.0 - 0.22 * dens * relief) * mix(0.62, 1.0, vShade);
   vec3 col = amb + sun;
   gl_FragColor = vec4(col, alpha);
   #include <tonemapping_fragment>
@@ -317,56 +322,78 @@ varying vec2 vLocal;
 varying vec2 vWorldXZ;
 varying float vSeed;
 
+// anel fino com antisserrilhado: alarga a gaussiana pela pegada do pixel e
+// conserva a energia (longe vira um traço fraco e largo, nunca cintila)
+float thinRing(float x, float w, float fw) {
+  float ew = sqrt(w * w + fw * fw * 2.25);
+  return exp(-x * x / (ew * ew)) * (w / ew);
+}
+
 void main() {
   #include <logdepthbuf_fragment>
   float r = length(vLocal);
   float R = uFoamRadius;
   vec2 pw = vWorldXZ;
   // ruídos em coordenadas de MUNDO (a espuma não gira com o elefante; deriva devagar)
-  vec3 nA = texture2D(uNoise, pw * (1.0 / 900.0) + uTime * vec2(0.004, 0.002)).rgb;
+  vec3 nA = texture2D(uNoise, pw * (1.0 / 1300.0) + uTime * vec2(0.003, 0.0015)).rgb;
   vec3 nB = texture2D(uNoise, pw * (1.0 / 260.0) - uTime * vec2(0.006, 0.009)).rgb;
-  vec3 nC = texture2D(uNoise, pw * (1.0 / 70.0) + uTime * vec2(0.02, -0.015)).rgb;
-  float bubbles = 0.45 + 0.55 * smoothstep(0.25, 0.75, nC.b);         // buracos redondos (bolhas)
-  float lace = smoothstep(0.35, 0.85, nA.r * 0.55 + nB.g * 0.45);      // rendilhado rasgado
+  vec3 nC = texture2D(uNoise, pw * (1.0 / 240.0) + uTime * vec2(0.02, -0.015)).rgb;
+  vec3 nD = texture2D(uNoise, pw * (1.0 / 60.0) - uTime * vec2(0.03, 0.02)).rgb;
+  // bolhas: buracos redondos (Worley; células ≈ tile/13) em duas escalas. Quando a
+  // célula fica menor que ~3 pixels a máscara vira a sua média (sem padrão serrilhado)
+  float fpx = length(fwidth(pw)) + 1e-3;
+  float bC = mix(smoothstep(0.22, 0.62, nC.b), 0.62, smoothstep(2.0, 7.0, fpx));
+  float bD = mix(smoothstep(0.18, 0.60, nD.b), 0.66, smoothstep(0.6, 2.0, fpx));
+  float bubbles = bC * mix(1.0, bD, 0.8);
+  float lace = nA.r * 0.45 + nB.g * 0.35 + nC.r * 0.2;                   // rendilhado rasgado
 
-  // ---- espuma ao redor do grupo de patas: faixa rasgada, com bolhas, mais densa por dentro
-  float band = smoothstep(R * 0.28, R * 0.55, r) * (1.0 - smoothstep(R * 1.05, R * 1.55, r));
-  float foam = band * lace * bubbles * (0.55 + 0.45 * (1.0 - smoothstep(R * 0.6, R * 1.4, r)));
-  // respingos ao redor de cada pata + anéis que se expandem de cada pata a cada ~20 s
+  // ---- espuma ao redor de cada pata: colar denso e borbulhante colado à pata,
+  //      franjas rasgadas e manchas que se soltam e se espalham com a deriva
   vec2 feet[4];
   feet[0] = vec2( FOOT_X,  FOOT_Z); feet[1] = vec2(-FOOT_X, -FOOT_Z);
   feet[2] = vec2( FOOT_X, -FOOT_Z); feet[3] = vec2(-FOOT_X,  FOOT_Z);
+  float foam = 0.0;
   float ring = 0.0;
-  float splash = 0.0;
+  float fwr = fwidth(r) + 1e-3;
   for (int j = 0; j < 4; j++) {
     float fr = length(vLocal - feet[j]);
-    splash = max(splash, (1.0 - smoothstep(280.0, 720.0, fr)) * smoothstep(0.3, 0.8, nB.r * 0.6 + nC.g * 0.5));
-    float ph0 = (j < 2 ? 0.0 : 0.5) + float(j) * 0.125 + vSeed * 0.21;
+    float x = fr - LEG_R;                                  // distância da superfície da pata
+    float reach = 50.0 + 300.0 * nA.g * nA.g + 160.0 * nB.r;              // largura irregular do colar
+    float collar = 1.0 - smoothstep(10.0, reach, x);
+    collar *= smoothstep(0.38, 0.72, lace + 0.16 * (1.0 - smoothstep(0.0, 120.0, x)));
+    float fringe = (1.0 - smoothstep(100.0, 420.0 + 380.0 * nA.b, x)) * smoothstep(0.55, 0.75, lace + 0.1 * nC.g);
+    foam = max(foam, max(collar, fringe * 0.7) * step(-20.0, x));
+    // anéis que se expandem de cada pata a cada ~RIPPLE_PERIOD s: crista fina e clara,
+    // quebrada em arcos pelo ruído, mais fraca e mais larga ao se expandir
+    float ph0 = float(j) * 0.29 + vSeed * 0.37;
     for (int k = 0; k < RIPPLE_RINGS; k++) {
       float life = fract(uTime / (RIPPLE_PERIOD * float(RIPPLE_RINGS)) + ph0 + float(k) / float(RIPPLE_RINGS));
-      float rad = 350.0 + life * 2.6 * R;
-      float width = 60.0 + 260.0 * life;
-      float g = exp(-pow((fr - rad) / width, 2.0));
-      // o anel se quebra levemente com o ruído e esmaece ao se expandir
-      ring = max(ring, g * pow(1.0 - life, 1.4) * (0.55 + 0.45 * nA.g));
+      float rad = LEG_R + 120.0 + life * 1.25 * R;
+      float w = 9.0 + 34.0 * life;
+      float arcs = smoothstep(0.30, 0.62, nA.g * 0.7 + nB.b * 0.3);
+      float g = thinRing(fr - rad, w, fwr) + 0.35 * thinRing(fr - rad + 2.6 * w + 30.0, w * 1.6, fwr);
+      ring = max(ring, g * pow(1.0 - life, 1.6) * smoothstep(0.0, 0.06, life) * arcs);
     }
   }
+  // espuma remexida sob o banco de nuvens (entre as patas): manchas esparsas e fracas
+  float under = (1.0 - smoothstep(R * 0.45, R * 0.95, r)) * smoothstep(0.60, 0.78, lace) * 0.35;
+  foam = max(foam, under) * bubbles;
+
   // ---- esteira atrás (x < 0 no referencial do elefante): duas linhas a partir das
   //      patas externas abrindo devagar + rastro turbulento central
   float back = -vLocal.x;
   float wake = 0.0;
   if (back > 0.0) {
-    float spread = FOOT_Z + back * 0.10;
-    float w = 110.0 + back * 0.07;
+    float spread = FOOT_Z + LEG_R * 0.6 + back * 0.08;
+    float w = 70.0 + back * 0.05;
     float lines = exp(-pow((abs(vLocal.y) - spread) / w, 2.0));
     float streak = smoothstep(0.35, 0.8, texture2D(uNoise, vec2(vLocal.x / 2600.0, vLocal.y / 420.0) + vec2(uTime * 0.0015, 0.0)).r);
-    float trail = (1.0 - smoothstep(0.0, FOOT_Z * 1.1, abs(vLocal.y))) * smoothstep(0.45, 0.85, nB.r);
-    float along = smoothstep(0.0, 700.0, back) * exp(-back / 2800.0);
-    wake = (lines * (0.5 + 0.5 * streak) * 0.55 + trail * 0.28) * along;
+    float trail = (1.0 - smoothstep(0.0, FOOT_Z * 1.1, abs(vLocal.y))) * smoothstep(0.55, 0.85, nB.r);
+    float along = smoothstep(0.0, 700.0, back) * exp(-back / 2600.0);
+    wake = (lines * (0.4 + 0.6 * streak) * 0.45 + trail * 0.2) * along * (0.5 + 0.5 * bubbles);
   }
-  float alpha = foam * 0.85 + splash * 0.9;
-  alpha = saturate(alpha);
-  float ripA = saturate(ring * 0.42 + wake * 0.5);
+  float alpha = saturate(foam * 0.92);
+  float ripA = saturate(ring * 0.38 + wake * 0.45);
   vec3 col = mix(uRipple, uFoam, saturate(alpha / max(alpha + ripA, 1e-3)));
   float a = saturate(alpha + ripA * (1.0 - alpha));
   if (a < 0.004) discard;
@@ -510,10 +537,12 @@ function generatePuffs(worldData, scale, clusters) {
       const hx = Math.cos(hAng) * hRad, hz = Math.sin(hAng) * hRad;
       const top = heapTop * rng.range(0.8, 1.15), hr = rng.range(550, 800);
       for (let i = 0; i < CLOUDS.FOOT_HEAP_PUFFS; i++) {
-        const ang = rng.range(0, Math.PI * 2), rr = Math.pow(rng(), 0.6) * hr;
-        const edgeT = rr / hr;
-        const yrel = top * (1 - edgeT * edgeT * 0.8) * Math.pow(rng(), 0.6);
-        const size = (260 + 320 * rng()) * (1 - 0.3 * yrel / top);
+        // torre em couve-flor: base larga, estreitando para o topo; os puffs se
+        // sobrepõem (tamanho ≥ ~espaçamento) — nunca bolas soltas no ar
+        const yT = Math.pow(rng(), 0.85);
+        const ang = rng.range(0, Math.PI * 2), rr = Math.sqrt(rng()) * hr * (1 - 0.7 * yT);
+        const yrel = top * yT;
+        const size = (380 + 300 * rng()) * (1 - 0.25 * yT);
         const y = Math.max(size * 0.4, yrel);
         const shade = 0.35 + 0.65 * clamp01(y / top);
         out.push({ x: hx + Math.cos(ang) * rr, y, z: hz + Math.sin(ang) * rr, size, shade, rot: rng.range(-0.4, 0.4), variant: variant(), group: e });
@@ -572,9 +601,9 @@ export function createClouds(scene, worldData, opts = {}) {
     THREE.UniformsLib.fog,
     {
       uMap: { value: null },
-      uSunColor: { value: new THREE.Color(COLORS.sunLight).multiplyScalar(2.0) },
-      uAmbTop: { value: new THREE.Color(COLORS.cloudLit).multiplyScalar(0.95) },
-      uShade: { value: new THREE.Color(COLORS.cloudShade).multiplyScalar(1.35) },
+      uSunColor: { value: new THREE.Color(COLORS.sunLight).multiplyScalar(1.85) },
+      uAmbTop: { value: new THREE.Color(COLORS.cloudLit).multiplyScalar(0.78) },
+      uShade: { value: new THREE.Color(COLORS.cloudShade).multiplyScalar(1.0) },
       uAnchors: { value: anchorVals },
       uWind: { value: WIND.clone() },
       uTime: { value: 0 },
@@ -597,7 +626,7 @@ export function createClouds(scene, worldData, opts = {}) {
 
   // ------------------------------ espuma ---------------------------------
   const R = ELEPHANT.FOOT_CLOUD_RADIUS;
-  const ring = new THREE.RingGeometry(R * 0.2, R * 2.75, 96, 12);
+  const ring = new THREE.RingGeometry(R * 0.03, R * 2.75, 96, 14);
   ring.rotateX(-Math.PI / 2);
   const foamGeo = new THREE.InstancedBufferGeometry();
   foamGeo.index = ring.index;
@@ -624,7 +653,7 @@ export function createClouds(scene, worldData, opts = {}) {
   foamUniforms.uNoise.value = makeFoamTexture(256);
   const foamMat = new THREE.ShaderMaterial({
     uniforms: foamUniforms, vertexShader: FOAM_VERT, fragmentShader: FOAM_FRAG,
-    defines: { NUM_ANCHORS, FOOT_X: FOOT_X.toFixed(1), FOOT_Z: FOOT_Z.toFixed(1), RIPPLE_PERIOD: RIPPLE_PERIOD.toFixed(1), RIPPLE_RINGS },
+    defines: { NUM_ANCHORS, FOOT_X: FOOT_X.toFixed(1), FOOT_Z: FOOT_Z.toFixed(1), LEG_R: LEG_R.toFixed(1), RIPPLE_PERIOD: RIPPLE_PERIOD.toFixed(1), RIPPLE_RINGS },
     transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending, side: THREE.DoubleSide, fog: true,
   });
   const foamMesh = new THREE.Mesh(foamGeo, foamMat);

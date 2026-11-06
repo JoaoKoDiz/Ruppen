@@ -29,8 +29,6 @@ renderer.setSize(window.innerWidth, window.innerHeight, false);
 applyRendererDefaults(renderer);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, WORLD.CAMERA_NEAR, WORLD.CAMERA_FAR);
-const lighting = createLighting(scene, renderer, { quality }); // mesmo envMap/sombras do jogo
-const post = createPost(renderer, scene, camera, { quality });   // mesmo pós-processamento do jogo
 
 const defaults = {
   elephant: { mod: 'elephant/elephant.js', fn: 'createElephant', dist: 4200, az: 35, el: 12, ty: 900 },
@@ -43,6 +41,15 @@ const defaults = {
   sky: { mod: 'world/sky.js', fn: 'createSky', dist: 1, az: 0, el: 0, ty: 0 },
 };
 const d = defaults[kind] || defaults.elephant;
+
+// Sombras: com câmera orbital/fixa a caixa de sombras fica centrada no ponto olhado e dimensionada
+// pela distância (elefante inteiro a 4–6 km, pomba a 9 m); kind=env/all (dist 1) segue a câmera como no jogo.
+const shadowFocus = q.cx !== undefined ? new THREE.Vector3(num('lx', 0), num('ly', 0), num('lz', -100))
+  : new THREE.Vector3(num('tx', d.tx || 0), num('ty', d.ty), num('tz', d.tz || 0));
+const viewDist = q.cx !== undefined ? shadowFocus.distanceTo(new THREE.Vector3(num('cx', 0), num('cy', 100), num('cz', 0))) : num('dist', d.dist);
+const focusSubject = viewDist > 2;
+const lighting = createLighting(scene, renderer, { quality, shadowRange: focusSubject ? THREE.MathUtils.clamp(viewDist * 0.9, 12, 4800) : undefined }); // mesmo envMap/sombras do jogo
+const post = createPost(renderer, scene, camera, { quality });   // mesmo pós-processamento do jogo
 
 // -------- ambiente opcional (sempre tenta; stubs funcionam) --------
 const updaters = [];
@@ -112,7 +119,8 @@ if (q.cx !== undefined) {
 camera.fov = num('fov', 55); camera.updateProjectionMatrix();
 
 let time = num('t', 0);
-function tick(dt) { time += dt; lighting.update(camera); lighting.refreshShadows(scene, dt); for (const u of updaters) u(time, dt); }
+if (q.cx === undefined) shadowFocus.copy(target); // (kind=islands escolhe a ilha depois de criar a luz)
+function tick(dt) { time += dt; lighting.update(focusSubject ? shadowFocus : camera); lighting.refreshShadows(scene, dt); for (const u of updaters) u(time, dt); }
 lighting.enableShadows(scene);
 for (let i = 0; i < num('frames', 3); i++) tick(1 / 30);
 

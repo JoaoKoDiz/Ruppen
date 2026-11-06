@@ -21,9 +21,9 @@ export const COLORS = {
   skyHorizon: 0xb9cadb,   // faixa leitosa do horizonte = MESMA cor da névoa (sem emenda céu/oceano)
   fog: 0xb9cadb,          // azul-cinza pálido e opaco (sRGB; o renderer mistura a névoa depois do tone mapping)
   sunLight: 0xfff1d6,
-  oceanDeep: 0x1c4470,    // mar azul-aço/marinho, pouco saturado
-  oceanMid: 0x2b5c8a,
-  oceanShallow: 0x5187b1,
+  oceanDeep: 0x24507c,    // mar azul-aço/marinho, pouco saturado (referências: azul-aço calmo)
+  oceanMid: 0x31628f,
+  oceanShallow: 0x3f8c9f, // verde-azulado das cristas contra o sol (falsa transmissão)
   foam: 0xf4f8fb,
   cloudLit: 0xffffff,
   cloudShade: 0x8ca3c2,   // base das nuvens azul-cinza (nunca cinza-marrom)
@@ -167,10 +167,10 @@ export const DOVE_MODEL = {
   GLIDE_PERIOD: 7.5,        // ciclo em cruzeiro: ~4 s planando + ~3,5 s batendo
   REIN_LENGTH: 0.95,        // comprimento em repouso de cada rédea (m) — define a folga
   COLORS: {
-    featherTop: 0xfdf8f0, featherUnder: 0xe3e7ee, breast: 0xf0dcd6, primaries: 0x3b3f47,
+    featherTop: 0xfdf8f0, featherUnder: 0xe3e7ee, breast: 0xeed8d3, primaries: 0x4a4e57,
     beak: 0x55505a, cere: 0xece3e6, eye: 0x111013, eyering: 0xd6c0bb, feet: 0xd9806a,
     leather: 0x6a4426, leatherDark: 0x3a2516, metal: 0xd9dbe0,
-    jacket: 0x262a33, trousers: 0x35312e, boots: 0x2a1d14, skin: 0xc99a7d, hair: 0x2a1c12, pack: 0x4f3d27,
+    jacket: 0x3a404b, trousers: 0x564c41, boots: 0x3d2b1d, skin: 0xc99a7d, hair: 0x2e2015, pack: 0x6e563a,
     scarf: 0xb8642a, glove: 0x3b2a1e,
   },
   // --- src/player/dove.js (modelo principal, asa em gaivota com primárias separadas) ---
@@ -361,8 +361,13 @@ export const ELEPHANT_MATERIALS = {
   SKIN_NORMAL_REPEAT: 8,    // repetições do mapa de normais micro da pele por ladrilho do mapa de cor (≈ 425 m/ladrilho no mundo)
   SKIN_NORMAL_SCALE: 0.85,  // intensidade das micro-rugas/poros
   SKIN_ROUGHNESS: 0.86,     // pele fosca e empoeirada (o roughnessMap baixa nos vincos)
-  SKIN_ENV: 0.5,            // envMapIntensity da pele
-  GOLD_COLOR: 0xc9962f,     // ouro-bronze quente
+  SKIN_ENV: 0.4,            // envMapIntensity da pele
+  SKIN_COLOR: 0x675e5a,     // base do albedo (após manchas/vincos a média fica ≈ #5d5552: cinza quente médio-escuro)
+  SKIN_CAVITY_AO: 0.32,     // escurecimento máximo (cor do vértice) nos vincos esculpidos da geometria
+  SKIN_RIDGE_LIFT: 0.08,
+  SKIN_FINE_WRINKLES: 520,  // segmentos de rugas finas onduladas pintados no mapa de cor da pele (1024²)    // clareamento leve das cristas das dobras
+  EAR_CLOTH_COLOR: 0x5a4c46, // miolo do manto da orelha: tecido taupe escuro quente (não azulado sob o céu)
+  GOLD_COLOR: 0xb8862c,     // ouro-bronze quente
   GOLD_ROUGHNESS: 0.34,     // metal escovado (roughnessMap com riscos 0.28–0.42)
   GOLD_ENV: 1.2,
   GOLD_EMISSIVE: 0.3,       // brilho residual (sem envMap o metal puro ficaria preto)
@@ -375,7 +380,7 @@ export const ELEPHANT_MATERIALS = {
   TASSEL_STRANDS: 150,      // fios da franja da borla (tubos finos; low = 90)
   TASSEL_STRAND_LENGTH: { min: 380, max: 450 },
   TASSEL_STRAND_RADIUS: 4.2,
-  POMPOM_FUZZ: 0.34,        // deslocamento dos tufos (fuzzySphere)
+  POMPOM_FUZZ: 0.42,        // deslocamento dos tufos (fuzzySphere)
   POMPOM_DESAT: 0.22,       // dessaturação das cores dos pompons (mistura com cinza)
   EAR_HOUSE_SIZE: { min: 0.7, max: 1.4 },   // variação de tamanho das casinhas do bloco da orelha
   EAR_HOUSE_STREETS: { min: 2, max: 3 },    // ruas estreitas (colunas vazias) no bloco
@@ -388,31 +393,36 @@ export const ELEPHANT_MATERIALS = {
 // Iluminação baseada em imagem, sombras e pós-processamento (src/world/lighting.js, src/world/post.js).
 // Níveis de qualidade (#quality= no jogo, ?quality= no preview):
 //   'low'   — sem sombras, sem pós-processamento (render direto); o envMap fica (é barato)
-//   'high'  — padrão: envMap PMREM, sombras PCF suaves 4096², bloom sutil + vinheta/haze/curva fílmica
-//   'ultra' — 'high' + oclusão ambiente (GTAO) + alcance de sombra maior
+//   'high'  — padrão: envMap PMREM, sombras PCF 4096² (±1600 m), bloom sutil + vinheta/haze/curva fílmica
+//   'ultra' — 'high' + oclusão ambiente (GTAO com profundidade logarítmica) + alcance de sombra maior
 export const RENDER = {
-  EXPOSURE: 0.9,             // toneMappingExposure (ACES): brancos não estouram
-  ENV_INTENSITY: 0.9,        // peso do mapa de ambiente (PMREM do céu) nos materiais PBR (scene.environmentIntensity)
+  EXPOSURE: 0.9,             // toneMappingExposure (ACES)
+  ENV_INTENSITY: 0.75,       // multiplica o envMapIntensity de cada MeshStandard/Physical (pele 0,5 → 0,38; ouro 1,2 → 0,9)
+  ENV_INTENSITY_FALLBACK: 0.5,  // scene.environmentIntensity (Lambert/Phong e objetos ainda não varridos)
   ENV_SUN_GLOW: 2.5,         // brilho (HDR) do halo do sol no mapa de ambiente → reflexo quente no ouro
-  SUN_INTENSITY: 2.2,        // DirectionalLight
-  HEMI_INTENSITY: 0.6,       // HemisphereLight — reduzida: o envMap já dá a luz ambiente do céu
-  AMBIENT_INTENSITY: 0.12,   // AmbientLight residual (sombras cinza-azuladas, nunca pretas)
+  SUN_INTENSITY: 3.0,        // DirectionalLight — luz-chave dominante (volumes esculpidos)
+  HEMI_INTENSITY: 0.42,      // HemisphereLight — preenchimento fraco: o envMap já dá a luz do céu
+  HEMI_SKY: 0xcbd9ee, HEMI_GROUND: 0x46566c,
+  AMBIENT_INTENSITY: 0.04,   // AmbientLight residual (sombras cinza-azuladas, nunca pretas)
+  AMBIENT_COLOR: 0xb6c9e0,
   SHADOW: {
-    low: null,                                                             // sem sombras
-    high: { range: 1600, mapSize: 4096, bias: -0.00012, normalBias: 1.6 }, // ±range (m) em torno do foco, mapa 4096²
-    ultra: { range: 2000, mapSize: 4096, bias: -0.00012, normalBias: 2.0 },
-    DEPTH: 6000,             // m — meio-alcance do frustum de sombra ao longo da direção do sol (near/far = ±DEPTH)
+    low: null,                                                                        // sem sombras
+    high: { range: 1600, mapSize: 4096, radius: 2.0, bias: -0.0002, normalBias: 1.2 }, // ±range (m) em torno do foco
+    ultra: { range: 2000, mapSize: 4096, radius: 2.0, bias: -0.0002, normalBias: 1.4 },
+    INTENSITY: 1.0,          // light.shadow.intensity
+    DEPTH: 6000,             // m — distância do sol ao foco ao longo do raio (casters até ~4,5 km acima do foco)
+    BELOW: 3000,             // m — alcance do frustum de sombra abaixo do foco (far = DEPTH + BELOW)
     FOCUS_AHEAD: 0.6,        // o centro da caixa de sombras fica à frente da câmera: esta fração de `range` ao longo do olhar
-    FOCUS_Y: 900,            // m — altura do plano de interesse (cidades ~1500–2100 m): o foco pára quando o olhar o cruza
-    REFRESH_S: 2,            // s — intervalo da varredura da cena que liga sombras em objetos criados depois (cestas…)
+    FOCUS_Y: 900,            // m — altura do plano de interesse: o foco pára quando o olhar o cruza
+    REFRESH_S: 2,            // s — intervalo da varredura da cena que liga sombras/envMap em objetos criados depois
   },
   BLOOM: { strength: 0.18, radius: 0.6, threshold: 0.9 },  // só glitter do sol, ouro e nuvens brilhantes
   GRADE: {
-    contrast: 0.22,          // peso da curva S fílmica (0 = sem contraste extra)
+    contrast: 0.3,           // peso da curva S fílmica (0 = sem contraste extra)
     desaturate: 0.06,        // 6% de dessaturação
-    vignette: 0.07,          // escurecimento máximo nos cantos (0..1)
+    vignette: 0.08,          // escurecimento máximo nos cantos (0..1)
     vignetteStart: 0.45,     // raio (0..1, do centro ao canto) onde a vinheta começa
-    hazeLift: 0.028,         // fração da cor da névoa somada à imagem inteira (levanta os pretos)
+    hazeLift: 0.02,          // fração da cor da névoa somada à imagem inteira (levanta os pretos)
     hazeLiftEdge: 0.012,     // leve véu extra nas bordas
   },
   AO: {                      // GTAO (ultra): raio em metros, espessura em metros
