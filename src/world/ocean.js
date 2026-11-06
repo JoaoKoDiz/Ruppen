@@ -191,22 +191,25 @@ uniform vec3 uShoreP;   // U0, U1, linhas por ilha
 // campo da costa — x: altura do fundo (m; > 0 = terra), y: distância à linha d'água (m, + mar adentro),
 // z: 1 perto de uma ilha (dentro do campo), 0 em mar aberto
 vec3 shoreAt(vec2 p) {
-  for (int i = 0; i < NISL; i++) {
+  vec3 res = vec3(-1000.0, 1.0e5, 0.0);
+  #pragma unroll_loop_start
+  for (int i = 0; i < ${nIsl}; i++) { {
     vec2 d = p - uIsl[i].xy;
     float r2 = dot(d, d);
     if (r2 < uIsl[i].w * uIsl[i].w) {
       float r = sqrt(r2);
       float tx = atan(d.y, d.x) * (0.5 / PI) + 0.5;
-      float rows = uShoreP.z, tot = rows * float(NISL), blk = float(i) * rows;
+      float rows = uShoreP.z, tot = rows * float(NISL), blk = float(UNROLLED_LOOP_INDEX) * rows;
       float ro = textureLod(uShore, vec2(tx, (blk + 0.5) / tot), 0.0).b * uIsl[i].z;
       float v = (r / max(ro, 1.0) - uShoreP.x) / (uShoreP.y - uShoreP.x);
       if (v <= 1.0) {
-        vec2 s = textureLod(uShore, vec2(tx, (blk + 0.5 + clamp(v, 0.0, 1.0) * (rows - 1.0)) / tot), 0.0).rg;
-        return vec3(s, 1.0);
+        res = vec3(textureLod(uShore, vec2(tx, (blk + 0.5 + clamp(v, 0.0, 1.0) * (rows - 1.0)) / tot), 0.0).rg, 1.0);
       }
     }
   }
-  return vec3(-1000.0, 1.0e5, 0.0);
+  }
+  #pragma unroll_loop_end
+  return res;
 }
 `;
 
@@ -231,7 +234,8 @@ void main() {
     vec3 sh = shoreAt(p0);
     amp *= mix(1.0, smoothstep(0.4, 10.0, -sh.x), sh.z);   // amortecidas no raso
     float spacing = max(rr * uGeo.x, uGeo.y);
-    for (int i = 0; i < NW; i++) {
+    #pragma unroll_loop_start
+    for (int i = 0; i < ${NW}; i++) { {
       vec4 a = uGA[i], b = uGB[i];
       float lam = 6.2831853 / a.z;
       float f = amp * (1.0 - smoothstep(lam * 0.12, lam * 0.2, spacing)); // malha grossa demais → sem este trem
@@ -239,6 +243,8 @@ void main() {
       disp.xz += a.xy * (b.z * cos(th) * f);
       disp.y += a.w * sin(th) * f;
     }
+    }
+    #pragma unroll_loop_end
   }
   wp.xyz += disp;
   vWorldPos = wp.xyz;
@@ -288,7 +294,8 @@ float V_Smith(float ndl, float ndv, float a) {
 // Cada trem some quando a pegada do pixel passa de uma fração do seu comprimento (sem aliasing).
 vec4 gerstner(vec2 p0, float t, float fp, float amp) {
   float Sx = 0.0, Sz = 0.0, Sy = 0.0, Jxx = 1.0, Jzz = 1.0, Jxz = 0.0, h = 0.0;
-  for (int i = 0; i < NW; i++) {
+  #pragma unroll_loop_start
+  for (int i = 0; i < ${NW}; i++) { {
     vec4 a = uGA[i], b = uGB[i];
     float lam = 6.2831853 / a.z;
     float f = amp * (1.0 - smoothstep(0.06, 0.25, fp / lam));
@@ -301,6 +308,8 @@ vec4 gerstner(vec2 p0, float t, float fp, float amp) {
     Jxx -= q * a.x * a.x; Jzz -= q * a.y * a.y; Jxz -= q * a.x * a.y;
     h += a.w * s * f;
   }
+  }
+  #pragma unroll_loop_end
   float inv = 1.0 / max(1.0 - Sy, 0.2);
   return vec4(Sx * inv, Sz * inv, Jxx * Jzz - Jxz * Jxz, h);
 }
@@ -317,7 +326,7 @@ void main() {
   vec3 sh = shoreAt(p);
   float depth = -sh.x;
   float nearI = sh.z;
-  float calm = mix(1.0, 0.45 + 0.55 * smoothstep(0.5, 7.0, depth), nearI); // raso: marola menor
+  float calm = mix(1.0, 0.7 + 0.3 * smoothstep(0.5, 7.0, depth), nearI); // raso: marola um pouco menor
 
   // ---- normal: 4 oitavas do mapa de normais (detalhe some pela pegada do pixel) + vagas
   //      analíticas longas + Gerstner perto da câmera. A inclinação "perdida" vira rugosidade.
@@ -388,16 +397,19 @@ void main() {
   // ---- água rasa: o fundo (terreno, já desenhado) aparece pela transmissão; halo turquesa
   vec3 Tu = vec3(0.0);
   float Tg = 0.0;
-  if (nearI > 0.5 && depth < 44.0) {
+  if (nearI > 0.5 && depth < 30.0) {
     float halo = exp(-max(sh.y, 0.0) / 240.0) * smoothstep(-1.0, 4.0, depth);
     body = mix(body, uShallowBody * irr, 0.4 * halo);
     float cosV = sqrt(max(0.04, 1.0 - (1.0 - V.y * V.y) / 1.7689)); // refração (n = 1,33)
     float dd = max(depth, 0.0) / cosV;
     Tu = exp(-uSigma * dd);
-    Tg = exp(-uSigma.g * dd) * (1.0 - smoothstep(30.0, 42.0, depth));
+    Tg = exp(-uSigma.g * dd) * (1.0 - smoothstep(12.0, 24.0, depth));
   }
-  vec3 colP = skyRefl * F + (1.0 - F) * body * (1.0 - Tu);   // radiância pré-multiplicada
-  float alpha = 1.0 - (1.0 - F) * Tg;
+  // no raso o Fresnel é o de Schlick completo (rasante → espelho: o fundo some ao longe)
+  float Ft = 0.02 + 0.98 * pow(1.0 - ndvF, 5.0);
+  float Fs = mix(F, Ft, nearI * (1.0 - smoothstep(6.0, 20.0, depth)));
+  vec3 colP = skyRefl * Fs + (1.0 - Fs) * body * (1.0 - Tu);   // radiância pré-multiplicada
+  float alpha = 1.0 - (1.0 - Fs) * Tg;
 
   // ---- brilho do sol (GGX)
   vec3 H = normalize(uSunDir + V);
@@ -421,9 +433,11 @@ void main() {
     float zone = (1.0 - smoothstep(1.8, 7.0, depth)) * smoothstep(-0.3, 0.5, depth);
     float sw = depth + 0.2 * sin(t * 0.6 + dot(p, vec2(0.021, 0.017)) + n1 * 7.0);
     float swash = 1.0 - smoothstep(0.0, 0.6, sw);              // espraiamento na linha d'água
-    float broken = smoothstep(0.3, 0.75, ft * (0.55 + 0.7 * n1));
-    foam = max(band * zone, swash * 0.95) * broken;
-    foam = max(foam, zone * 0.3 * smoothstep(0.55, 0.85, ft) * n1);
+    float broken = smoothstep(0.16, 0.5, ft * (0.6 + 0.8 * n1));
+    foam = max(band * zone, swash) * broken;
+    foam = max(foam, zone * 0.35 * smoothstep(0.4, 0.75, ft) * n1);
+    foam = max(foam, (1.0 - smoothstep(0.0, 9.0 + 5.0 * n1, sh.y)) * smoothstep(0.2, 0.6, ft) * 0.85); // ressaca ao pé das falésias
+    foam = max(foam, (1.0 - smoothstep(0.0, 70.0, sh.y)) * 0.18 * smoothstep(0.5, 0.8, ft) * smoothstep(0.4, 0.7, n1)); // espuma esgarçada além da arrebentação
   }
   if (gN > 0.001) {
     float patchN = texture2D(uFoam, p * (1.0 / 830.0) + vec2(t * 0.0011, 0.0)).b;

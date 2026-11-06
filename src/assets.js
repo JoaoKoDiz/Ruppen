@@ -78,8 +78,8 @@ export function tex(id, map, { repeat = 1, anisotropy = 8 } = {}) {
   t.repeat.set(rx, ry);
   t.anisotropy = anisotropy;
   t.colorSpace = map === 'diff' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  t.needsUpdate = true;
-  base.addEventListener?.('update', () => { t.needsUpdate = true; });
+  // sem needsUpdate aqui: a imagem ainda não chegou. Quando chegar, o loader marca a
+  // Source compartilhada (version++) e todos os clones são reenviados à GPU sozinhos.
   cache.set(key, t);
   return t;
 }

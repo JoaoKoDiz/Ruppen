@@ -30,6 +30,7 @@ import * as THREE from 'three';
 import { COLORS, SEED, ISLANDS, SUN_DIR } from '../config.js';
 import { createRng } from '../util/rng.js';
 import { createNoise } from '../util/noise.js';
+import { tex } from '../assets.js';
 
 // ------------------------------ utilidades ----------------------------
 const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -125,14 +126,6 @@ function heightToNormal(H, W, Hh, strength, out, o0, stride, wrapY = true) {
     }
   }
 }
-// normaliza a média de cada canal RGB para 0,5 (as texturas de detalhe são MODULADORES da cor macro)
-function normalizeMean(F, n, stride = 3) {
-  for (let c = 0; c < 3; c++) {
-    let m = 0; for (let i = 0; i < n; i++) m += F[i * stride + c];
-    m = Math.max(1e-4, m / n);
-    const k = 0.5 / m; for (let i = 0; i < n; i++) F[i * stride + c] = clamp(F[i * stride + c] * k, 0, 1);
-  }
-}
 function dataTex(data, w, h, { mip = true, srgb = false } = {}) {
   const t = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
@@ -154,82 +147,32 @@ function wrapDraw(W, H, x, y, pad, fn, x0 = 0, wrapY = true) {
   if (nx && ny) fn(x0 + x + nx * W, y + ny * H);
 }
 
-// ================= texturas de detalhe do terreno (geradas uma vez) =================
-//  tRock    RGB rocha (estratos, fendas, líquen; média 0,5)   A altura
-//  tRockN   RG normal da rocha                               BA normal das marcas de ondulação da areia
-//  tGround  RGB grama (tufos/lâminas)                         A dossel da mata (luminância das copas)
-//  tGroundN RG normal do dossel                              BA normal da grama
-//  tMisc    R grão da areia   G cáusticas   B manchas (molhado/seixos)   A ruído macro (anti-repetição)
+// ================= texturas do terreno =================
+// Fotos PBR reais (Poly Haven, CC0, via src/assets.js): rocha de falésia (triplanar nas
+// encostas íngremes), rocha vista do alto (projeção de cima), grama com pedras, chão de
+// mata, areia seca e areia molhada — usadas como MODULADORES da cor macro por vértice
+// (cor / média da foto, com parte do matiz) em duas escalas + ruído macro, sumindo com a
+// distância. Procedurais só o que as fotos não têm:
+//  tGround  RG normal do dossel da mata visto de cima   A luminância das copas
+//  tMisc    R grão   G cáusticas   B manchas (borda da onda)   A ruído macro (anti-repetição)
+const TEX_SETS = [ // [id, hue (quanto do matiz da foto fica), tem normal]
+  ['cliff_side', 0.3, true], ['aerial_rocks_02', 0.45, true], ['aerial_grass_rock', 0.55, true],
+  ['forest_ground_04', 0.4, false], ['coast_sand_01', 0.5, true], ['damp_beach_sand', 0.5, false],
+];
 let DETAIL = null;
 function buildDetailTextures(S) {
   if (DETAIL && DETAIL.size === S) return DETAIL;
   const T = makeTileNoise(SEED + 31337);
   const N = S * S;
   const vo = { f1: 0, f2: 0, id: 0, dx: 0, dy: 0 };
-
-  // ---------- rocha ----------
-  const rockC = new Float32Array(N * 3), rockH = new Float32Array(N);
-  const joints = T.cells(7, 3, 1), blocks = T.cells(15, 13, 2);
-  const LAY = 17, layR = [], layR2 = [];
-  { const r = createRng(SEED + 5151); for (let i = 0; i < LAY; i++) { layR.push(r()); layR2.push(r()); } }
-  const lichenC = [[1.08, 1.1, 0.72], [0.98, 1.04, 0.9], [1.16, 0.94, 0.66]];
-  for (let y = 0; y < S; y++) {
-    const v = y / S;
-    for (let x = 0; x < S; x++) {
-      const u = x / S, i = y * S + x;
-      const w1 = T.fbm(u, v, 3, 3);
-      const sc = v * LAY + w1 * 1.4 + T.fbm(u, v, 8, 2) * 0.22;
-      const L = Math.floor(sc), fl = sc - L, li = ((L % LAY) + LAY) % LAY;
-      const lr = layR[li], lr2 = layR2[li];
-      const prof = smoothstep(0, 0.1, fl) * smoothstep(1, 0.72 - 0.25 * lr, fl);   // bancada saliente
-      T.voronoi(joints, u + w1 * 0.025, v, vo);
-      const jc = 1 - smoothstep(0, 0.045 + 0.03 * lr2, vo.f2 - vo.f1);              // diáclases (verticais)
-      T.voronoi(blocks, u, v, vo);
-      const fc = 1 - smoothstep(0, 0.03, vo.f2 - vo.f1), bid = vo.id;              // fraturas finas
-      const bed = 1 - smoothstep(0, 0.045, Math.min(fl, 1 - fl));                   // plano de acamamento
-      const grain = T.fbm(u, v, 32, 3), fine = T.grad(u * 128, v * 128, 128, 128);
-      const crack = Math.max(jc * 0.95, fc * 0.45 * (0.4 + 0.6 * lr2), bed * 0.55);
-      rockH[i] = clamp(0.55 + 0.2 * prof * (0.4 + 0.6 * lr) + 0.12 * grain + 0.04 * fine + 0.06 * (bid - 0.5) - 0.5 * crack, 0, 1);
-      let lum = 0.8 + 0.32 * (lr - 0.5) + 0.15 * grain + 0.05 * fine + 0.08 * (bid - 0.5);
-      lum *= (1 - 0.6 * crack) * (0.9 + 0.14 * prof);
-      const streak = smoothstep(0.15, 0.6, T.fbm(u, v, 24, 3, 0.5, 2));          // escorrimento escuro (vertical)
-      lum *= 1 - 0.22 * streak;
-      const warm = (lr2 - 0.5) * 0.14;
-      let r = lum * (1 + warm), g = lum, b = lum * (1 - warm * 1.2);
-      // líquen: manchas claras amareladas / verde-acinzentadas / alaranjadas, fora das fendas
-      const lm = T.fbm(u + 0.31, v + 0.67, 6, 4) + 0.3 * T.fbm(u, v, 48, 2);
-      const lich = smoothstep(0.2, 0.42, lm) * (1 - crack) * 0.85;
-      if (lich > 0.001) {
-        const lc = lichenC[Math.floor(bid * 2.999)];
-        const ll = 1.0 + 0.25 * fine;
-        r = lerp(r, lc[0] * ll, lich); g = lerp(g, lc[1] * ll, lich); b = lerp(b, lc[2] * ll, lich);
-      }
-      rockC[i * 3] = r; rockC[i * 3 + 1] = g; rockC[i * 3 + 2] = b;
-    }
-  }
-  normalizeMean(rockC, N);
-  const tRockD = new Uint8Array(N * 4);
-  for (let i = 0; i < N; i++) {
-    tRockD[i * 4] = rockC[i * 3] * 255; tRockD[i * 4 + 1] = rockC[i * 3 + 1] * 255; tRockD[i * 4 + 2] = rockC[i * 3 + 2] * 255;
-    tRockD[i * 4 + 3] = rockH[i] * 255;
-  }
-
-  // ---------- areia: grão + marcas de ondulação ----------
-  const sandH = new Float32Array(N), misc = new Uint8Array(N * 4);
+  // ---------- misc: grão, cáusticas, manchas, ruído macro ----------
+  const misc = new Uint8Array(N * 4);
   const caus = T.cells(9, 9, 3);
-  const hashP = createRng(SEED + 777);
   for (let y = 0; y < S; y++) {
     const v = y / S;
     for (let x = 0; x < S; x++) {
       const u = x / S, i = y * S + x;
-      const grain = T.fbm(u, v, 64, 2);
-      const rv = v * 11 + 0.55 * T.fbm(u, v, 2, 3) + 0.06 * T.fbm(u, v, 16, 2);
-      const rp = 0.5 + 0.5 * Math.sin(TAU * rv);
-      sandH[i] = Math.pow(rp, 1.6) * 0.75 + grain * 0.12;
-      let g = 0.5 + 0.16 * grain + 0.1 * T.fbm(u, v, 8, 2);
-      const hp = hashP();
-      if (hp > 0.985) g -= 0.32; else if (hp < 0.008) g += 0.28;               // grãos escuros / conchinhas
-      // cáusticas: rede fina e brilhante (bordas das células)
+      const g = 0.5 + 0.16 * T.fbm(u, v, 64, 2) + 0.1 * T.fbm(u, v, 8, 2);
       T.voronoi(caus, u + 0.02 * T.fbm(u, v, 4, 2), v + 0.02 * T.fbm(u + 0.5, v, 4, 2), vo);
       const c = Math.pow(1 - smoothstep(0, 0.26, vo.f2 - vo.f1), 2.2);
       const mot = 0.5 + 0.5 * T.fbm(u + 0.2, v + 0.9, 4, 3);
@@ -237,45 +180,6 @@ function buildDetailTextures(S) {
       misc[i * 4] = clamp(g, 0, 1) * 255; misc[i * 4 + 1] = c * 255; misc[i * 4 + 2] = clamp(mot, 0, 1) * 255; misc[i * 4 + 3] = clamp(mac, 0, 1) * 255;
     }
   }
-  const tRockND = new Uint8Array(N * 4);
-  heightToNormal(rockH, S, S, S / 90, tRockND, 0, 4);
-  heightToNormal(sandH, S, S, S / 140, tRockND, 2, 4);
-
-  // ---------- grama (base por pixel + lâminas/tufos desenhados no canvas) ----------
-  const cv = makeCanvas(S, S), g2 = cv.getContext('2d', { willReadFrequently: true });
-  const img = g2.createImageData(S, S);
-  for (let y = 0; y < S; y++) {
-    const v = y / S;
-    for (let x = 0; x < S; x++) {
-      const u = x / S, i = (y * S + x) * 4;
-      const clump = T.fbm(u, v, 6, 3), fine = T.fbm(u, v, 40, 2), dry = smoothstep(0.05, 0.5, T.fbm(u + 0.4, v + 0.2, 3, 2));
-      const l = 0.42 + 0.14 * clump + 0.07 * fine;
-      img.data[i] = clamp(l * (0.78 + 0.35 * dry), 0, 1) * 255;
-      img.data[i + 1] = clamp(l * (1.0 + 0.05 * dry), 0, 1) * 255;
-      img.data[i + 2] = clamp(l * (0.55 + 0.05 * dry), 0, 1) * 255;
-      img.data[i + 3] = 255;
-    }
-  }
-  g2.putImageData(img, 0, 0);
-  const br = createRng(SEED + 4040);
-  const blades = Math.round(9000 * (S / 512) * (S / 512));
-  g2.lineCap = 'round';
-  for (let k = 0; k < blades; k++) {
-    const x = br() * S, y = br() * S, len = (3 + br() * 9) * (S / 512), ang = br() * TAU;
-    const lum = 0.25 + br() * 0.55, yel = br();
-    g2.strokeStyle = `rgba(${Math.round(255 * lum * (0.62 + 0.45 * yel))},${Math.round(255 * lum * (1.02 + 0.08 * yel))},${Math.round(255 * lum * 0.42)},${0.35 + 0.4 * br()})`;
-    g2.lineWidth = (0.8 + br() * 1.0) * (S / 512);
-    const dx = Math.cos(ang) * len, dy = Math.sin(ang) * len, bend = (br() - 0.5) * len * 0.6;
-    wrapDraw(S, S, x, y, 14, (px, py) => { g2.beginPath(); g2.moveTo(px, py); g2.quadraticCurveTo(px + dx * 0.5 - dy * 0.2, py + dy * 0.5 + bend * 0.2, px + dx, py + dy); g2.stroke(); });
-  }
-  const gd = g2.getImageData(0, 0, S, S).data;
-  const grassC = new Float32Array(N * 3), grassH = new Float32Array(N);
-  for (let i = 0; i < N; i++) {
-    grassC[i * 3] = gd[i * 4] / 255; grassC[i * 3 + 1] = gd[i * 4 + 1] / 255; grassC[i * 3 + 2] = gd[i * 4 + 2] / 255;
-    grassH[i] = (gd[i * 4] + gd[i * 4 + 1]) / 510;
-  }
-  normalizeMean(grassC, N);
-
   // ---------- dossel da mata visto de cima: copas sobrepostas (cúpulas por célula) ----------
   const crowns = T.cells(9, 9, 4);
   const canH = new Float32Array(N), canL = new Float32Array(N);
@@ -283,7 +187,7 @@ function buildDetailTextures(S) {
     const v = y / S;
     for (let x = 0; x < S; x++) {
       const u = x / S, i = y * S + x;
-      const X = u * 9, Y = v * 9, xi = Math.floor(X), yi = Math.floor(Y);
+      const X = u * 9 + 0.45 * T.fbm(u, v, 18, 2), Y = v * 9 + 0.45 * T.fbm(u + 0.5, v + 0.3, 18, 2), xi = Math.floor(X), yi = Math.floor(Y);
       let h = 0, hid = 0;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         const cx = xi + dx, cy = yi + dy, k = (((cy % 9) + 9) % 9) * 9 + (((cx % 9) + 9) % 9);
@@ -298,21 +202,29 @@ function buildDetailTextures(S) {
     }
   }
   { let m = 0; for (let i = 0; i < N; i++) m += canL[i]; m /= N; for (let i = 0; i < N; i++) canL[i] = clamp(canL[i] * 0.5 / m, 0, 1); }
-  const tGroundD = new Uint8Array(N * 4), tGroundND = new Uint8Array(N * 4);
-  for (let i = 0; i < N; i++) {
-    tGroundD[i * 4] = grassC[i * 3] * 255; tGroundD[i * 4 + 1] = grassC[i * 3 + 1] * 255; tGroundD[i * 4 + 2] = grassC[i * 3 + 2] * 255;
-    tGroundD[i * 4 + 3] = canL[i] * 255;
-  }
-  heightToNormal(canH, S, S, S / 110, tGroundND, 0, 4);
-  heightToNormal(grassH, S, S, S / 260, tGroundND, 2, 4);
-
-  DETAIL = {
-    size: S,
-    tRock: dataTex(tRockD, S, S), tRockN: dataTex(tRockND, S, S),
-    tGround: dataTex(tGroundD, S, S), tGroundN: dataTex(tGroundND, S, S),
-    tMisc: dataTex(misc, S, S),
-  };
+  const tGroundD = new Uint8Array(N * 4);
+  heightToNormal(canH, S, S, S / 110, tGroundD, 0, 4);
+  for (let i = 0; i < N; i++) { tGroundD[i * 4 + 2] = 128; tGroundD[i * 4 + 3] = canL[i] * 255; }
+  // ---------- fotos ----------
+  const photos = TEX_SETS.map(([id, hue, hasN]) => ({ id, hue, map: tex(id, 'diff'), nor: hasN ? tex(id, 'nor_gl') : null, mean: new THREE.Vector3(0.25, 0.22, 0.18) }));
+  DETAIL = { size: S, tGround: dataTex(tGroundD, S, S), tMisc: dataTex(misc, S, S), photos, ready: false };
   return DETAIL;
+}
+// média LINEAR de cada foto (para usá-la como moduladora) assim que a imagem chega
+function measurePhotos(D) {
+  if (D.ready) return true;
+  for (const p of D.photos) { const im = p.map && p.map.image; if (!im || !(im.width > 0) || (im.complete === false)) return false; }
+  const cv = makeCanvas(32, 32), g = cv.getContext('2d', { willReadFrequently: true });
+  const lin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  for (const p of D.photos) {
+    g.clearRect(0, 0, 32, 32); g.drawImage(p.map.image, 0, 0, 32, 32);
+    const d = g.getImageData(0, 0, 32, 32).data;
+    let r = 0, gg = 0, b = 0;
+    for (let i = 0; i < 1024; i++) { r += lin(d[i * 4]); gg += lin(d[i * 4 + 1]); b += lin(d[i * 4 + 2]); }
+    p.mean.set(r / 1024, gg / 1024, b / 1024);
+  }
+  D.ready = true;
+  return true;
 }
 
 // ======================= altura VISUAL da ilha =======================
@@ -341,8 +253,9 @@ function islandCtx(island) {
     if (h0 > 6) { // ravinas: ridged pequeno cava os vales entre cristas finas (mais nas montanhas)
       const m = smoothstep(25, 380, h0), lo = smoothstep(6, 70, h0);
       const e1 = enoise.ridged2(x / 230, z / 230, 3, 2.1, 0.5);
-      const e2 = enoise.ridged2(x / 83 + 17.3, z / 83 - 9.1, 2, 2.0, 0.5);
-      h += -m * EM * Math.pow(1 - e1, 1.7) + m * 3 * e1 * e1 * e1 - lo * 6 * (1 - e2) * (1 - e2);
+      // terras baixas: ondulação suave (sem rede de células, que a AO de tela realçaria)
+      const e2 = enoise.fbm2(x / 95 + 17.3, z / 95 - 9.1, 2, 2.0, 0.5);
+      h += -m * EM * Math.pow(1 - e1, 1.7) + m * 3 * e1 * e1 * e1 + lo * (1 - m) * 2.2 * e2 - 1.0 * lo;
     }
     let rocky = -1;
     if (h0 < 22 && h0 > -40) { // falésia costeira: a borda fica a `top` m e a face cai até o fundo
@@ -351,7 +264,8 @@ function islandCtx(island) {
         const fn = fineAt(x, z), mn = enoise.noise2(x / 21 + 3.3, z / 21 - 7.7);
         const top = CT[0] + (CT[1] - CT[0]) * rocky + 2.2 * fn;
         const k = smoothstep(top - 0.3, top - 1.25, h0 + 0.55 * mn);
-        const plateau = h + 0.45 * clamp(top + 1.8 - h0, 0, 2.2);
+        // borda erguida (≤ CLIFF_RAISE m, dentro da folga de voo DOVE.ALT_MIN) que some terra adentro
+        const plateau = h + ISLANDS.CLIFF_RAISE * (1 - smoothstep(top, top + 16, h0)) * (0.75 + 0.25 * mn);
         const sea = Math.min(h0, top - 2) - 11 - 2 * rocky + 2.5 * mn;
         h = lerp(h, lerp(plateau, Math.min(sea, plateau), k), smoothstep(0, 0.6, rocky));
       }
@@ -490,7 +404,8 @@ function terrainColor(y, ny, relief, fineN, microN, rocky, cov, out) {
   out.copy(PAL.meadowDark).lerp(PAL.meadow, clamp(0.55 + 0.6 * relief + 0.15 * fineN, 0, 1));
   out.lerp(PAL.grassDry, cov.dry);
   out.lerp(PAL.scrub, cov.scrub * 0.85);
-  out.multiplyScalar(0.92);
+  { const l = 0.2126 * out.r + 0.7152 * out.g + 0.0722 * out.b; out.lerp(_tmpB.setRGB(l, l, l), 0.18); }
+  out.multiplyScalar(0.9);
   _tmpA.copy(PAL.carpet).lerp(PAL.forestDark, clamp(0.5 + 0.5 * fineN, 0, 1));
   out.lerp(_tmpA, Math.min(1, cov.forest * 1.15));
   if (cov.sand > 0.001) {
@@ -539,11 +454,22 @@ const DETAIL_VERT = /* glsl */`
 }
 `;
 const DETAIL_FRAG_PARS = /* glsl */`
-uniform sampler2D tRock;
-uniform sampler2D tRockN;
+uniform sampler2D tCliff;
+uniform sampler2D tCliffN;
+uniform sampler2D tRockTop;
+uniform sampler2D tRockTopN;
+uniform sampler2D tGrass;
+uniform sampler2D tGrassN;
+uniform sampler2D tForest;
+uniform sampler2D tSand;
+uniform sampler2D tSandN;
+uniform sampler2D tWet;
 uniform sampler2D tGround;
-uniform sampler2D tGroundN;
 uniform sampler2D tMisc;
+uniform vec3 uMean[6];   // média linear de cada foto: falésia, rocha de cima, grama, mata, areia, areia molhada
+uniform vec4 uHue0;      // quanto do matiz de cada foto fica (0 = só luminância)
+uniform vec2 uHue1;
+uniform float uReady;    // 0 até as fotos chegarem
 uniform vec4 uFade;
 uniform float uTime;
 uniform vec3 uSigma;
@@ -553,25 +479,44 @@ varying vec3 vDtNrm;
 #ifdef DT_TERRAIN
 varying vec4 vDtCover;
 #endif
-// rocha triplanar: albedo (rgb, média 0,5) + altura (a) e perturbação da normal (mundo)
-void dtRockTri(vec3 P, vec3 dx, vec3 dy, vec3 w, float sc, out vec4 alb, out vec3 pert) {
-  alb = vec4(0.0); pert = vec3(0.0); float ws = 0.0;
+// foto → modulador da cor macro (média 1), mantendo uma fração do matiz
+vec3 dtMod(vec3 c, vec3 mean, float hue) {
+  vec3 r = c / max(mean, vec3(1e-3));
+  float l = dot(r, vec3(0.2126, 0.7152, 0.0722));
+  return mix(vec3(l), r, hue);
+}
+// amostra "passa-alta": divide pela própria foto borrada (mip ~4 níveis acima) → fica só o
+// detalhe fino; as manchas grandes do tile (que denunciam a repetição) somem. O matiz médio
+// da foto vem de 'mean'.
+vec3 dtHP(sampler2D t, vec2 uv, vec2 gx, vec2 gy, vec3 mean, float hue) {
+  vec3 c = textureGrad(t, uv, gx, gy).rgb;
+  vec3 b = textureGrad(t, uv, gx * 14.0, gy * 14.0).rgb;
+  return dtMod(c / max(b, vec3(1e-3)) * mean, mean, hue);
+}
+vec2 dtNrm(sampler2D t, vec2 uv, vec2 gx, vec2 gy) { return textureGrad(t, uv, gx, gy).rg * 2.0 - 1.0; }
+// rocha triplanar: faces laterais com a foto de falésia (estratos horizontais), topo com a rocha
+// vista do alto. Devolve modulador (rgb) e perturbação da normal (mundo).
+void dtRockTri(vec3 P, vec3 dx, vec3 dy, vec3 w, float sc, bool coarse, out vec3 m, out vec3 pert) {
+  m = vec3(0.0); pert = vec3(0.0); float ws = 0.0;
   if (w.x > 0.03) {
     vec2 uv = P.zy * sc, gx = dx.zy * sc, gy = dy.zy * sc;
-    vec2 n = textureGrad(tRockN, uv, gx, gy).rg * 2.0 - 1.0;
-    alb += textureGrad(tRock, uv, gx, gy) * w.x; pert += vec3(0.0, n.y, n.x) * w.x; ws += w.x;
+    vec2 n = coarse ? dtNrm(tRockTopN, uv, gx, gy) : dtNrm(tCliffN, uv, gx, gy);
+    m += (coarse ? dtHP(tRockTop, uv, gx, gy, uMean[1], uHue0.y) : dtMod(textureGrad(tCliff, uv, gx, gy).rgb, uMean[0], uHue0.x)) * w.x;
+    pert += vec3(0.0, n.y, n.x) * w.x; ws += w.x;
   }
   if (w.y > 0.03) {
-    vec2 uv = P.xz * sc, gx = dx.xz * sc, gy = dy.xz * sc;
-    vec2 n = textureGrad(tRockN, uv, gx, gy).rg * 2.0 - 1.0;
-    alb += textureGrad(tRock, uv, gx, gy) * w.y; pert += vec3(n.x, 0.0, n.y) * w.y; ws += w.y;
+    float s2 = sc * 0.7;
+    vec2 uv = P.xz * s2, gx = dx.xz * s2, gy = dy.xz * s2;
+    vec2 n = dtNrm(tRockTopN, uv, gx, gy);
+    m += dtHP(tRockTop, uv, gx, gy, uMean[1], uHue0.y) * w.y; pert += vec3(n.x, 0.0, n.y) * w.y; ws += w.y;
   }
   if (w.z > 0.03) {
     vec2 uv = P.xy * sc, gx = dx.xy * sc, gy = dy.xy * sc;
-    vec2 n = textureGrad(tRockN, uv, gx, gy).rg * 2.0 - 1.0;
-    alb += textureGrad(tRock, uv, gx, gy) * w.z; pert += vec3(n.x, n.y, 0.0) * w.z; ws += w.z;
+    vec2 n = coarse ? dtNrm(tRockTopN, uv, gx, gy) : dtNrm(tCliffN, uv, gx, gy);
+    m += (coarse ? dtHP(tRockTop, uv, gx, gy, uMean[1], uHue0.y) : dtMod(textureGrad(tCliff, uv, gx, gy).rgb, uMean[0], uHue0.x)) * w.z;
+    pert += vec3(n.x, n.y, 0.0) * w.z; ws += w.z;
   }
-  alb /= max(ws, 1e-4); pert /= max(ws, 1e-4);
+  m /= max(ws, 1e-4); pert /= max(ws, 1e-4);
 }
 `;
 const DETAIL_FRAG = /* glsl */`
@@ -584,8 +529,9 @@ float dtWs = 0.0, dtWr = 1.0, dtWf = 0.0, dtWg = 0.0;
   vec3 P = vDtPos;
   vec3 Ng = dtN;
   float dist = length(cameraPosition - P);
-  float fF = 1.0 - smoothstep(uFade.x, uFade.y, dist);
+  float fF = (1.0 - smoothstep(uFade.x, uFade.y, dist)) * uReady;
   float fC = 1.0 - smoothstep(uFade.z, uFade.w, dist);
+  float fP = (1.0 - smoothstep(uFade.y, uFade.z * 2.6, dist)) * uReady;   // escala grossa das fotos (some antes: sem repetição visível de longe)
   dtFadeF = fF;
 #ifdef DT_TERRAIN
   float ws = vDtCover.x, wf = vDtCover.y, wr = vDtCover.z;
@@ -595,56 +541,75 @@ float dtWs = 0.0, dtWr = 1.0, dtWf = 0.0, dtWg = 0.0;
 #endif
   if (fC > 0.001) {
     float macro = textureGrad(tMisc, P.xz * (1.0 / 730.0), dtDx.xz * (1.0 / 730.0), dtDy.xz * (1.0 / 730.0)).a;
+    float mx = smoothstep(0.25, 0.75, macro);   // mistura entre as duas escalas (anti-repetição)
     vec3 modc = vec3(0.0), pert = vec3(0.0);
     float rough = 0.0;
     if (wr > 0.004) {
       vec3 w = pow(abs(Ng), vec3(4.0)); w /= (w.x + w.y + w.z);
-      vec3 Pw = P + vec3(0.0, (macro - 0.5) * 16.0, 0.0);   // estratos ondulados
-      vec4 a1, a2; vec3 n1, n2;
-      dtRockTri(Pw, dtDx, dtDy, w, 1.0 / 13.0, a1, n1);
-      dtRockTri(Pw + vec3(37.0, 11.0, 53.0), dtDx, dtDy, w, 1.0 / 61.0, a2, n2);
-      float rh = mix(a2.a, a1.a, fF);
+      vec3 m1, m2, n1, n2;
+      vec3 Pw = P + vec3(0.0, (macro - 0.5) * 22.0, 0.0);   // estratos ondulados (sem faixas retas)
+      dtRockTri(Pw, dtDx, dtDy, w, 1.0 / 9.0, false, m1, n1);
+      dtRockTri(Pw + vec3(37.0, 11.0, 53.0), dtDx, dtDy, w, 1.0 / 53.0, true, m2, n2);   // escala grossa: rocha sem estratos (sem faixas regulares)
+      m2 = mix(vec3(1.0), m2, 0.4);
+      float l1 = dot(m1, vec3(0.333)), l2 = dot(m2, vec3(0.333));
+      float rh = clamp(0.5 + 0.6 * (mix(l2, l1, fF) - 1.0), 0.0, 1.0);
 #ifdef DT_TERRAIN
-      // transição pela altura da textura: a rocha aflora primeiro nas saliências
-      float wr2 = clamp(wr + (rh - 0.5) * 3.0 * wr * (1.0 - wr), 0.0, 1.0);
+      // transição pela luminância da foto: a rocha aflora primeiro nas partes claras/salientes
+      float wr2 = clamp(wr + (rh - 0.5) * 3.0 * wr * (1.0 - wr) * uReady, 0.0, 1.0);
       float kO = (1.0 - wr2) / max(1.0 - wr, 1e-3);
       ws *= kO; wf *= kO; wg *= kO; wr = wr2;
 #endif
-      vec3 mr = (1.0 + fF * (2.0 * a1.rgb - 1.0) * 0.9) * (1.0 + fC * (2.0 * a2.rgb - 1.0) * 0.75);
-      modc += mr * wr; pert += (n1 * (fF * 0.9) + n2 * (fC * 0.6)) * wr;
-      rough += (0.72 + 0.18 * rh) * wr;
+      vec3 mr = mix(vec3(1.0), m1, fF * (0.55 + 0.35 * mx)) * mix(vec3(1.0), m2, fP * (0.75 - 0.3 * mx * fF));
+      modc += mr * wr; pert += (n1 * (fF * 0.9) + n2 * (fP * 0.6)) * wr;
+      rough += (0.74 + 0.16 * rh) * wr;
     }
 #ifdef DT_TERRAIN
     if (wg > 0.004) {
       const mat2 R1 = mat2(0.825, 0.565, -0.565, 0.825);
-      vec2 u1 = P.xz * (1.0 / 6.5), u2 = R1 * P.xz * (1.0 / 29.0);
-      vec2 g1x = dtDx.xz * (1.0 / 6.5), g1y = dtDy.xz * (1.0 / 6.5);
-      vec2 g2x = R1 * dtDx.xz * (1.0 / 29.0), g2y = R1 * dtDy.xz * (1.0 / 29.0);
-      vec4 g1 = textureGrad(tGround, u1, g1x, g1y), g2 = textureGrad(tGround, u2, g2x, g2y);
-      vec2 gn = textureGrad(tGroundN, u1, g1x, g1y).ba * 2.0 - 1.0;
-      vec3 mg = (1.0 + fF * (2.0 * g1.rgb - 1.0) * 0.75) * (1.0 + fC * (2.0 * g2.rgb - 1.0) * 0.5);
-      modc += mg * wg; pert += vec3(gn.x, 0.0, gn.y) * (fF * 0.5 * wg); rough += 0.95 * wg;
+      vec2 u1 = P.xz * (1.0 / 7.0), u2 = R1 * P.xz * (1.0 / 31.0);
+      vec2 g1x = dtDx.xz * (1.0 / 7.0), g1y = dtDy.xz * (1.0 / 7.0);
+      vec2 g2x = R1 * dtDx.xz * (1.0 / 31.0), g2y = R1 * dtDy.xz * (1.0 / 31.0);
+      const mat2 R4 = mat2(-0.416, 0.909, -0.909, -0.416);
+      vec2 u3 = R4 * P.xz * (1.0 / 12.7) + vec2(0.37, 0.61);
+      vec2 g3x = R4 * dtDx.xz * (1.0 / 12.7), g3y = R4 * dtDy.xz * (1.0 / 12.7);
+      vec3 g1 = dtHP(tGrass, u1, g1x, g1y, uMean[2], uHue0.z);
+      vec3 g3 = dtHP(tGrass, u3, g3x, g3y, uMean[2], uHue0.z);
+      vec3 g2 = dtHP(tGrass, u2, g2x, g2y, uMean[2], uHue0.z);
+      // duas escalas finas com rotações diferentes, trocadas por ruído de ~100 m (a grade do tile some)
+      float mA = textureGrad(tMisc, P.xz * (1.0 / 97.0), dtDx.xz * (1.0 / 97.0), dtDy.xz * (1.0 / 97.0)).a;
+      vec3 gF = mix(g1, g3, smoothstep(0.35, 0.65, mA));
+      vec2 gn = dtNrm(tGrassN, u1, g1x, g1y);
+      vec3 mg = mix(vec3(1.0), gF, fF * 0.45) * mix(vec3(1.0), g2, fP * 0.3);
+      modc += mg * wg; pert += vec3(gn.x, 0.0, gn.y) * (fF * 0.6 * wg); rough += 0.94 * wg;
     }
     if (wf > 0.004) {
+      // dossel (procedural: copas vistas de cima, leem-se de longe) + chão de mata nos vãos (foto)
       const mat2 R2 = mat2(0.27, 0.963, -0.963, 0.27);
       vec2 u1 = P.xz * (1.0 / 58.0), u2 = R2 * P.xz * (1.0 / 171.0);
       vec2 g1x = dtDx.xz * (1.0 / 58.0), g1y = dtDy.xz * (1.0 / 58.0);
       vec2 g2x = R2 * dtDx.xz * (1.0 / 171.0), g2y = R2 * dtDy.xz * (1.0 / 171.0);
-      float c1 = textureGrad(tGround, u1, g1x, g1y).a, c2 = textureGrad(tGround, u2, g2x, g2y).a;
-      vec2 cn = textureGrad(tGroundN, u1, g1x, g1y).rg * 2.0 - 1.0;
-      vec3 mf = vec3((1.0 + fC * (2.0 * c1 - 1.0) * 0.95) * (1.0 + fC * (2.0 * c2 - 1.0) * 0.35));
-      mf *= mix(vec3(1.0), mix(vec3(0.86, 0.93, 1.1), vec3(1.1, 1.05, 0.84), c1), fC); // copas ao sol amareladas, vãos azulados
-      modc += mf * wf; pert += vec3(cn.x, 0.0, cn.y) * (fC * 1.0 * wf); rough += 0.93 * wf;
+      vec4 c1 = textureGrad(tGround, u1, g1x, g1y);
+      float c2 = textureGrad(tGround, u2, g2x, g2y).a;
+      float dense = smoothstep(0.35, 0.85, wf);   // copas só na mata fechada (borda: chão de mata)
+      vec3 mf = vec3((1.0 + fC * dense * (2.0 * c1.a - 1.0) * 0.7) * (1.0 + fC * (2.0 * c2 - 1.0) * 0.35));
+      mf *= mix(vec3(1.0), mix(vec3(0.86, 0.93, 1.1), vec3(1.1, 1.05, 0.84), c1.a), fC * dense);
+      vec2 fu = P.xz * (1.0 / 5.0);
+      vec3 fg = dtHP(tForest, fu, dtDx.xz * 0.2, dtDy.xz * 0.2, uMean[3], uHue1.x);
+      mf *= mix(vec3(1.0), fg, fF * mix(0.6, 0.45 * (1.0 - smoothstep(0.35, 0.6, c1.a)), dense));
+      modc += mf * wf; pert += vec3(c1.r * 2.0 - 1.0, 0.0, c1.g * 2.0 - 1.0) * (fC * dense * wf); rough += 0.93 * wf;
     }
     if (ws > 0.004) {
       const mat2 R3 = mat2(0.76, 0.65, -0.65, 0.76);
-      vec2 u1 = P.xz * (1.0 / 4.3);
-      float s1 = textureGrad(tMisc, u1, dtDx.xz * (1.0 / 4.3), dtDy.xz * (1.0 / 4.3)).r;
-      vec2 ru = R3 * P.xz * (1.0 / 17.0);
-      vec2 rn = textureGrad(tRockN, ru, R3 * dtDx.xz * (1.0 / 17.0), R3 * dtDy.xz * (1.0 / 17.0)).ba * 2.0 - 1.0;
-      rn = vec2(0.76 * rn.x + 0.65 * rn.y, -0.65 * rn.x + 0.76 * rn.y);
-      float sm = 1.0 + fF * (2.0 * s1 - 1.0) * 0.55;
-      modc += vec3(sm) * ws; pert += vec3(rn.x, 0.0, rn.y) * (fF * 0.55 * ws); rough += 0.86 * ws;
+      vec2 u1 = P.xz * (1.0 / 3.5), u2 = R3 * P.xz * (1.0 / 15.0);
+      vec2 g1x = dtDx.xz * (1.0 / 3.5), g1y = dtDy.xz * (1.0 / 3.5);
+      vec2 g2x = R3 * dtDx.xz * (1.0 / 15.0), g2y = R3 * dtDy.xz * (1.0 / 15.0);
+      float wetS = 1.0 - smoothstep(0.5, 1.9, P.y);   // areia molhada junto à água (e submersa)
+      vec3 sd = dtHP(tSand, u1, g1x, g1y, uMean[4], uHue1.y);
+      vec3 sw = dtHP(tWet, u1 * 0.85, g1x * 0.85, g1y * 0.85, uMean[5], uHue1.y);
+      vec3 s2 = dtHP(tSand, u2, g2x, g2y, uMean[4], uHue1.y);
+      vec2 sn = dtNrm(tSandN, u1, g1x, g1y);
+      vec3 ms = mix(vec3(1.0), mix(sd, sw, wetS), fF * 0.8) * mix(vec3(1.0), s2, fP * 0.45);
+      modc += ms * ws; pert += vec3(sn.x, 0.0, sn.y) * (fF * 0.5 * ws); rough += mix(0.88, 0.55, wetS) * ws;
     }
 #endif
     float wt = max(ws + wf + wr + wg, 1e-3);
@@ -684,7 +649,7 @@ float dtWs = 0.0, dtWr = 1.0, dtWf = 0.0, dtWg = 0.0;
     float c1 = textureGrad(tMisc, cuv + vec2(0.021, 0.013) * uTime, cgx, cgy).g;
     float c2 = textureGrad(tMisc, cuv * 1.31 + vec2(-0.017, 0.019) * uTime, cgx * 1.31, cgy * 1.31).g;
     float caust = min(c1, c2) * smoothstep(0.0, 0.9, d) * exp(-0.08 * d) * (0.3 + 0.7 * dtFadeF);
-    diffuseColor.rgb *= Td * min(Tu / max(Tg, 1e-4), vec3(4.0)) * (1.0 + 2.4 * caust);
+    diffuseColor.rgb *= Td * min(Tu / max(Tg, 1e-4), vec3(4.0)) * (1.0 + 1.5 * caust);
   }
 }
 #endif
@@ -713,7 +678,7 @@ function patchDetailMaterial(mat, uniforms, mode) {
 // interpolação (cristas, picos, falésias) com prioridade extra na linha d'água;
 // folhas inteiras muito fundas são descartadas. Triangulação sem fendas: folha com
 // vizinho mais fino ganha vértice central + leque com os pontos médios.
-function buildTerrainMesh(ctx, B, L, targetLeaves) {
+function buildTerrainMesh(ctx, B, L, targetLeaves, coastLeaf = ISLANDS.COAST_LEAF) {
   const NL = 1 << L, NV = NL + 1, step = (2 * B) / NL, cx = ctx.cx, cz = ctx.cz, deep = ISLANDS.DEEP_CULL_Y;
   const cache = new Map();
   const H = (ix, iz) => {
@@ -760,13 +725,13 @@ function buildTerrainMesh(ctx, B, L, targetLeaves) {
     }
     const size = s * step;
     if (mx < deep) return size > 1400 ? 1 : 0;              // fundo invisível: grosso
-    if (mx < -8) err *= 0.3;                                // submerso (visto através da água)
+    if (mx < -30) err *= 0.25;                              // fundo além da visibilidade da água
+    else if (mx < -8) err = Math.max(err * 0.6, size * 0.012); // fundo raso visto através da água
     if (mn < 2.5 && mx > -3) err = Math.max(err, size * 0.16); // linha d'água: folhas pequenas
     else if (mn < 14 && mx > -8) err = Math.max(err, size * 0.03);
     return err;
   }
   leaves.add(KEY(0, 0, 0));
-  hpush(errorOf(0, 0, 0), KEY(0, 0, 0));
   let leafCount = 1;
   const decode = (k) => { const j = k % 2048, r = (k - j) / 2048, i = r % 2048, l = (r - i) / 2048; return [l, i, j]; };
   const split = (k, l, i, j, queue) => {
@@ -779,6 +744,27 @@ function buildTerrainMesh(ctx, B, L, targetLeaves) {
     }
     leafCount += 3;
   };
+  // fase 1: a linha d'água (e a face das falésias) sempre com folhas de ≤ COAST_LEAF m
+  const coastLevel = Math.min(L, Math.ceil(Math.log2((2 * B) / coastLeaf)));
+  const isCoast = (l, i, j) => {
+    const s = NL >> l, x0 = i * s, z0 = j * s, h = s >> 1;
+    let mn = Infinity, mx = -Infinity;
+    const q = Math.max(1, s >> 2);
+    for (let a = 0; a <= s; a += q) for (let b = 0; b <= s; b += q) { const v = H(x0 + a, z0 + b); if (v < mn) mn = v; if (v > mx) mx = v; }
+    return (mn < 0.3 && mx > -0.3) || (mn < 3 && mx - mn > 6 && mx > 0 && s * step < 200 && h >= 0); // cruza a água ou face de falésia
+  };
+  {
+    const stack = [[0, 0, 0]];
+    while (stack.length) {
+      const [l, i, j] = stack.pop();
+      const big = (NL >> l) * step > ISLANDS.LAND_LEAF_MAX && H((NL >> l) * i + (NL >> (l + 1)), (NL >> l) * j + (NL >> (l + 1))) > -3;
+      if (!big && (l >= coastLevel || !isCoast(l, i, j))) continue;
+      split(KEY(l, i, j), l, i, j, []);
+      for (let c = 0; c < 4; c++) stack.push([l + 1, 2 * i + (c & 1), 2 * j + (c >> 1)]);
+    }
+  }
+  // fase 2: refinamento guloso pelo erro com o resto do orçamento
+  for (const k of leaves) { const [l, i, j] = decode(k); if (l < L) hpush(errorOf(l, i, j), k); }
   while (hp.length && leafCount < targetLeaves) {
     const [p, k] = hpop();
     if (p <= 0.12) break;
@@ -822,7 +808,7 @@ function buildTerrainMesh(ctx, B, L, targetLeaves) {
     const [l, i, j] = decode(k);
     const s = NL >> l, x0 = i * s, z0 = j * s, h = s >> 1, n = 1 << l;
     const a = H(x0, z0), b = H(x0 + s, z0), c = H(x0, z0 + s), d = H(x0 + s, z0 + s);
-    if (Math.max(a, b, c, d) < deep) continue;
+    if (Math.max(a, b, c, d) < deep && (s < 2 || Math.max(H(x0 + h, z0 + h), H(x0 + h, z0), H(x0, z0 + h), H(x0 + s, z0 + h), H(x0 + h, z0 + s)) < deep)) continue;
     const fS = j > 0 && internal.has(KEY(l, i, j - 1)), fE = i < n - 1 && internal.has(KEY(l, i + 1, j));
     const fN = j < n - 1 && internal.has(KEY(l, i, j + 1)), fW = i > 0 && internal.has(KEY(l, i - 1, j));
     if (!(fS || fE || fN || fW)) {
@@ -873,6 +859,7 @@ function boxBlur(H, N, r) {
 // Atlas 2:1 (metade esquerda: agulhas de conífera, v = ápice→borda do andar;
 // metade direita: tufos de folhas) + mapa de normais derivado da luminância.
 let TREE_TEX = null;
+const BARK_U0 = 0.94; // faixa do atlas com a casca dos troncos
 function buildTreeAtlas(S) {
   if (TREE_TEX && TREE_TEX.size === S) return TREE_TEX;
   const W = S, Hh = S, HW = W / 2, k = S / 512;
@@ -880,15 +867,15 @@ function buildTreeAtlas(S) {
   const r = createRng(SEED + 6262);
   // conífera: base escura que clareia para a borda (pontas dos galhos ao sol)
   const grd = g.createLinearGradient(0, 0, 0, Hh);
-  grd.addColorStop(0, '#2a3527'); grd.addColorStop(0.6, '#3d4c35'); grd.addColorStop(1, '#55663f');
+  grd.addColorStop(0, '#6f7a68'); grd.addColorStop(0.6, '#97a389'); grd.addColorStop(1, '#b4bf9c');
   g.fillStyle = grd; g.fillRect(0, 0, HW, Hh);
   g.save(); g.beginPath(); g.rect(0, 0, HW, Hh); g.clip();
   g.lineCap = 'round';
   for (let i = 0; i < 1100 * k * k; i++) {
     const x = r() * HW, y = r() * Hh * 1.05 - 0.05 * Hh, len = (14 + r() * 30) * k, ang = Math.PI / 2 + (r() - 0.5) * 0.7;
     const t = clamp(y / Hh, 0, 1), lum = 0.35 + 0.5 * t * (0.6 + 0.4 * r()) + 0.12 * r();
-    const hue = 85 + r() * 30, sat = 22 + r() * 18;
-    const col = `hsl(${hue},${sat}%,${Math.round(lum * 40)}%)`;
+    const hue = 80 + r() * 30, sat = 12 + r() * 16;
+    const col = `hsl(${hue},${sat}%,${Math.round(30 + lum * 52)}%)`;
     wrapDraw(HW, Hh, x, y, 40 * k, (px, py) => {
       const ex = px + Math.cos(ang) * len, ey = py + Math.sin(ang) * len;
       g.strokeStyle = col; g.lineWidth = 1.6 * k;
@@ -903,7 +890,7 @@ function buildTreeAtlas(S) {
   }
   g.restore();
   // folhosa: base escura + aglomerados de folhas (claras no alto/esquerda)
-  g.fillStyle = '#2c3a22'; g.fillRect(HW, 0, HW, Hh);
+  g.fillStyle = '#5f6b4f'; g.fillRect(HW, 0, HW, Hh);
   g.save(); g.beginPath(); g.rect(HW, 0, HW, Hh); g.clip();
   for (let c = 0; c < 140 * k * k; c++) {
     const ccx = r() * HW, ccy = r() * Hh, cr = (16 + r() * 26) * k;
@@ -914,7 +901,7 @@ function buildTreeAtlas(S) {
       const top = 1 - (Math.sin(a) * d) / cr * 0.5 - (Math.cos(a) * d) / cr * 0.2; // lado de cima/esquerda mais claro
       const lum = clamp(0.3 + 0.32 * top * (0.7 + 0.5 * r()), 0.12, 0.85);
       const hue = 78 + r() * 30;
-      g.fillStyle = `hsl(${hue},${30 + r() * 20}%,${Math.round(lum * 48)}%)`;
+      g.fillStyle = `hsl(${hue},${14 + r() * 16}%,${Math.round(28 + lum * 62)}%)`;
       const lw = (3 + r() * 4) * k, lh = lw * (0.45 + 0.2 * r()), rot = r() * Math.PI;
       wrapDraw(HW, Hh, x, y, 12 * k, (px, py) => { g.beginPath(); g.ellipse(px, py, lw, lh, rot, 0, TAU); g.fill(); }, HW, false);
     }
@@ -940,13 +927,36 @@ function buildTreeAtlas(S) {
     const nx = nd[i * 4] / 127.5 - 1, ny = nd[i * 4 + 1] / 127.5 - 1;
     nd[i * 4 + 2] = Math.round(127.5 + 127.5 * Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny)));
   }
+  // faixa da casca (u ≥ BARK_U0): marrom até a foto da casca chegar (paintBark)
+  const bx = Math.floor(W * BARK_U0);
+  g.fillStyle = '#5a4634'; g.fillRect(bx, 0, W - bx, Hh);
+  for (let y = 0; y < Hh; y++) for (let x = bx; x < W; x++) { const o = (y * W + x) * 4; nd[o] = 128; nd[o + 1] = 128; nd[o + 2] = 255; }
   const map = new THREE.CanvasTexture(cv);
   map.colorSpace = THREE.SRGBColorSpace; map.anisotropy = 8;
   map.wrapS = THREE.ClampToEdgeWrapping; map.wrapT = THREE.ClampToEdgeWrapping;
   const nmap = dataTex(nd, W, Hh);
   nmap.wrapS = nmap.wrapT = THREE.ClampToEdgeWrapping;
-  TREE_TEX = { size: S, map, nmap };
+  TREE_TEX = { size: S, map, nmap, cv, nd, W, Hh, bx, bark: tex('bark_brown_02', 'diff'), barkN: tex('bark_brown_02', 'nor_gl'), barkDone: false };
   return TREE_TEX;
+}
+// Pinta a foto da casca (Poly Haven bark_brown_02, cor + normal) na faixa dos troncos do atlas
+// assim que as imagens chegam.
+function paintBark(TA) {
+  if (TA.barkDone) return;
+  const im = TA.bark && TA.bark.image, imN = TA.barkN && TA.barkN.image;
+  if (!im || !(im.width > 0) || im.complete === false || !imN || !(imN.width > 0) || imN.complete === false) return;
+  const w = TA.W - TA.bx, H = TA.Hh;
+  const g = TA.cv.getContext('2d');
+  g.drawImage(im, 0, 0, im.width * 0.25, im.height, TA.bx, 0, w, H);    // um quarto da largura (casca não esticada)
+  const c2 = makeCanvas(w, H), g2 = c2.getContext('2d', { willReadFrequently: true });
+  g2.drawImage(imN, 0, 0, imN.width * 0.25, imN.height, 0, 0, w, H);
+  const d = g2.getImageData(0, 0, w, H).data;
+  for (let y = 0; y < H; y++) for (let x = 0; x < w; x++) {
+    const o = (y * TA.W + TA.bx + x) * 4, q = (y * w + x) * 4;
+    TA.nd[o] = d[q]; TA.nd[o + 1] = d[q + 1]; TA.nd[o + 2] = d[q + 2];
+  }
+  TA.map.needsUpdate = true; TA.nmap.needsUpdate = true;
+  TA.barkDone = true;
 }
 
 // Monta uma BufferGeometry não indexada a partir de listas de triângulos.
@@ -989,13 +999,15 @@ function makeConiferGeometry(lo) {
     }
   }
   if (!lo) { // tronco (3 faces, cor marrom "pré-dividida" pelo verde médio das instâncias)
-    const avg = PAL.forestDark.clone().lerp(PAL.meadow, 0.3);
-    const tc = (PAL.wood.r / avg.r + PAL.wood.g / avg.g + PAL.wood.b / avg.b) / 3 * 0.5;
+    // casca (foto) × 1/verde médio das instâncias → a casca sai com a cor da foto
+    const avg = PAL.forestDark.clone().multiplyScalar(1.6);
+    const tc = 0.75 * 3 / (avg.r + avg.g + avg.b);
     for (let k = 0; k < 3; k++) {
       const a0 = (k / 3) * TAU, a1 = ((k + 1) / 3) * TAU;
       const b0 = [Math.cos(a0) * 0.045, 0, Math.sin(a0) * 0.045], b1 = [Math.cos(a1) * 0.045, 0, Math.sin(a1) * 0.045];
       const n = [Math.cos((a0 + a1) / 2), 0, Math.sin((a0 + a1) / 2)];
-      push([0, 0.34, 0], n, [0.25, 0.99], tc); push(b1, n, [0.25, 0.99], tc); push(b0, n, [0.25, 0.99], tc);
+      const u0 = BARK_U0 + 0.005 + (1 - BARK_U0 - 0.01) * k / 3, u1 = BARK_U0 + 0.005 + (1 - BARK_U0 - 0.01) * (k + 1) / 3;
+      push([0, 0.34, 0], n, [(u0 + u1) / 2, 0.98], tc); push(b1, n, [u1, 0.02], tc); push(b0, n, [u0, 0.02], tc);
     }
   }
   return geoFromTris(P, Nr, UV, C);
@@ -1016,7 +1028,7 @@ function makeBroadleafGeometry(lo) {
       const px = cx + x * rx * o, py = cy + y * ry * o, pz = cz + z * rz * o;
       const nx = x / rx, ny = y / ry, nz = z / rz, nl = Math.hypot(nx, ny, nz);
       P.push(px, py, pz); Nr.push(nx / nl, ny / nl, nz / nl);
-      UV.push(0.75 + 0.235 * clamp((px * 0.707 + pz * 0.707) / 0.42, -1, 1), clamp(0.5 - 0.47 * (py - 0.62) / 0.4, 0.02, 0.98));
+      UV.push(0.72 + 0.2 * clamp((px * 0.707 + pz * 0.707) / 0.42, -1, 1), clamp(0.5 - 0.47 * (py - 0.62) / 0.4, 0.02, 0.98));
       const c = 0.45 + 0.6 * smoothstep(-0.9, 0.8, y);
       C.push(c, c, c);
     }
@@ -1026,13 +1038,14 @@ function makeBroadleafGeometry(lo) {
   else {
     lobe(new THREE.IcosahedronGeometry(1, 0), 0, 0.6, 0, 0.42, 0.34, 0.42, 0.3);
     lobe(new THREE.OctahedronGeometry(1, 0), 0.16, 0.76, -0.1, 0.26, 0.22, 0.26, 0.25);
-    const avg = PAL.forest.clone().lerp(PAL.meadow, 0.4);
-    const tc = (PAL.wood.r / avg.r + PAL.wood.g / avg.g + PAL.wood.b / avg.b) / 3 * 0.45;
+    const avg = PAL.forest.clone().lerp(PAL.meadow, 0.3).multiplyScalar(1.45);
+    const tc = 0.75 * 3 / (avg.r + avg.g + avg.b);
     for (let k = 0; k < 3; k++) {
       const a0 = (k / 3) * TAU, a1 = ((k + 1) / 3) * TAU;
       const n = [Math.cos((a0 + a1) / 2), 0, Math.sin((a0 + a1) / 2)];
+      const u0 = BARK_U0 + 0.005 + (1 - BARK_U0 - 0.01) * k / 3, u1 = BARK_U0 + 0.005 + (1 - BARK_U0 - 0.01) * (k + 1) / 3;
       P.push(0, 0.5, 0, Math.cos(a1) * 0.05, 0, Math.sin(a1) * 0.05, Math.cos(a0) * 0.05, 0, Math.sin(a0) * 0.05);
-      for (let q = 0; q < 3; q++) { Nr.push(...n); UV.push(0.75, 0.97); C.push(tc, tc, tc); }
+      Nr.push(...n, ...n, ...n); UV.push((u0 + u1) / 2, 0.98, u1, 0.02, u0, 0.02); C.push(tc, tc, tc, tc, tc, tc, tc, tc, tc);
     }
   }
   return geoFromTris(P, Nr, UV, C);
@@ -1093,7 +1106,7 @@ function buildIsland(island, opts) {
 
   // ---- malha adaptativa ----
   const L = ISLANDS.TERRAIN_LEVELS;
-  const { geo, H } = buildTerrainMesh(ctx, B, L, low ? ISLANDS.TERRAIN_LEAVES_LOW : ISLANDS.TERRAIN_LEAVES_HIGH);
+  const { geo, H } = buildTerrainMesh(ctx, B, L, low ? ISLANDS.TERRAIN_LEAVES_LOW : ISLANDS.TERRAIN_LEAVES_HIGH, ISLANDS.COAST_LEAF * (low ? 2 : 1));
 
   // ---- grade regular de cobertura (reaproveita as alturas da malha) ----
   const RN = ISLANDS.RASTER, RV = RN + 1, rs = (1 << L) / RN, rstep = (2 * B) / RN;
@@ -1142,7 +1155,12 @@ function buildIsland(island, opts) {
       colors[v * 3] = PAL.seabed.r; colors[v * 3 + 1] = PAL.seabed.g; colors[v * 3 + 2] = PAL.seabed.b;
       cover[v * 4 + 2] = 1; continue;
     }
-    const ny = na[v * 3 + 1];
+    let ny = na[v * 3 + 1];
+    if (y < 30 && y > -20 && ctx.rockyAt(x, z) > 0.05) {
+      // costa rochosa: inclinação exata da função (a face da falésia tem 1–2 células de largura)
+      const e = 2.5, hx = ctx.renderHeight(x + e, z) - ctx.renderHeight(x - e, z), hz = ctx.renderHeight(x, z + e) - ctx.renderHeight(x, z - e);
+      ny = Math.min(ny, 1 / Math.hypot(hx / (2 * e), hz / (2 * e), 1));
+    }
     sampleRaster(lx, lz);
     const fineN = ctx.fineAt(x, z), microN = ctx.microAt(x, z);
     const bchN = ctx.bchAt(x, z);
@@ -1198,7 +1216,7 @@ function buildIsland(island, opts) {
       const h = rng.range(2.2, 5.5);
       pos3.set(lx, y - 0.25 * h, lz); quat.setFromAxisAngle(UP, yaw); scl.set(h * rng.range(1.1, 1.7), h, h * rng.range(1.1, 1.7));
       mat4.compose(pos3, quat, scl); broad.setMatrixAt(pb, mat4);
-      icol.copy(PAL.scrub).lerp(PAL.forest, rng() * 0.6).lerp(PAL.grassDry, rng() * 0.3).multiplyScalar(rng.range(0.7, 0.95));
+      icol.copy(PAL.scrub).lerp(PAL.forest, rng() * 0.6).lerp(PAL.grassDry, rng() * 0.3).multiplyScalar(rng.range(1.15, 1.5));
       broad.setColorAt(pb, icol); pb++;
       return;
     }
@@ -1209,7 +1227,7 @@ function buildIsland(island, opts) {
       const w = rng.range(0.5, 0.68) * (inWood ? 1 : 1.12);
       pos3.set(lx, y - sink, lz); quat.setFromAxisAngle(UP, yaw); scl.set(h * w, h, h * w);
       mat4.compose(pos3, quat, scl); conifers.setMatrixAt(pc, mat4);
-      icol.copy(PAL.forestDark).lerp(PAL.forest, rng() * 0.5).multiplyScalar(rng.range(0.62, 0.86));
+      icol.copy(PAL.forestDark).lerp(PAL.forest, rng() * 0.5).multiplyScalar(rng.range(1.35, 1.85));
       icol.b *= rng.range(0.95, 1.12);
       conifers.setColorAt(pc, icol); pc++;
     } else {
@@ -1218,7 +1236,7 @@ function buildIsland(island, opts) {
       const w = rng.range(1.0, 1.4);
       pos3.set(lx, y - sink, lz); quat.setFromAxisAngle(UP, yaw); scl.set(h * w, h * rng.range(0.9, 1.1), h * w);
       mat4.compose(pos3, quat, scl); broad.setMatrixAt(pb, mat4);
-      icol.copy(PAL.forest).lerp(PAL.meadow, rng() * 0.55).lerp(PAL.grassDry, rng() * 0.2).multiplyScalar(rng.range(0.72, 0.98));
+      icol.copy(PAL.forest).lerp(PAL.meadow, rng() * 0.55).lerp(PAL.grassDry, rng() * 0.2).multiplyScalar(rng.range(1.25, 1.65));
       broad.setColorAt(pb, icol); pb++;
     }
   };
@@ -1265,7 +1283,7 @@ function buildIsland(island, opts) {
     pos3.set(lx, y - scl.y * 0.28, lz); mat4.compose(pos3, quat, scl); rocks.setMatrixAt(placedR, mat4);
     const peakW = smoothstep(0.68 * maxH, 0.95 * maxH, y);
     icol.copy(PAL.rockDark).lerp(PAL.rock, rng()).lerp(PAL.rockLight, 0.35 * rng() * peakW + 0.1 * rng() + bright);
-    icol.multiplyScalar(rng.range(0.85, 1.1) * 1.35); // a textura de rocha tem média 0,5 → ~0,74 com o detalhe
+    icol.multiplyScalar(rng.range(0.85, 1.1));
     rocks.setColorAt(placedR, icol); placedR++;
   };
   // pedras soltas na arrebentação das costas rochosas
@@ -1305,7 +1323,7 @@ function buildIsland(island, opts) {
     eul.set(rng.range(-0.06, 0.06), o.rot, rng.range(-0.06, 0.06)); quat.setFromEuler(eul);
     pos3.set(o.x - cx, -8, o.z - cz); scl.set(o.r * rng.range(0.85, 1.15), o.h + 8, o.r * rng.range(0.85, 1.15));
     mat4.compose(pos3, quat, scl); stacks.setMatrixAt(k, mat4);
-    icol.copy(PAL.rockDark).lerp(PAL.rockWarm, rng() * 0.6).multiplyScalar(rng.range(1.15, 1.4));
+    icol.copy(PAL.rockDark).lerp(PAL.rockWarm, rng() * 0.6).lerp(PAL.rock, 0.4).multiplyScalar(rng.range(0.9, 1.1));
     stacks.setColorAt(k, icol);
   });
   stacks.count = st.length;
@@ -1325,7 +1343,17 @@ export function createIslands(scene, worldData, opts = {}) {
 
   const D = buildDetailTextures(low ? ISLANDS.TEX_SIZE_LOW : ISLANDS.TEX_SIZE_HIGH);
   const uniforms = {
-    tRock: { value: D.tRock }, tRockN: { value: D.tRockN }, tGround: { value: D.tGround }, tGroundN: { value: D.tGroundN }, tMisc: { value: D.tMisc },
+    tCliff: { value: D.photos[0].map }, tCliffN: { value: D.photos[0].nor },
+    tRockTop: { value: D.photos[1].map }, tRockTopN: { value: D.photos[1].nor },
+    tGrass: { value: D.photos[2].map }, tGrassN: { value: D.photos[2].nor },
+    tForest: { value: D.photos[3].map },
+    tSand: { value: D.photos[4].map }, tSandN: { value: D.photos[4].nor },
+    tWet: { value: D.photos[5].map },
+    tGround: { value: D.tGround }, tMisc: { value: D.tMisc },
+    uMean: { value: D.photos.map((p) => p.mean) },
+    uHue0: { value: new THREE.Vector4(D.photos[0].hue, D.photos[1].hue, D.photos[2].hue, D.photos[3].hue) },
+    uHue1: { value: new THREE.Vector2(D.photos[3].hue, D.photos[4].hue) },
+    uReady: { value: 0 },
     uFade: { value: new THREE.Vector4(...ISLANDS.DETAIL_FADE) },
     uTime: { value: 0 },
     uSigma: { value: new THREE.Vector3(...ISLANDS.WATER_SIGMA) },
@@ -1362,6 +1390,8 @@ export function createIslands(scene, worldData, opts = {}) {
     // (seriam sub-pixel); o terreno fica sempre visível (frustum culling cuida do resto).
     update(camera, time) {
       uniforms.uTime.value = time || 0;
+      if (!uniforms.uReady.value && measurePhotos(D)) uniforms.uReady.value = 1; // fotos carregadas
+      paintBark(TA);
       const cp = camera.position;
       for (const it of built) {
         const d = Math.hypot(cp.x - it.cx, cp.z - it.cz, cp.y);
@@ -1374,4 +1404,3 @@ export function createIslands(scene, worldData, opts = {}) {
     },
   };
 }
-export const __islandsTest = { buildTerrainMesh: (...a) => buildTerrainMesh(...a), islandCtx: (i) => islandCtx(i) };
