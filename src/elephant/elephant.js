@@ -14,14 +14,14 @@
 //  tornozelos. Orelhas GIGANTES quase retangulares, pendendo abaixo da cabeça,
 //  com manto: borda listrada concêntrica, tecido escuro e um bloco retangular
 //  de casas em terraços.
-//  Civilização: tapete FINO de milhares de casinhas pálidas (InstancedMesh ×2)
+//  Civilização: tapete FINO de milhares de casinhas pálidas (InstancedMesh ×4)
 //  cobrindo o dorso, descendo pelos flancos e transbordando para o pescoço;
 //  palácio com muralha arcada, cúpula dourada sobre tambor, 6 minaretes com
 //  varandas, torres rosa de telhado cônico e muro de tijolos arcado; prédio de
 //  tijolos e praça de mercado no centro (ponto da entrega); mesquitas e torres
 //  espalhadas; presas com a metade de cima coberta de casinhas de telhado
 //  vermelho e torres brancas; torres e casinhas no alto da cabeça.
-//  Medidas em config.js → ELEPHANT, ELEPHANT_MODEL e ELEPHANT_POLISH.
+//  Medidas em config.js → ELEPHANT, ELEPHANT_MODEL, ELEPHANT_POLISH e ELEPHANT_CITY.
 //
 //  Rodada 3: dobras ESCULPIDAS na geometria (ruído |fbm| com deformação de domínio, malhas densas),
 //  textura de vincos orgânicos (cor quente #6b625f), civilização 3× menor (casinhas 8–16 m no mundo)
@@ -35,13 +35,23 @@
 //  e compartilhada pelos 7 elefantes; dobras em lençóis sobrepostos deslocadas na normal, vincos
 //  fundos nas junções, AO de cavidade nos vértices e mapas da pele em TRIPLANAR (procedurais + couro
 //  e lama seca reais do Poly Haven), sem UV nem emendas.
-//  Estrutura: DOIS SkinnedMesh com o MESMO esqueleto de 17 ossos (raiz, quadril+joelho ×4, cabeça,
-//  4 da tromba, cauda, 2 orelhas; pesos da pele pela região dominante do campo): a pele esculpida e as
+//  Rodada 5 (cidade realista, src/elephant/architecture.js): um único material PBR para toda a cidade
+//  com texturas reais (white_stucco_02, beige_wall_001, clay_roof_tiles_02, brick_wall_02, marble_01) em
+//  metros de fachada × tinta pastel por instância, janelas em arco procedurais com paralaxe (vão fundo),
+//  moldura/peitoril em relevo, venezianas, janelas acesas, lojas no térreo, ameias e balaústres vazados;
+//  tapete em 4 arquétipos instanciados (laje ameada, 4 águas de telha, bloco alto com toldo, cupulazinha)
+//  numa grade deformada com ruas, avenidas e pracinhas; palácio de arcadas em 2 corpos sobre soco de
+//  tijolos arcado, cúpula em bulbo com nervuras, 4 cúpulas, quiosques, 8 minaretes de 3 varandas, torres
+//  rosa; praça do mercado com bancas, guarda-sóis e chafariz. Pele: detalhe fino (couro/lama) esmaece
+//  com a distância; pompons só com lã procedural; manto da orelha em grade polar (normais suaves).
+//  Estrutura: TRÊS SkinnedMesh com o MESMO esqueleto de 17 ossos (raiz, quadril+joelho ×4, cabeça,
+//  4 da tromba, cauda, 2 orelhas; pesos da pele pela região dominante do campo): a pele esculpida, as
 //  demais partes (grupos de material: pele das orelhas/pálpebras, manga da tromba, panos, marfim,
-//  ouro, cidade, borla, olhos, prata) + InstancedMesh (tapete de casas ×2, casinhas das presas, tachas,
-//  pompons — estes três presos ao osso da cabeça) + crosta. Faixas dos tornozelos, unhas e manga da
-//  tromba são lançadas na pele esculpida; cidade, crosta, placa, olhos e guirlanda usam as consultas
-//  de superfície do campo. ≈ 17 draw calls e ≈ 360 k triângulos por elefante com o tapete visível.
+//  ouro, borla, olhos, prata) e a cidade mesclada (material "arch") + InstancedMesh (tapete ×4, mercado
+//  ×2, casinhas das presas, tachas, pompons — estes três presos ao osso da cabeça) + crosta. Faixas dos
+//  tornozelos, unhas e manga da tromba são lançadas na pele esculpida; cidade, crosta, placa, olhos e
+//  guirlanda usam as consultas de superfície do campo. ≈ 22 draw calls e ≈ 379 k triângulos por
+//  elefante com o tapete visível (high).
 //  Espaço local: +X = frente, +Y = cima, +Z = lado direito; origem no
 //  nível do mar entre as patas (ver config.js / ARCHITECTURE.md).
 // =====================================================================
@@ -1639,22 +1649,22 @@ export function createElephant(route, index, opts = {}) {
     at(facBox(W1 + 16, P0 - yb, D1 + 16, { side: [SF.BRICK, 7, 13], top: [SF.FLAT], color: 0xffffff }), px, (P0 + yb) / 2, 0);
     at(facBox(W1 + 24, 5, D1 + 24, { side: MARB, top: MARB, color: 0xece6dc }), px, P0 + 2.5, 0);
     // 1º corpo: bloco branco com fileiras de janelas em arco (pilastras + cornija por andar)
-    at(facBox(W1, T1 - P0 - 5, D1, { side: [SF.PALACE, 5.2, 8.6], top: [SF.PAVE], color: 0xf4f1ea }), px, (T1 + P0 + 5) / 2, 0);
+    at(facBox(W1, T1 - P0 - 5, D1, { side: [SF.PALACE, 4.4, 9.2], top: [SF.PAVE], color: 0xf4f1ea }), px, (T1 + P0 + 5) / 2, 0);
     at(facBox(W1 + 12, 7, D1 + 12, { side: MARB, top: MARB, color: 0xeee9df }), px, T1 + 3.5, 0);
     at(rimRing(W1 + 10, D1 + 10, 8, 1.6, SF.BALUS, 2.3), px, T1 + 7, 0);
     // 2º corpo recuado
-    at(facBox(W2, T2 - T1 - 7, D2, { side: [SF.PALACE, 4.6, 8.2], top: [SF.PAVE], color: 0xf4f1ea }), px, (T2 + T1 + 7) / 2, 0);
+    at(facBox(W2, T2 - T1 - 7, D2, { side: [SF.PALACE, 4.2, 8.8], top: [SF.PAVE], color: 0xf4f1ea }), px, (T2 + T1 + 7) / 2, 0);
     at(facBox(W2 + 10, 6, D2 + 10, { side: MARB, top: MARB, color: 0xeee9df }), px, T2 + 3, 0);
     at(rimRing(W2 + 8, D2 + 8, 7, 1.4, SF.BALUS, 2.1), px, T2 + 6, 0);
     // tambor com janelas em arco + cornija + cúpula dourada em bulbo com nervuras e finial
     const DR = DOME_R + 8;
     at(facCyl(DR, DR, DRUM_H, 40, { side: [SF.PALACE, (TAU * DR) / 24, DRUM_H], color: 0xf4f1ea }), px, T2 + DRUM_H / 2, 0);
     at(facCyl(DR + 6, DR + 2, 6, 40, { side: MARB, cap: MARB, color: 0xeee9df }), px, DOME_CY - 3, 0);
-    const dome = goldDome(DOME_R, DOME_R * DOME_HF, low ? 32 : 44, 14); dome.translate(px, DOME_CY, 0); addGold(dome);
+    const dome = goldDome(DOME_R, DOME_R * DOME_HF, low ? 28 : 36, 12); dome.translate(px, DOME_CY, 0); addGold(dome);
     for (let i = 0; i < 16; i++) {   // nervuras
       const a = (i / 16) * TAU, pts = [];
       for (let k = 0; k <= 10; k++) { const t = (k / 10) * 0.93, r = DOME_R * Math.pow(1 - t, 0.62) * (1 + 0.1 * Math.sin(Math.PI * t)) + 1.5; pts.push(new V3(px + Math.cos(a) * r, DOME_CY + DOME_R * DOME_HF * t, Math.sin(a) * r)); }
-      addGold(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 12, 2.2, 4, false));
+      addGold(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 10, 2.2, 3, false));
     }
     const ring = new THREE.TorusGeometry(DOME_R + 2, 3.5, 6, 48); ring.rotateX(Math.PI / 2); ring.translate(px, DOME_CY + 2, 0); addGold(ring);
     finial(px, DOME_CY + DOME_R * DOME_HF - 4, 0, 2.2);
@@ -1720,18 +1730,18 @@ export function createElephant(route, index, opts = {}) {
     at(whiteDome(1.4, 8, 4, 0xf2efe8, SF.MARBLE), cx, top + 10.4, 0);
     // bancas em fileiras com corredores (e guarda-sóis nos corredores), longe do chafariz
     const mr = createRng(SEED + 4242 + index);
-    const CAN = [0xf2ede2, 0xb0322a, 0x3d7a45, 0x2f5e9e, 0xd29a3a, 0xd9692e, 0xf2ede2, 0x8a3a6a, 0xe8d6b0];
-    for (let gx = PZ.x0 + 8; gx < PZ.x1 - 6 && market.stall.length < CT.STALLS; gx += 9) {
-      for (let gz = -PZ.hz + 7; gz < PZ.hz - 5 && market.stall.length < CT.STALLS; gz += 7.5) {
-        if (Math.hypot(gx - cx, gz) < 26 || mr() < 0.12) continue;
-        const s = mr.range(3.4, 4.4);
+    const CAN = [0xf2ede2, 0xb0322a, 0x3d7a45, 0x2f5e9e, 0xd29a3a, 0xd9692e, 0x4f86c6, 0x8a3a6a, 0xe8d6b0, 0x6f9e4a];
+    for (let gx = PZ.x0 + 9; gx < PZ.x1 - 7 && market.stall.length < CT.STALLS; gx += 12.5) {
+      for (let gz = -PZ.hz + 8; gz < PZ.hz - 6 && market.stall.length < CT.STALLS; gz += 10) {
+        if (Math.hypot(gx - cx, gz) < 28 || mr() < 0.1) continue;
+        const s = mr.range(5.4, 7);
         dummy.position.set(gx + mr.range(-0.8, 0.8), top, gz + mr.range(-0.6, 0.6)); dummy.quaternion.setFromAxisAngle(_up, mr() < 0.5 ? 0 : Math.PI); dummy.scale.set(s * mr.range(1, 1.25), s * 0.85, s); dummy.updateMatrix();
         market.stall.push({ m: dummy.matrix.clone(), c: mr.pick(CAN) });
       }
     }
     for (let i = 0; i < CT.UMBRELLAS; i++) {
-      const gx = mr.range(PZ.x0 + 6, PZ.x1 - 6), gz = mr.range(-PZ.hz + 6, PZ.hz - 6); if (Math.hypot(gx - cx, gz) < 22) continue;
-      const s = mr.range(3.6, 4.6);
+      const gx = mr.range(PZ.x0 + 6, PZ.x1 - 6), gz = mr.range(-PZ.hz + 6, PZ.hz - 6); if (Math.hypot(gx - cx, gz) < 24) continue;
+      const s = mr.range(5.2, 6.8);
       dummy.position.set(gx, top, gz); dummy.quaternion.setFromAxisAngle(_up, mr() * TAU); dummy.scale.set(s, s * 0.9, s); dummy.updateMatrix();
       market.umbrella.push({ m: dummy.matrix.clone(), c: mr.pick(CAN) });
     }
@@ -1816,15 +1826,15 @@ export function createElephant(route, index, opts = {}) {
     const trng = createRng(SEED + 1200 + index * 7 + si);
     const span = EM.TUSK_HOUSE_SPAN, L = curve.getLength(), qy = new THREE.Quaternion();
     const maxN = Math.floor(EM.TUSK_HOUSE_MAX / 2);
-    let count = 0;
-    for (let t = 0.1; t < 0.955 && count < maxN;) {
+    const cand = [];   // todas as posições possíveis; depois sorteia maxN (cobre a presa inteira, não só a base)
+    for (let t = 0.1; t < 0.955;) {
       const r = rAt(t), hs = (2 * r) / EM.TUSK_HOUSE_DIV, step = hs * EM.TUSK_HOUSE_GAP;
       const tNext = t + step / L;
       if (TUSK_RINGS.some((tr) => Math.abs(t - tr) < 0.03)) { t = tNext; continue; }
       curve.getPointAt(t, P); curve.getTangentAt(t, tan); surfaceUp(tan, up); sd.crossVectors(tan, up).normalize();
       const nAcross = Math.max(3, Math.round((r * 2 * span) / step));
       qy.setFromAxisAngle(_up, Math.atan2(tan.z, tan.x));
-      for (let k = 0; k < nAcross && count < maxN; k++) {
+      for (let k = 0; k < nAcross; k++) {
         const phi = ((k + 0.5) / nAcross) * 2 * span - span + trng.range(-0.3, 0.3) * (2 * span / nAcross);
         if (trng() < 0.07) continue;
         nrm.copy(up).multiplyScalar(Math.cos(phi)).addScaledVector(sd, Math.sin(phi)).normalize();
@@ -1832,10 +1842,12 @@ export function createElephant(route, index, opts = {}) {
         const h = hs * trng.range(0.7, 1.6) * (trng() < 0.05 ? 1.8 : 1);
         let yawq = qy; if (d > w) { const tt = w; w = d; d = tt; yawq = qy.clone().multiply(new THREE.Quaternion().setFromAxisAngle(_up, Math.PI / 2)); }
         dummy.position.copy(P).addScaledVector(nrm, r - 0.5); dummy.quaternion.copy(quatFromUp(nrm)).multiply(yawq); dummy.scale.set(w, h, d); dummy.updateMatrix();
-        tuskInst.push({ m: dummy.matrix.clone(), c: trng() < 0.75 ? trng.pick([0xf8f5ef, 0xf5efe4, 0xf3e7d3]) : pastel(trng) }); count++;
+        cand.push({ m: dummy.matrix.clone(), c: trng() < 0.75 ? trng.pick([0xf8f5ef, 0xf5efe4, 0xf3e7d3]) : pastel(trng) });
       }
       t = tNext;
     }
+    for (let i = cand.length - 1; i > 0; i--) { const j = Math.floor(trng() * (i + 1)); const tt = cand[i]; cand[i] = cand[j]; cand[j] = tt; }
+    tuskInst.push(...cand.slice(0, maxN));
     for (let i = 0; i < EM.TUSK_TOWERS; i++) {
       const t = 0.15 + ((i + trng.range(0.2, 0.8)) / EM.TUSK_TOWERS) * 0.78;
       if (TUSK_RINGS.some((tr) => Math.abs(t - tr) < 0.035)) continue;
@@ -2092,7 +2104,7 @@ export function createElephant(route, index, opts = {}) {
         else if (inPalace(px, pz)) { const ax = Math.abs(px - PALACE_X), az = Math.abs(pz); h = Math.max(h, ax < PALACE_T2.hx && az < PALACE_T2.hz ? PALACE_BASE_TOP + PALACE_TIER_H + 6 : ax < PS.hx && az < PS.hz ? PALACE_BASE_TOP + 7 : ax < PS.hx + 8 && az < PS.hz + 8 ? PALACE_PLINTH : h); const rr = Math.hypot(px - PALACE_X, pz); if (rr < DOME_R + 8) h = Math.max(h, rr < DOME_R ? DOME_CY + DOME_HF * Math.sqrt(Math.max(0, DOME_R * DOME_R - rr * rr)) : DOME_CY); }
         else if (inBrick(px, pz)) h = Math.max(h, BRICK_TOP);
         else if (inTemple(px, pz)) { const T = TEMPLES.find((tt) => Math.abs(px - tt.x) < tt.hx + 30 && Math.abs(pz - tt.z) < tt.hz + 30); h += T.h; }
-        else if (_sn2.y > 0.3) h += EM.CRUST_OFFSET + (nearPlaza(px, pz) ? 28 : HOUSE_AVG);
+        else if (_sn2.y > 0.3) h += EM.CRUST_OFFSET + (nearPlaza(px, pz) ? 8 : HOUSE_AVG);
       } else if (((px - NC.x) / NC.rx) ** 2 + (pz / NC.rz) ** 2 < 1 && _sn2.y > 0.3 && px < HD.cx - 60) h += EM.CRUST_OFFSET + HOUSE_AVG;   // casas do pescoço
       best = h;
       return best === -Infinity ? null : (best + rig.position.y) * SCALE;

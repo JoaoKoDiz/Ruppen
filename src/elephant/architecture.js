@@ -82,7 +82,7 @@ vSurf = aSurf; vFac = aFac; vFacW = vec3( 0.0, 0.0, 0.5 );
 	else if ( an.x > an.z ) vFac = vec2( - pS.z * sign( normal.x ), pS.y / sl );
 	else vFac = vec2( pS.x * sign( normal.z ), pS.y / sl );
 	vec3 hq = fract( instanceMatrix[ 3 ].xyz * 0.1031 ); hq += dot( hq, hq.yzx + 33.33 );
-	vFacW = vec3( an.x > an.z ? sc.z : sc.x, sc.y, fract( ( hq.x + hq.y ) * hq.z ) );
+	vFacW = vec3( an.y > 0.8 ? sc.x : ( an.x > an.z ? sc.z : sc.x ), an.y > 0.8 ? sc.z : sc.y, fract( ( hq.x + hq.y ) * hq.z ) );
 }
 #endif
 `;
@@ -114,7 +114,7 @@ vec2 archNrm( sampler2D t, vec2 f, vec2 dx, vec2 dy, float s ) {
 }
 `;
 const ARCH_MAP = /* glsl */`
-vec2 archNXY = vec2( 0.0 ); float archRough = 0.88; vec3 archEmit = vec3( 0.0 );
+vec2 archNXY = vec2( 0.0 ); float archRough = 0.88; vec3 archEmit = vec3( 0.0 ); float archF90 = ARCH_F90;   // reboco/telha foscos: sem o brilho rasante do céu
 vec3 archNg = normalize( cross( dFdx( vViewPosition ), dFdy( vViewPosition ) ) );
 vec3 archTn = vec3( 1.0, 0.0, 0.0 ), archBn = vec3( 0.0, 1.0, 0.0 );
 {
@@ -154,16 +154,25 @@ vec3 archTn = vec3( 1.0, 0.0, 0.0 ), archBn = vec3( 0.0, 1.0, 0.0 );
 			det = vec3( mix( 1.0, bl, 0.85 ) ) * mix( vec3( 1.0 ), bei / max( bl, 0.05 ), 0.2 );
 			nn = archNrm( tBeiN, f, fdx, fdy, 1.0 / ARCH_T_BEI ) * 0.85;
 		}
-		col = tint * det * mix( 1.0, big, 0.3 );
+		col = tint * ARCH_ALBEDO * det * mix( 1.0, big, 0.3 );
 		archNXY = nn; archRough = 0.9;
-		if ( ty == 3 ) { col *= vec3( 0.85, 0.83, 0.8 ); archRough = 0.93; }
+		if ( ty == 3 ) {                                       // laje: sombra do parapeito na borda, casinha da escada / caixa d'água
+			col *= vec3( 0.9, 0.82, 0.78 ); archRough = 0.93;
+			if ( inst ) {
+				float ed = min( W * 0.5 - abs( u ), H * 0.5 - abs( v ) );
+				col *= mix( 0.62, 1.0, smoothstep( 0.0, 0.7, ed ) );
+				vec2 hc = vec2( ( fract( rnd * 3.3 ) - 0.5 ) * W * 0.4, ( fract( rnd * 5.1 ) - 0.5 ) * H * 0.4 );
+				vec2 hd = abs( vec2( u, v ) - hc ) - vec2( 0.55, 0.45 );
+				col *= 1.0 - 0.35 * smoothstep( 0.08, 0.0, max( hd.x, hd.y ) ) * step( 0.35, fract( rnd * 9.7 ) );
+			}
+		}
 	} else if ( ty == 2 ) {                                     // telhas de barro (clay_roof_tiles_02)
 		vec3 rt = archTex( tRoofD, f, fdx, fdy, 1.0 / ARCH_T_ROOF, vec3( 0.13 ) );
 		vec3 rc = tint;
 		if ( inst ) {
 			float pr = fract( rnd * 3.17 );
-			if ( vSurf.y > 0.5 ) rc = pr < 0.5 ? vec3( 0.50, 0.12, 0.07 ) : ( pr < 0.8 ? vec3( 0.58, 0.18, 0.10 ) : vec3( 0.66, 0.30, 0.20 ) );
-			else rc = pr < 0.3 ? vec3( 0.72, 0.36, 0.30 ) : ( pr < 0.55 ? vec3( 0.62, 0.25, 0.14 ) : ( pr < 0.8 ? vec3( 0.80, 0.47, 0.40 ) : vec3( 0.70, 0.43, 0.35 ) ) );
+			if ( vSurf.y > 0.5 ) rc = pr < 0.5 ? vec3( 0.58, 0.11, 0.05 ) : ( pr < 0.8 ? vec3( 0.66, 0.16, 0.07 ) : vec3( 0.70, 0.26, 0.14 ) );
+			else rc = pr < 0.3 ? vec3( 0.68, 0.25, 0.18 ) : ( pr < 0.55 ? vec3( 0.58, 0.17, 0.08 ) : ( pr < 0.8 ? vec3( 0.74, 0.34, 0.26 ) : vec3( 0.64, 0.27, 0.19 ) ) );
 		}
 		float rl = aLum( rt );
 		col = rc * mix( 1.0, clamp( rl, 0.2, 2.2 ), 0.9 );
@@ -181,7 +190,8 @@ vec3 archTn = vec3( 1.0, 0.0, 0.0 ), archBn = vec3( 0.0, 1.0, 0.0 );
 			col = tint * vec3( 0.84, 0.82, 0.78 ) * mix( vec3( 1.0 ), stu, 0.55 ) * mix( 1.0, ml, 0.3 );
 			archNXY = archNrm( tStuN, f, fdx, fdy, 1.0 / ARCH_T_STU ) * 0.5; archRough = 0.72;
 		} else {
-			col = tint * vec3( 0.86, 0.84, 0.8 ) * mix( 1.0, ml, 0.5 ) * mix( vec3( 1.0 ), mt / max( ml, 0.05 ) * vec3( 0.8, 1.04, 1.6 ), 0.12 );
+			archF90 = 0.6;
+		col = tint * vec3( 0.86, 0.84, 0.8 ) * mix( 1.0, ml, 0.5 ) * mix( vec3( 1.0 ), mt / max( ml, 0.05 ) * vec3( 0.8, 1.04, 1.6 ), 0.12 );
 			archNXY = archNrm( tMarN, f, fdx, fdy, 1.0 / ARCH_T_MAR ) * 0.4; archRough = 0.45;
 		}
 		if ( ty == 10 ) {                                       // balaústres vazados entre corrimão e base
@@ -209,7 +219,7 @@ vec3 archTn = vec3( 1.0, 0.0, 0.0 ), archBn = vec3( 0.0, 1.0, 0.0 );
 	} else if ( ty == 9 ) {                                     // madeira
 		col = vec3( 0.26, 0.16, 0.09 ) * ( 0.8 + 0.35 * aH1( floor( f * vec2( 1.0, 9.0 ) ) ) ); archRough = 0.85;
 	} else if ( ty == 13 ) {                                    // água do chafariz
-		col = vec3( 0.03, 0.08, 0.09 ); archRough = 0.06;
+		col = vec3( 0.03, 0.08, 0.09 ); archRough = 0.06; archF90 = 1.0;
 		archNXY = 0.08 * vec2( sin( f.x * 3.1 + f.y * 1.3 ), sin( f.y * 2.7 - f.x * 0.9 ) );
 	} else if ( ty == 14 ) {                                    // frutas e cestos nas bancas
 		vec2 pc = f / 0.32; vec2 ci = floor( pc ); float hp = aH1( ci + 1.3 + rnd * 17.0 );
@@ -240,7 +250,7 @@ vec3 archTn = vec3( 1.0, 0.0, 0.0 ), archBn = vec3( 0.0, 1.0, 0.0 );
 			float fr = 0.045 * bay;
 			vec3 frameC = min( col * 1.12, vec3( 0.95 ) );
 			bool shopRow = false;
-			if ( ty == 5 ) { sh = vec4( 0.27 * bay, 0.2 * st, 0.56 * st, 0.32 * st ); fr = 0.05 * bay; }
+			if ( ty == 5 ) { sh = vec4( 0.22 * bay, 0.13 * st, 0.66 * st, 0.34 * st ); fr = 0.05 * bay; }
 			else if ( ty == 4 ) { sh = vec4( 0.33 * bay, 0.1 * st, 0.52 * st, 0.28 * st ); fr = 0.075 * bay; frameC = vec3( 0.78, 0.69, 0.54 ); }
 			else if ( inst && row < 0.5 ) {
 				bool shops = mod( floor( vSurf.y + 0.5 ), 4.0 ) > 1.5;
@@ -262,7 +272,7 @@ vec3 archTn = vec3( 1.0, 0.0, 0.0 ), archBn = vec3( 0.0, 1.0, 0.0 );
 				bool shut = ty == 0 && ! shopRow && fract( rnd * 13.7 ) < ARCH_SHUT;
 				float ps = fract( rnd * 4.37 );
 				vec3 shutC = ps < 0.3 ? vec3( 0.12, 0.26, 0.14 ) : ( ps < 0.55 ? vec3( 0.10, 0.20, 0.36 ) : ( ps < 0.8 ? vec3( 0.08, 0.26, 0.26 ) : vec3( 0.28, 0.15, 0.07 ) ) );
-				float slat = 0.78 + 0.22 * step( 0.5, fract( p.y / ( 0.045 * st ) ) );
+				float slat = mix( 0.89, 0.78 + 0.22 * step( 0.5, fract( p.y / ( 0.045 * st ) ) ), 1.0 - smoothstep( 0.012 * st, 0.03 * st, fwV ) );   // ripas (sem serrilhar de longe)
 				float shM = 0.0;
 				if ( shut ) { float ax = abs( p.x ) - sh.x - fr; shM = step( 0.0, ax ) * step( ax, sh.x * 0.9 ) * step( sh.y, p.y ) * step( p.y, sh.z + sh.x * 0.5 ); }
 				bool closed = shut && h2 < 0.2;
@@ -279,8 +289,9 @@ vec3 archTn = vec3( 1.0, 0.0, 0.0 ), archBn = vec3( 0.0, 1.0, 0.0 );
 				if ( shut ) cw = mix( cw, shutC * slat, shM );
 				cw = mix( cw, openC, inside );
 				if ( ty == 5 ) {                                // pilastras e cornija de cada andar
-					float pe = abs( abs( p.x ) - 0.41 * bay );
-					cw *= 1.0 - 0.16 * smoothstep( eps * 1.5 + 0.01 * bay, 0.0, pe );
+					float pe = abs( p.x ) - 0.4 * bay;                       // pilastra (faixa saliente entre as colunas de janelas)
+					cw *= pe > 0.0 ? 1.05 : 1.0;
+					cw *= 1.0 - 0.28 * smoothstep( eps * 1.5 + 0.012 * bay, 0.0, abs( pe ) ) * step( p.x, 0.0 );   // sombra no lado oposto ao sol
 					cw *= p.y > st * 0.93 ? 1.06 : ( p.y > st * 0.88 ? 0.8 : 1.0 );
 				} else if ( ty == 0 ) cw *= 1.0 - 0.1 * smoothstep( 0.03 * st + eps, 0.03 * st - eps, abs( p.y - 0.02 * st ) );
 				float rW = mix( archRough, closed ? 0.8 : mix( 0.85, 0.16, back ), inside );
@@ -290,6 +301,7 @@ vec3 archTn = vec3( 1.0, 0.0, 0.0 ), archBn = vec3( 0.0, 1.0, 0.0 );
 				col = mix( colFar, cw, kWin );
 				archNXY = mix( archNXY, archNXY * ( 1.0 - inside ) - g, kWin );
 				archRough = mix( archRough, rW, kWin );
+				archF90 = mix( archF90, 1.0, inside * back * kWin );
 				if ( lit ) archEmit = vec3( 1.0, 0.6, 0.28 ) * 0.35 * inside * back * kWin;
 			} else col = colFar;
 		}
@@ -320,7 +332,7 @@ export function getArchMaterial() {
   const defs = {
     ARCH_ST: f4(CT.STOREY), ARCH_BAY: f4(CT.BAY), ARCH_PAR: f4(CT.PARAPET), ARCH_OVH: f4(CT.EAVE), ARCH_PITCH: f4(CT.ROOF_PITCH), ARCH_AWN: f4(CT.AWNING_Y),
     ARCH_T_STU: f4(T.stucco), ARCH_T_BEI: f4(T.beige), ARCH_T_ROOF: f4(T.roof), ARCH_T_BRK: f4(T.brick), ARCH_T_MAR: f4(T.marble),
-    ARCH_PAVE: `vec2(${f4(T.pave[0])}, ${f4(T.pave[1])})`, ARCH_SHUT: f4(CT.SHUTTERS), ARCH_LIT: f4(CT.LIT_WINDOWS),
+    ARCH_PAVE: `vec2(${f4(T.pave[0])}, ${f4(T.pave[1])})`, ARCH_ALBEDO: f4(CT.ALBEDO), ARCH_F90: f4(CT.F90), ARCH_SHUT: f4(CT.SHUTTERS), ARCH_LIT: f4(CT.LIT_WINDOWS),
   };
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: THREE.DoubleSide, envMapIntensity: CT.ENV });
   m.userData.arch = uni;
@@ -338,7 +350,8 @@ export function getArchMaterial() {
       .replace('#include <color_fragment>', '')
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = archRough;')
       .replace('#include <normal_fragment_maps>', ARCH_NORMAL)
-      .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance += archEmit;');
+      .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance += archEmit;')
+      .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\nmaterial.specularF90 = archF90;');
   };
   m.customProgramCacheKey = () => 'ruppen-arch-1';
   archMat = m;
@@ -600,7 +613,7 @@ export function patchCrustMaterial(m) {
     sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
 {
   float kf = smoothstep( ${f4(CT.CRUST_FADE[0])}, ${f4(CT.CRUST_FADE[1])}, length( vViewPosition ) );
-  vec3 pave = vec3( 0.36, 0.32, 0.28 ) * ( 0.8 + 0.4 * dot( diffuseColor.rgb, vec3( 0.3333 ) ) );
+  vec3 pave = vec3( 0.50, 0.44, 0.37 ) * ( 0.92 + 0.16 * dot( diffuseColor.rgb, vec3( 0.3333 ) ) );
   diffuseColor.rgb = mix( pave, diffuseColor.rgb, kf );
 }`);
   };

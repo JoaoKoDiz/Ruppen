@@ -400,23 +400,19 @@ export const ELEPHANT_MODEL = {
   EAR_HOUSE_GRID: { rows: 22, cols: 16 },   // bloco de casinhas em terraços no manto (muitas fileiras pequenas)
   EAR_HOUSE_RECT: { x0: -0.95, x1: -0.26, y0: -0.6, y1: -0.05 },   // região do bloco (frações da largura/altura da orelha; x<0 = para trás, y<0 = para baixo): parte SUPERIOR-EXTERNA (ref. 1)
   TRUNK_ROOT_RADIUS: 235,   // m — raio da tromba na raiz (afunila até TRUNK.baseRadius a ~25% do comprimento)
-  CITY_SPACING_HIGH: 8.4,   // m — passo da grade de casas do dorso no alto (quality=high); cresce para ~1,5× nos flancos (as casas enchem a célula; ruas recortam)
+  CITY_SPACING_HIGH: 8.7,   // m — passo da grade de casas do dorso no alto (quality=high); cresce para ~1,5× nos flancos (as casas enchem a célula; ruas recortam)
   CITY_SPACING_LOW: 11,
   CITY_FLANK_ANGLE: 1.2,    // rad — até que ângulo (a partir do zênite) as casas INSTANCIADAS descem pelos flancos
   CRUST_FLANK_ANGLE: 1.7,   // rad — até onde desce a casca-crosta (textura de casinhas) pelos flancos
   CRUST_OFFSET: 3,          // m — a casca-crosta fica a esta distância acima da pele
   CRUST_REPEAT: 12,         // repetições da textura da crosta ao longo do dorso
-  HOUSE_H: { min: 3, max: 10 },         // m — alturas das casas do dorso (→ 9–30 m no mundo)
-  HOUSE_FOOT: { min: 2.8, max: 5.2 },   // m — lado das casas do dorso (→ 8–16 m no mundo)
-  TALL_BLOCK_CHANCE: 0.05,  // fração de prédios mais altos (até ~1,6× HOUSE_H.max)
-  ROOF_TILE_CHANCE: 0.4,    // fração de casas do dorso com telhado rosa/terracota (o resto é laje pálida)
   CARPET_MAX: 30000,        // limite de instâncias do tapete de casas do dorso
   LOD_DISTANCE: 10000,      // m (mundo) — além desta distância da câmera o tapete instanciado some (fica a crosta)
   PALACE_X: -262,           // x local do centro do palácio (atrás do centro)
   PALACE_SIZE: { hx: 250, hz: 190 },    // meio-lados do bloco arcado principal do palácio (≈ 1/3 do corpo)
   PLAZA: { x0: -60, x1: 120, hz: 75 },  // praça de mercado (no centro do dorso: ponto da entrega)
-  TUSK_HOUSE_DIV: 30,       // lado da casinha da presa = diâmetro local / TUSK_HOUSE_DIV
-  TUSK_HOUSE_GAP: 2.0,      // passo entre casinhas da presa (× lado)
+  TUSK_HOUSE_DIV: 19,       // lado da casinha da presa = diâmetro local / TUSK_HOUSE_DIV
+  TUSK_HOUSE_GAP: 1.4,      // passo entre casinhas da presa (× lado)
   TUSK_HOUSE_SPAN: 1.35,    // rad — meio-ângulo coberto pelas casas (±: quase toda a metade de cima da presa)
   TUSK_HOUSE_MAX: 1150,     // limite de casinhas por par de presas (orçamento de triângulos)
   TUSK_TOWERS: 9,           // torres brancas por presa
@@ -470,7 +466,6 @@ export const ELEPHANT_MATERIALS = {
   EAR_HOUSE_STREETS: { min: 2, max: 3 },    // ruas estreitas (colunas vazias) no bloco
   EAR_TOWER_CHANCE: 0.06,   // fração de casinhas que viram torres (2,2× mais altas)
   EYE_ROUGHNESS: 0.15,      // esclera molhada
-  CITY_NORMAL_SCALE: 0.7,   // relevo das janelas/telhas/tijolos
 };
 // Arquitetura das cidades (src/elephant/architecture.js + elephant.js). Metros do modelo-base (×ELEPHANT.SCALE no mundo).
 export const ELEPHANT_CITY = {
@@ -478,20 +473,22 @@ export const ELEPHANT_CITY = {
   BAY: 1.05,                // largura de um vão de janela das casas
   PARAPET: 0.45,            // parapeito (ameado) das casas de laje
   EAVE: 0.28,               // beiral dos telhados de 4 águas
-  ROOF_PITCH: 0.36,         // altura da cumeeira = ROOF_PITCH × lado menor (≈ 36°)
+  ROOF_PITCH: 0.42,         // altura da cumeeira = ROOF_PITCH × lado menor (≈ 40°)
   AWNING_Y: 0.92,           // altura da borda presa dos toldos (térreo)
   TILE: { stucco: 1.6, beige: 2.2, roof: 0.9, brick: 1.5, marble: 3.2, pave: [1.3, 0.9] },   // m por ladrilho das texturas reais / lajes
   SHUTTERS: 0.45,           // fração das casas com venezianas
   LIT_WINDOWS: 0.06,        // fração das janelas acesas (quentes)
   ENV: 0.6,                 // envMapIntensity do material da cidade
+  F90: 0.25,                // reflexo de Fresnel rasante máximo do reboco/telhas (1 = físico; o céu HDRI deixava tudo branco de longe)
+  ALBEDO: 0.82,             // fator do albedo das paredes de reboco (reboco branco real ≈ 0,7–0,75)
   BLOCK: { x: 46, a: 34 },  // tamanho dos quarteirões (ao longo do dorso / ao redor) — grade deformada
-  STREET: 2.3,              // largura das ruas (≈ 7 m no mundo)
+  STREET: 1.9,              // largura das ruas (≈ 6 m no mundo)
   AVENUE: 6,                // largura das avenidas (a cada AVENUE_EVERY quarteirões)
   AVENUE_EVERY: 4,
   WARP: 16,                 // deformação da grade das ruas (m)
-  FILL: { min: 0.86, max: 0.97 },        // fração da célula ocupada pela casa (o resto: becos)
-  MIX: { flat: 0.41, hip: 0.39, tall: 0.14, dome: 0.06 },     // arquétipos do tapete
-  STOREYS: { flat: [2, 4], hip: [2, 3], tall: [4, 6], dome: [2, 3] },
+  FILL: { min: 0.9, max: 0.98 },         // fração da célula ocupada pela casa (o resto: becos)
+  MIX: { flat: 0.3, hip: 0.53, tall: 0.11, dome: 0.06 },      // arquétipos do tapete
+  STOREYS: { flat: [3, 5], hip: [2, 4], tall: [5, 7], dome: [3, 4] },
   PLAZAS: 4,                // pracinhas espalhadas (com cúpula/obelisco/chafariz no centro)
   PLAZA_R: { min: 18, max: 30 },
   STALLS: 110,              // bancas do mercado (praça da entrega)
