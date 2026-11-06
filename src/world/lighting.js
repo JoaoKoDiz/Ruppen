@@ -1,6 +1,6 @@
 // =====================================================================
 //  Iluminação compartilhada por main.js e pelo preview de desenvolvimento:
-//   • sol direcional COM sombras (PCF suave) numa caixa ortográfica que segue
+//   • sol direcional COM sombras (PCF, disco de Vogel) numa caixa ortográfica que segue
 //     o jogador, encaixada em texels para não tremer (quality high/ultra);
 //   • mapa de ambiente PMREM gerado de um céu procedural (mesmo gradiente e sol
 //     de config.js) → luz ambiente e reflexos realistas nos MeshStandardMaterial
@@ -172,7 +172,8 @@ export function createLighting(scene, renderer = null, opts = {}) {
     renderer.shadowMap.type = THREE.PCFShadowMap; // r187: PCFSoftShadowMap foi removido; o PCF já filtra num disco de Vogel (shadow.radius)
     sun.castShadow = true;
     const s = sun.shadow;
-    s.mapSize.set(shadowCfg.mapSize, shadowCfg.mapSize);
+    const mapSize = renderer.capabilities.maxTextureSize >= shadowCfg.mapSize ? shadowCfg.mapSize : RENDER.SHADOW.MAP_FALLBACK;
+    s.mapSize.set(mapSize, mapSize);
     s.radius = shadowCfg.radius;
     s.intensity = RENDER.SHADOW.INTENSITY;
     const cam = s.camera;
@@ -183,7 +184,7 @@ export function createLighting(scene, renderer = null, opts = {}) {
     cam.updateProjectionMatrix();
     s.bias = shadowCfg.bias;
     s.normalBias = shadowCfg.normalBias;
-    texel = (2 * shadowCfg.range) / shadowCfg.mapSize;
+    texel = (2 * shadowCfg.range) / mapSize;
   }
 
   // Base ortonormal do espaço da luz (a mesma que DirectionalLightShadow usa via lookAt com up = +Y).

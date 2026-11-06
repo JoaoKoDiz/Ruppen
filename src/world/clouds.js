@@ -247,7 +247,8 @@ void main() {
   vec4 tx = texture2D(uMap, uv);
   float alpha = tx.a * vFade * smoothstep(0.5, 0.36, length(vUv - 0.5));
   // some suavemente perto do nível do mar (sem corte reto do quad na água)
-  alpha *= smoothstep(0.0, vSize * 0.22, vWorldY);
+  // (faixa curta: o banco das patas encosta na água, como nas referências)
+  alpha *= smoothstep(0.0, min(vSize * 0.07, 45.0), vWorldY);
   if (alpha < 0.006) discard;
 
   vec3 N = vec3(tx.rg * 2.0 - 1.0, 0.0);
@@ -522,11 +523,12 @@ function generatePuffs(worldData, scale, clusters) {
     }
     for (let i = 0; i < nFoot; i++) {
       const ang = rng.range(0, Math.PI * 2);
-      // mar de nuvens: denso perto das patas (0,6–1,2 R), estendendo-se até ~2,2 R e baixando para fora
-      const rad = Math.min(2.2 * R, Math.max(0.25 * R, R * (0.95 + rng.gauss() * 0.42)));
-      const outer = clamp01((rad / R - 1.2) / 1.0);             // 0 dentro do anel, 1 na borda externa
-      const yt = Math.pow(rng(), 1.5) * (1 - 0.6 * outer);       // a maioria fica baixa, junto à água
-      const size = (320 + 440 * rng()) * (1 - 0.35 * yt);
+      // mar de nuvens: denso perto das patas (0,6–1,2 R), estendendo-se até ~1,7 R e baixando para fora
+      // (concentrado: puffs vizinhos sempre se sobrepõem — massa contínua, sem bolas soltas)
+      const rad = Math.min(1.7 * R, Math.max(0.3 * R, R * (0.92 + rng.gauss() * 0.30)));
+      const outer = clamp01((rad / R - 1.15) / 0.55);            // 0 dentro do anel, 1 na borda externa
+      const yt = Math.pow(rng(), 2.0) * (1 - 0.6 * outer);       // a maioria fica baixa, junto à água
+      const size = (380 + 420 * rng()) * (1 - 0.15 * yt);        // puffs grandes e sobrepostos (massa contínua)
       const y = Math.max(size * 0.36, yt * bankTop);
       const shade = 0.30 + 0.70 * clamp01(y / bankTop);
       out.push({ x: Math.cos(ang) * rad, y, z: Math.sin(ang) * rad, size, shade, rot: rng.range(-0.4, 0.4), variant: variant(), group: e });

@@ -3,7 +3,7 @@
 //  roda o laço principal. Os módulos seguem os contratos de ARCHITECTURE.md.
 // =====================================================================
 import * as THREE from 'three';
-import { WORLD, DOVE } from './config.js';
+import { WORLD, DOVE, RENDER } from './config.js';
 import { createLighting, applyRendererDefaults } from './world/lighting.js';
 import { WORLD_DATA } from './world/worldData.js';
 import { createSky } from './world/sky.js';
@@ -36,7 +36,7 @@ const worldQuality = quality === 'low' ? 'low' : 'high'; // os módulos do mundo
 // ------------------------------ renderer --------------------------------
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality !== 'low', logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality === 'low' ? 1 : 1.5));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, RENDER.PIXEL_RATIO[quality]));
 renderer.setSize(window.innerWidth, window.innerHeight, false);
 applyRendererDefaults(renderer);
 
@@ -51,7 +51,7 @@ const sky = createSky(scene, { quality: worldQuality });
 const ocean = createOcean(scene, { quality: worldQuality });
 const islands = createIslands(scene, WORLD_DATA, { quality: worldQuality });
 const clouds = createClouds(scene, WORLD_DATA, { quality: worldQuality });
-const post = createPost(renderer, scene, camera, { quality }); // composer: [GTAO ultra] → bloom → vinheta/haze/curva; low = render direto
+const post = createPost(renderer, scene, camera, { quality }); // composer: captura → bloom → vinheta/haze/curva; low = render direto
 const elephants = WORLD_DATA.routes.map((route, i) => createElephant(route, i, { quality: worldQuality }));
 for (const e of elephants) scene.add(e.group);
 
@@ -67,7 +67,7 @@ const delivery = createDelivery({ elephants, flight, pkg, input, audio });
 const hud = createHUD({ root: document.getElementById('ui'), delivery, flight, elephants, input, camera });
 const map = createMapUI({ root: document.getElementById('ui'), worldData: WORLD_DATA, elephants, flight, delivery, input, camera });
 clouds.attachTo?.(elephants);
-lighting.enableShadows(scene); // castShadow/receiveShadow em tudo o que deve ter sombra (céu/oceano/nuvens/véus ficam de fora)
+lighting.enableShadows(scene); // castShadow/receiveShadow (céu/oceano/nuvens/véus ficam de fora) + envMap explícito nos materiais PBR
 
 // posição inicial: centro do mundo, olhando para o alvo da primeira entrega
 {
@@ -129,7 +129,7 @@ frame();
 window.addEventListener('resize', () => {
   const w = window.innerWidth, h = window.innerHeight;
   if (!w || !h) return; // janela minimizada
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality === 'low' ? 1 : 1.5));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, RENDER.PIXEL_RATIO[quality]));
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();

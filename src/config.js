@@ -111,12 +111,12 @@ export const CLOUDS = {
   BIG_PUFFS_MIN: 80,
   BIG_PUFFS_MAX: 130,
   // bancos de nuvem ao redor das patas (src/world/clouds.js), por elefante
-  FOOT_PUFFS: 300,          // puffs do banco (quality=high)
+  FOOT_PUFFS: 420,          // puffs do banco (quality=high) — banco denso junto à água
   FOOT_HEAPS: 5,            // montes mais altos dentro do banco
   FOOT_HEAP_PUFFS: 22,
   FOOT_TOP_FRACTION: 0.30,  // altura do banco como fração da altura da pata (joelho ≈ 0,3)
   FOOT_HEAP_FRACTION: 0.46, // altura dos montes como fração da altura da pata
-  // orçamento: COUNT×~34 + BIG_COUNT×~105 + 7×(14+FOOT_PUFFS+FOOT_HEAPS×FOOT_HEAP_PUFFS) ≈ 10,1 k instâncias (≤ 12 k)
+  // orçamento: COUNT×~34 + BIG_COUNT×~105 + 7×(14+FOOT_PUFFS+FOOT_HEAPS×FOOT_HEAP_PUFFS) ≈ 11,3 k instâncias (≤ 12 k)
 };
 
 export const CITY_NAMES = ['Zamurra', 'Kethari', 'Oronde', 'Vashtu', 'Mirapol', 'Sulaymi', 'Tendravel'];
@@ -364,14 +364,14 @@ export const ELEPHANT_MATERIALS = {
   SKIN_ENV: 0.4,            // envMapIntensity da pele
   SKIN_COLOR: 0x675e5a,     // base do albedo (após manchas/vincos a média fica ≈ #5d5552: cinza quente médio-escuro)
   SKIN_CAVITY_AO: 0.32,     // escurecimento máximo (cor do vértice) nos vincos esculpidos da geometria
-  SKIN_RIDGE_LIFT: 0.08,
-  SKIN_FINE_WRINKLES: 520,  // segmentos de rugas finas onduladas pintados no mapa de cor da pele (1024²)    // clareamento leve das cristas das dobras
+  SKIN_RIDGE_LIFT: 0.08,    // clareamento leve das cristas das dobras
+  SKIN_FINE_WRINKLES: 520,  // segmentos de rugas finas onduladas pintados no mapa de cor da pele (1024²)
   EAR_CLOTH_COLOR: 0x5a4c46, // miolo do manto da orelha: tecido taupe escuro quente (não azulado sob o céu)
   GOLD_COLOR: 0xb8862c,     // ouro-bronze quente
   GOLD_ROUGHNESS: 0.34,     // metal escovado (roughnessMap com riscos 0.28–0.42)
   GOLD_ENV: 1.2,
   GOLD_EMISSIVE: 0.3,       // brilho residual (sem envMap o metal puro ficaria preto)
-  IVORY_COLOR: 0xf2e6cc,
+  IVORY_COLOR: 0xe8d6b2,    // creme amarelado (marfim velho), não branco
   IVORY_ROUGHNESS: 0.45,
   IVORY_CLEARCOAT: 0.15,
   CLOTH_WEAVE_REPEAT: 25,   // repetições da trama tecida por ladrilho do atlas dos panos (≈ 50–60 m no mundo)
@@ -380,8 +380,8 @@ export const ELEPHANT_MATERIALS = {
   TASSEL_STRANDS: 150,      // fios da franja da borla (tubos finos; low = 90)
   TASSEL_STRAND_LENGTH: { min: 380, max: 450 },
   TASSEL_STRAND_RADIUS: 4.2,
-  POMPOM_FUZZ: 0.42,        // deslocamento dos tufos (fuzzySphere)
-  POMPOM_DESAT: 0.22,       // dessaturação das cores dos pompons (mistura com cinza)
+  POMPOM_FUZZ: 0.4,        // deslocamento dos tufos (fuzzySphere)
+  POMPOM_DESAT: 0.1,       // dessaturação das cores dos pompons (mistura com cinza)
   EAR_HOUSE_SIZE: { min: 0.7, max: 1.4 },   // variação de tamanho das casinhas do bloco da orelha
   EAR_HOUSE_STREETS: { min: 2, max: 3 },    // ruas estreitas (colunas vazias) no bloco
   EAR_TOWER_CHANCE: 0.06,   // fração de casinhas que viram torres (2,2× mais altas)
@@ -394,9 +394,10 @@ export const ELEPHANT_MATERIALS = {
 // Níveis de qualidade (#quality= no jogo, ?quality= no preview):
 //   'low'   — sem sombras, sem pós-processamento (render direto); o envMap fica (é barato)
 //   'high'  — padrão: envMap PMREM, sombras PCF 4096² (±1600 m), bloom sutil + vinheta/haze/curva fílmica
-//   'ultra' — 'high' + oclusão ambiente (GTAO com profundidade logarítmica) + alcance de sombra maior
+//   'ultra' — 'high' + pixel ratio até 2 + filtro de sombra mais largo (sem AO: GTAO não funciona com log depth aqui)
 export const RENDER = {
   EXPOSURE: 0.9,             // toneMappingExposure (ACES)
+  PIXEL_RATIO: { low: 1, high: 1.5, ultra: 2 }, // teto de devicePixelRatio por nível (main.js)
   ENV_INTENSITY: 0.75,       // multiplica o envMapIntensity de cada MeshStandard/Physical (pele 0,5 → 0,38; ouro 1,2 → 0,9)
   ENV_INTENSITY_FALLBACK: 0.5,  // scene.environmentIntensity (Lambert/Phong e objetos ainda não varridos)
   ENV_SUN_GLOW: 2.5,         // brilho (HDR) do halo do sol no mapa de ambiente → reflexo quente no ouro
@@ -408,7 +409,8 @@ export const RENDER = {
   SHADOW: {
     low: null,                                                                        // sem sombras
     high: { range: 1600, mapSize: 4096, radius: 2.0, bias: -0.0002, normalBias: 1.2 }, // ±range (m) em torno do foco
-    ultra: { range: 2000, mapSize: 4096, radius: 2.0, bias: -0.0002, normalBias: 1.4 },
+    ultra: { range: 1600, mapSize: 4096, radius: 3.0, bias: -0.0002, normalBias: 1.2 },
+    MAP_FALLBACK: 2048,      // mapSize quando a GPU não suporta 4096² (maxTextureSize)
     INTENSITY: 1.0,          // light.shadow.intensity
     DEPTH: 6000,             // m — distância do sol ao foco ao longo do raio (casters até ~4,5 km acima do foco)
     BELOW: 3000,             // m — alcance do frustum de sombra abaixo do foco (far = DEPTH + BELOW)
@@ -424,8 +426,5 @@ export const RENDER = {
     vignetteStart: 0.45,     // raio (0..1, do centro ao canto) onde a vinheta começa
     hazeLift: 0.02,          // fração da cor da névoa somada à imagem inteira (levanta os pretos)
     hazeLiftEdge: 0.012,     // leve véu extra nas bordas
-  },
-  AO: {                      // GTAO (ultra): raio em metros, espessura em metros
-    radius: 28, distanceExponent: 1.5, thickness: 6, scale: 1.0, samples: 16, distanceFallOff: 1, blendIntensity: 0.85,
   },
 };

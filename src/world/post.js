@@ -1,27 +1,34 @@
 // =====================================================================
 //  Pós-processamento com EffectComposer (vendor/three/addons/postprocessing):
 //
-//    captura da cena → [ultra: GTAO] → UnrealBloom (sutil) → grade final (vinheta,
-//    haze lift, curva S fílmica, 6% dessaturação) → tela
+//    captura da cena → UnrealBloom (sutil) → grade final (vinheta, haze lift,
+//    curva S fílmica, 6% dessaturação) → tela                (high / ultra)
+//    quality=low: sem composer (renderer.render direto).
 //
-//  Por que "captura" e não RenderPass + OutputPass: o céu é desenhado SEM tone
+//  Por que "captura" e não RenderPass … OutputPass: o céu é desenhado SEM tone
 //  mapping (toneMapped=false) e a névoa/horizonte são casados em sRGB de tela
-//  (ARCHITECTURE §2). Num pipeline linear + OutputPass o céu seria tone-mapeado
-//  de novo e a emenda céu/oceano quebraria. Então a cena é renderizada na tela
-//  exatamente como antes (MSAA, ACES + sRGB por material), copiada para uma
-//  textura (renderer.copyFramebufferToTexture) e os passes trabalham nessa
-//  imagem já "de tela" (display-referred). O último passe desenha na tela.
-//  quality=low: sem composer (renderer.render direto).
+//  (ARCHITECTURE §2). Num pipeline linear (RenderPass num render target + OutputPass)
+//  o three.js desliga o tone mapping/sRGB por material, o céu seria tone-mapeado
+//  no OutputPass e a névoa misturada em linear — a emenda céu/oceano quebraria.
+//  Então a cena é renderizada na tela exatamente como no modo low (MSAA do canvas,
+//  ACES + sRGB por material), copiada para uma textura (copyFramebufferToTexture)
+//  e os passes trabalham nessa imagem já "de tela" (display-referred); o último
+//  passe (grade) escreve na tela e faz o papel do OutputPass.
+//
+//  Oclusão ambiente (GTAO/SAO) NÃO é usada: testada com logarithmicDepthBuffer
+//  (reconstrução de posição corrigida para log depth), o AO saiu nulo no elefante
+//  (escala de km) e preto no oceano, custando +1 render completo da cena.
 //
 //  Contrato: createPost(renderer, scene, camera, { quality }) ->
-//    { render(), setSize(), composer | null, bloom | null, grade | null, ao | null, update() }
+//    { render(), setSize(), composer | null, bloom | null, grade | null }
+//  renderer.info.autoReset = false: render() zera as estatísticas uma vez por quadro
+//  (o composer chama renderer.render várias vezes) → __stats() conta cena + sombra + pós.
 // =====================================================================
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { CopyShader } from 'three/addons/shaders/CopyShader.js';
 import { COLORS, RENDER } from '../config.js';
 
@@ -91,35 +98,13 @@ void main() {
 }`,
 };
 
-// ---- GTAO com logarithmicDepthBuffer: a textura de profundidade guarda
-//      log2(1 + w) / log2(far + 1) (gl_FragDepth do chunk logdepthbuf), não z/w.
-//      Reconstruímos a posição de vista a partir disso (raio pelo plano far × w / w_far).
-const LOG_DEPTH_VIEWPOS = /* glsl */`
-		vec3 getViewPosition( const in vec2 screenPosition, const in float depth ) {
-			float w = exp2( depth * log2( cameraFar + 1.0 ) ) - 1.0;      // -viewZ
-			vec4 fp = cameraProjectionMatrixInverse * vec4( screenPosition * 2.0 - 1.0, 1.0, 1.0 );
-			fp.xyz /= fp.w;
-			return fp.xyz * ( w / max( -fp.z, 1e-6 ) );
-		}`;
-function patchLogDepth(material) {
-  const re = /vec3 getViewPosition\( const in vec2 screenPosition, const in float depth \) \{[\s\S]*?\n\t\t\}/;
-  let src = material.fragmentShader;
-  if (!re.test(src)) { console.warn('[post] GTAO: getViewPosition não encontrado — AO sem correção de log depth'); return; }
-  src = src.replace(re, LOG_DEPTH_VIEWPOS);
-  src = src.replace(/return perspectiveDepthToViewZ\(depth, cameraNear, cameraFar\);/, 'return -( exp2( depth * log2( cameraFar + 1.0 ) ) - 1.0 );');
-  if (!/uniform float cameraFar;/.test(src)) src = src.replace('uniform mat4 cameraProjectionMatrixInverse;', 'uniform mat4 cameraProjectionMatrixInverse;\n\t\tuniform float cameraFar;');
-  if (!material.uniforms.cameraFar) material.uniforms.cameraFar = { value: 1 };
-  material.fragmentShader = src;
-  material.needsUpdate = true;
-}
-
 export function createPost(renderer, scene, camera, opts = {}) {
-  const quality = opts.quality || 'high';
+  const quality = ['low', 'high', 'ultra'].includes(opts.quality) ? opts.quality : 'high';
   renderer.info.autoReset = false; // o composer chama renderer.render várias vezes: zeramos nós, uma vez por quadro
 
   if (quality === 'low') {
     return {
-      composer: null, bloom: null, grade: null, ao: null,
+      composer: null, bloom: null, grade: null,
       render() { renderer.info.reset(); renderer.render(scene, camera); },
       setSize() {},
       update() {},
@@ -134,34 +119,11 @@ export function createPost(renderer, scene, camera, opts = {}) {
   const capture = new SceneCapturePass(scene, camera);
   composer.addPass(capture);
 
-  let ao = null;
-  if (quality === 'ultra') {
-    ao = new GTAOPass(scene, camera, size.x, size.y);
-    ao.output = GTAOPass.OUTPUT.Default;
-    ao.blendIntensity = RENDER.AO.blendIntensity;
-    const { blendIntensity, ...aoParams } = RENDER.AO;
-    ao.updateGtaoMaterial({ ...aoParams, screenSpaceRadius: false });
-    ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 4, radiusExponent: 1, rings: 2, samples: 16 });
-    patchLogDepth(ao.gtaoMaterial);
-    patchLogDepth(ao.pdMaterial);
-    // Além de Points/Lines, esconde na passada de normais os billboards/véus (nuvens, espuma, água rasa)
-    const origOverride = ao._overrideVisibility.bind(ao);
-    ao._overrideVisibility = function () {
-      origOverride();
-      scene.traverse((o) => {
-        if (!o.visible || !(o.isMesh || o.isSprite)) return;
-        const mats = Array.isArray(o.material) ? o.material : [o.material];
-        if (o.isSprite || o.userData?.noShadow || mats.some((m) => m && m.transparent && !m.depthWrite)) { o.visible = false; this._visibilityCache.push(o); }
-      });
-    };
-    composer.addPass(ao);
-  }
-
   const bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), RENDER.BLOOM.strength, RENDER.BLOOM.radius, RENDER.BLOOM.threshold);
   composer.addPass(bloom);
 
   const grade = new ShaderPass(GradeShader);
-  { const c = new THREE.Color(COLORS.fog); grade.uniforms.uHaze.value.set(c.r, c.g, c.b); } // hex já é sRGB de tela
+  { const c = new THREE.Color().setHex(COLORS.fog, THREE.LinearSRGBColorSpace); grade.uniforms.uHaze.value.set(c.r, c.g, c.b); } // valores crus do hex = sRGB de tela (sem a conversão do ColorManagement)
   composer.addPass(grade);
 
   function setSize() {
@@ -170,7 +132,7 @@ export function createPost(renderer, scene, camera, opts = {}) {
   }
 
   return {
-    composer, bloom, grade, ao, capture,
+    composer, bloom, grade, capture,
     render() {
       renderer.info.reset();
       composer.render();
