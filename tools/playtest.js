@@ -6,6 +6,7 @@ let chromium; try { ({ chromium } = require('playwright')); } catch { ({ chromiu
 const port = process.argv[2] || 8080;
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
+page.setDefaultTimeout(240000); // render por software fica lento com sombras e pós-processamento
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
