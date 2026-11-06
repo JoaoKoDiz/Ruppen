@@ -9,22 +9,30 @@
 //    islandRenderHeight(island, x, z) -> altura VISUAL (m) — a jogabilidade continua em island.heightAt
 //    makeTileNoise(seed) -> ruído periódico (gradiente + células) para texturas tileáveis
 //
-//  Por ilha (5 draw calls, ≤ ~155k triângulos em quality=high):
-//    1. TERRENO: malha adaptativa (quadtree restrita, folhas de ~4 m na linha d'água e nas cristas,
-//       ~100 m nas planícies; ~60k tris) amostrando renderHeight = heightAt + ravinas de erosão
-//       (ridged, só cavam) + falésias costeiras onde não há praia + plataforma submersa suave
-//       (praias rasas → turquesa). Cor macro por vértice (como antes, vista de longe) + máscaras
-//       de cobertura (areia, mata, rocha) que o shader (MeshStandardMaterial + onBeforeCompile)
-//       usa para misturar texturas procedurais de detalhe: rocha TRIPLANAR com estratos, fendas e
-//       líquen (+ normal), grama em tufos, dossel da mata visto de cima (+ normal), areia com grão
-//       e marcas de ondulação (+ normal); duas escalas + ruído macro (sem repetição visível), e o
-//       detalhe some com a distância na cor macro. Junto à água: areia molhada brilhante com a
-//       borda da onda animada, renda de espuma, e o fundo submerso com absorção da água (Beer-
-//       Lambert por canal) e cáusticas animadas — o oceano por cima fica translúcido no raso.
+//  Relevo: grade ERODIDA assada offline (src/world/terrainGen.js → tools/bake-terrain.js →
+//  src/world/terrainData.js; island.terrain em worldData): maciços com espinhaço, incisão fluvial
+//  (lei de potência do fluxo) + difusão de encosta, erosão por gotas e térmica (tálus), drenagem
+//  (fluxo MFD), máscaras de erosão/deposição/tálus e os rios principais até o mar.
+//
+//  Por ilha (6 draw calls, ≤ 160k triângulos em quality=high — o terreno se limita a TERRAIN_TRIS_*):
+//    1. TERRENO: malha adaptativa (quadtree restrita, folhas de ~11 m na linha d'água, ≤ 22 m nos leitos
+//       dos rios, refinamento guloso pelo erro no resto) amostrando renderHeight = grade erodida em
+//       Catmull-Rom + rugosidade fina (≤ heightAt + 4,5 m) + leito/várzea dos rios escavados + falésias
+//       costeiras onde não há praia + plataforma submersa suave (praias rasas → turquesa). Cor macro por
+//       vértice (cobertura guiada pela hidrologia: mata nos vales e fugindo das cristas, rocha nua nas
+//       cristas e picos, tálus nas encostas, leques aluviais de cascalho, fundos de vale mais verdes,
+//       talvegues molhados, oclusão por cavidade) + máscaras (areia, mata, rocha, molhado) que o shader
+//       (MeshStandardMaterial + onBeforeCompile) usa para misturar as fotos de detalhe: rocha TRIPLANAR
+//       com estratos, fendas e líquen (+ normal), grama em tufos, dossel da mata visto de cima (+ normal),
+//       areia com grão e marcas de ondulação (+ normal); duas escalas + ruído macro (sem repetição
+//       visível), e o detalhe some com a distância na cor macro. Junto à água: areia molhada brilhante com
+//       a borda da onda animada, renda de espuma, e o fundo submerso com absorção da água (Beer-Lambert
+//       por canal) e cáusticas animadas — o oceano por cima fica translúcido no raso.
 //    2. CONÍFERAS instanciadas (3 andares de galhos em estrela + ponta, textura de agulhas e normal);
 //    3. FOLHOSAS + ARBUSTOS instanciados (copa em dois lóbulos, textura de tufos de folhas);
 //    4. PEDRAS e matacões (icosaedro facetado com a textura de rocha triplanar);
-//    5. AGULHAS DE ROCHA no mar (sea stacks) junto às falésias.
+//    5. AGULHAS DE ROCHA no mar (sea stacks) junto às falésias;
+//    6. RIOS: fita d'água nos talvegues principais até o mar (estuário na foz), ondulação correndo.
 // =====================================================================
 import * as THREE from 'three';
 import { COLORS, SEED, ISLANDS, SUN_DIR } from '../config.js';
@@ -61,6 +69,12 @@ const PAL = (() => {
     rockLight: mix(COLORS.rock, 0xdcd7cd, 0.65),       // picos mais claros
     rockWarm: mix(COLORS.rock, 0xa08a6a, 0.4),         // rocha com tom quente (falésias baixas)
     wood: c(COLORS.wood),
+    scree: c(COLORS.scree),                            // tálus/cascalho de encosta
+    gravel: c(COLORS.gravel),                          // leques aluviais
+    lush: c(COLORS.meadowLush),                        // fundos de vale úmidos
+    wetRock: c(COLORS.wetRock),                        // leito molhado dos talvegues
+    river: c(COLORS.riverWater),
+    riverShallow: c(COLORS.riverShallow),
   };
 })();
 
@@ -228,8 +242,10 @@ function measurePhotos(D) {
 }
 
 // ======================= altura VISUAL da ilha =======================
-// heightAt (jogabilidade) + ravinas de erosão (só cavam), falésias nas costas
-// sem praia, plataforma submersa suave e o pé das agulhas de rocha no mar.
+// Grade erodida (worldData: island.terrain) amostrada em Catmull-Rom (superfície lisa, nunca mais de
+// ~3 m acima do bilinear da jogabilidade) + rugosidade fina nas encostas, leitos dos rios escavados
+// (canal sob a lâmina d'água), falésias nas costas sem praia, plataforma submersa suave e o pé das
+// agulhas de rocha no mar. Sempre ≤ heightAt + ~4,5 m (folga de voo DOVE.ALT_MIN = 6 m).
 const CTX = new WeakMap();
 function islandCtx(island) {
   let c = CTX.get(island);
@@ -244,18 +260,94 @@ function islandCtx(island) {
   const speciesAt = (x, z) => enoise.noise2(x / 430 + 5.5, z / 430 - 2.5);
   // costa rochosa (sem praia) onde o ruído de praia é baixo
   const rockyAt = (x, z) => smoothstep(-0.02, -0.36, bchAt(x, z) + 0.12 * fineAt(x, z));
-  const SK = ISLANDS.SKIRT_Y, EM = ISLANDS.EROSION_M, CT = ISLANDS.CLIFF_TOP;
+  const SK = ISLANDS.SKIRT_Y, CT = ISLANDS.CLIFF_TOP, DM = ISLANDS.DETAIL_M;
+
+  // ---- grade erodida ----
+  const T = island.terrain, N = T.N, inv = 1 / T.cs, gx0 = T.x0, gz0 = T.z0, HG = T.h;
+  // declive |∇h| por nó (para a rugosidade e as máscaras)
+  const SL = new Float32Array(N * N);
+  for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) {
+    const k = j * N + i;
+    SL[k] = Math.hypot(HG[k + 1] - HG[k - 1], HG[k + N] - HG[k - N]) * 0.5 * inv;
+  }
+  // cavidade (h − média 7×7 células): côncavo < 0 (talvegues, ravinas), convexo > 0 (cristas) — sombreia
+  // o relevo erodido na cor macro (oclusão do céu nos vales), legível de longe
+  const CAV = new Float32Array(N * N);
+  {
+    const tmp = new Float32Array(N * N), r = 3, w = 2 * r + 1;
+    for (let j = 0; j < N; j++) for (let i = r; i < N - r; i++) { let a = 0; for (let q = -r; q <= r; q++) a += HG[j * N + i + q]; tmp[j * N + i] = a / w; }
+    for (let j = r; j < N - r; j++) for (let i = r; i < N - r; i++) { let a = 0; for (let q = -r; q <= r; q++) a += tmp[(j + q) * N + i]; CAV[j * N + i] = HG[j * N + i] - a / w; }
+  }
+  const G = { fx: 0, fz: 0, k: 0, u: 0, v: 0 };
+  const locate = (x, z) => {
+    let fx = (x - gx0) * inv, fz = (z - gz0) * inv;
+    fx = fx < 1 ? 1 : fx > N - 2.001 ? N - 2.001 : fx;
+    fz = fz < 1 ? 1 : fz > N - 2.001 ? N - 2.001 : fz;
+    const ix = fx | 0, iz = fz | 0;
+    G.k = iz * N + ix; G.u = fx - ix; G.v = fz - iz;
+  };
+  const bil = (A) => { const k = G.k, u = G.u, v = G.v; return (A[k] * (1 - u) + A[k + 1] * u) * (1 - v) + (A[k + N] * (1 - u) + A[k + N + 1] * u) * v; };
+  const cr = (p0, p1, p2, p3, t) => p1 + 0.5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
+  // Catmull-Rom 4×4 (lisa entre células: sem facetas da grade de 13–21 m)
+  function smoothH() {
+    const k = G.k, u = G.u, v = G.v;
+    const r0 = cr(HG[k - N - 1], HG[k - N], HG[k - N + 1], HG[k - N + 2], u);
+    const r1 = cr(HG[k - 1], HG[k], HG[k + 1], HG[k + 2], u);
+    const r2 = cr(HG[k + N - 1], HG[k + N], HG[k + N + 1], HG[k + N + 2], u);
+    const r3 = cr(HG[k + 2 * N - 1], HG[k + 2 * N], HG[k + 2 * N + 1], HG[k + 2 * N + 2], u);
+    return cr(r0, r1, r2, r3, v);
+  }
+  // máscaras hidrológicas (fluxo 0..1, erosão m, deposição m, declive)
+  const hydro = (x, z, out) => { locate(x, z); out.flow = bil(T.flow); out.ero = bil(T.ero); out.dep = bil(T.dep); out.tal = bil(T.tal); out.slope = bil(SL); out.cav = bil(CAV); return out; };
+
+  // ---- rios: polilinhas suavizadas, nível d'água monotônico, índice espacial ----
+  const rivers = buildRivers(island, (x, z) => { locate(x, z); return bil(HG); });
+  const RC = 48, rmap = new Map();
+  rivers.forEach((r, ri) => {
+    for (let n = 0; n < r.n - 1; n++) {
+      const reach = Math.max(r.hw[n], r.hw[n + 1]) + ISLANDS.RIVER_PLAIN + 40;
+      const xa = Math.min(r.x[n], r.x[n + 1]) - reach, xb = Math.max(r.x[n], r.x[n + 1]) + reach;
+      const za = Math.min(r.z[n], r.z[n + 1]) - reach, zb = Math.max(r.z[n], r.z[n + 1]) + reach;
+      for (let a = Math.floor(xa / RC); a <= Math.floor(xb / RC); a++) for (let b = Math.floor(za / RC); b <= Math.floor(zb / RC); b++) {
+        const key = a * 100003 + b;
+        let l = rmap.get(key);
+        if (!l) rmap.set(key, (l = []));
+        l.push(ri, n);
+      }
+    }
+  });
+  const RQ = { s: 0, hw: 0, yw: 0, ri: -1 };
+  const RIVER_PLAIN = ISLANDS.RIVER_PLAIN;
+  // segmento de rio mais próximo (distância ao eixo, meia-largura e nível d'água interpolados)
+  function riverAt(x, z) {
+    const l = rmap.get(Math.floor(x / RC) * 100003 + Math.floor(z / RC));
+    if (!l) return false;
+    let best = 1e9;
+    for (let q = 0; q < l.length; q += 2) {
+      const r = rivers[l[q]], n = l[q + 1];
+      const ax = r.x[n], az = r.z[n], dx = r.x[n + 1] - ax, dz = r.z[n + 1] - az;
+      const L2 = dx * dx + dz * dz;
+      let t = L2 > 0 ? ((x - ax) * dx + (z - az) * dz) / L2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = ax + dx * t - x, pz = az + dz * t - z, d2 = px * px + pz * pz;
+      const hw = r.hw[n] + (r.hw[n + 1] - r.hw[n]) * t;
+      const sc = Math.sqrt(d2) - hw; // distância à margem (negativa dentro)
+      if (sc < best) { best = sc; RQ.s = Math.sqrt(d2); RQ.hw = hw; RQ.yw = r.yw[n] + (r.yw[n + 1] - r.yw[n]) * t; RQ.ri = l[q]; }
+    }
+    return best < 60;
+  }
 
   function baseHeight(x, z) {
     const h0 = island.heightAt(x, z);
     if (h0 === -Infinity) return SK;
-    let h = h0;
-    if (h0 > 6) { // ravinas: ridged pequeno cava os vales entre cristas finas (mais nas montanhas)
-      const m = smoothstep(25, 380, h0), lo = smoothstep(6, 70, h0);
-      const e1 = enoise.ridged2(x / 230, z / 230, 3, 2.1, 0.5);
-      // terras baixas: ondulação suave (sem rede de células, que a AO de tela realçaria)
-      const e2 = enoise.fbm2(x / 95 + 17.3, z / 95 - 9.1, 2, 2.0, 0.5);
-      h += -m * EM * Math.pow(1 - e1, 1.7) + m * 3 * e1 * e1 * e1 + lo * (1 - m) * 2.2 * e2 - 1.0 * lo;
+    locate(x, z);
+    let h = Math.min(smoothH(), h0 + 3);
+    if (h0 > 4) { // rugosidade fina (só visual): mais nas encostas íngremes, quase nada nos fundos de vale
+      const sl = bil(SL), m = smoothstep(4, 40, h0);
+      const amp = DM * (0.25 + 0.75 * smoothstep(0.25, 0.9, sl)) * m;
+      const e1 = enoise.fbm2(x / 47 + 17.3, z / 47 - 9.1, 3, 2.1, 0.5);
+      const e2 = enoise.ridged2(x / 160 - 3.3, z / 160 + 7.7, 2, 2.0, 0.5);
+      h += amp * (0.7 * e1 - 0.9 * (1 - e2) * (1 - e2) + 0.2);
     }
     let rocky = -1;
     if (h0 < 22 && h0 > -40) { // falésia costeira: a borda fica a `top` m e a face cai até o fundo
@@ -270,13 +362,20 @@ function islandCtx(island) {
         h = lerp(h, lerp(plateau, Math.min(sea, plateau), k), smoothstep(0, 0.6, rocky));
       }
     }
+    // leito do rio (só escava): canal sob a lâmina d'água, várzea plana de cascalho dos dois lados (a malha
+    // grossa a representa sem esconder a água) e margens subindo
+    if (riverAt(x, z)) {
+      const s = RQ.s, hw = RQ.hw, yw = RQ.yw, fp = hw + RIVER_PLAIN;
+      const carved = s < hw ? yw - 0.25 - (0.4 + 0.06 * hw) * (1 - (s / hw) * (s / hw)) : s < fp ? yw - 0.25 + 0.5 * (s - hw) / RIVER_PLAIN : yw + 0.25 + (s - fp) * 0.55;
+      if (carved < h) h = carved;
+    }
     if (h < 0) { // plataforma submersa: rasa e suave nas praias, mais funda nas costas rochosas
       if (rocky < 0) rocky = rockyAt(x, z);
       const d = -h;
       const dS = 10 * (1 - Math.exp(-d / 10)) + 0.12 * d, dR = 6 * (1 - Math.exp(-d / 6)) + 0.4 * d;
       h = -lerp(dS, dR, rocky);
     }
-    return h;
+    return Math.min(h, h0 + 4.5);
   }
 
   // agulhas de rocha (sea stacks) logo além das falésias
@@ -313,7 +412,7 @@ function islandCtx(island) {
     }
     return h;
   }
-  c = { island, cx: island.cx, cz: island.cz, noise, vegAt, forAt, bchAt, fineAt, microAt, speciesAt, rockyAt, renderHeight, stacks };
+  c = { island, cx: island.cx, cz: island.cz, noise, vegAt, forAt, bchAt, fineAt, microAt, speciesAt, rockyAt, renderHeight, stacks, hydro, rivers, riverAt, RQ };
   CTX.set(island, c);
   return c;
 }
@@ -381,19 +480,32 @@ export function getShoreField(worldData) {
 //   forN   ruído ~520 m: manchas de floresta
 //   bchN   ruído ~900 m: costas com praia (+) ou sem (−)
 //   fineN  ruído ~70 m para tremer as bordas
-function coverAt(y, ny, relief, vegN, forN, bchN, fineN, maxH, out) {
+//   hy     máscaras da erosão assada: flow (0..1, log da área drenada), ero / dep (m escavados / depositados)
+function coverAt(y, ny, relief, vegN, forN, bchN, fineN, maxH, hy, out) {
   const sandTop = ISLANDS.SAND_MAX_Y * (0.35 + 1.0 * smoothstep(-0.45, 0.45, bchN));
   const yS = y + 1.6 * fineN;
   const sand = (1 - smoothstep(sandTop - 1.5, sandTop + 2.5, yS)) * smoothstep(0.78, 0.9, ny + 0.03 * fineN) * smoothstep(-5, -2, y);
   const sD = ny + 0.06 * fineN;
-  const rock = Math.max(smoothstep(0.72, 0.55, sD), smoothstep(0.52 * maxH, 0.70 * maxH, y + 45 * fineN + 30 * vegN));
+  const flow = hy.flow, chan = smoothstep(0.5, 0.66, flow);           // talvegues (canais com água)
+  const vale = smoothstep(0.24, 0.42, flow) * (1 - smoothstep(0.0, 0.5, relief)); // fundos de vale
+  // rocha nua: encostas íngremes, alto da montanha e as CRISTAS (divisores de água)
+  const crest = smoothstep(0.35, 0.85, relief) * smoothstep(0.42 * maxH, 0.72 * maxH, y + 50 * fineN) * (1 - smoothstep(0.2, 0.34, flow));
+  const rock = Math.max(smoothstep(0.74, 0.58, sD), smoothstep(0.7 * maxH, 0.88 * maxH, y + 45 * fineN + 30 * vegN), 0.85 * crest);
   const peak = smoothstep(0.68 * maxH, 0.95 * maxH, y);
-  const treeline = 1 - smoothstep(ISLANDS.TREELINE * maxH * 0.8, ISLANDS.TREELINE * maxH, y + 40 * fineN);
-  const f = forN - 0.35 * relief + 0.08 * fineN;
-  const forest = smoothstep(0.12, 0.4, f) * treeline * smoothstep(4, 12, y) * smoothstep(0.5, 0.7, ny) * (1 - sand) * (1 - rock);
-  const scrub = clamp(smoothstep(0.2 * maxH, 0.42 * maxH, y + 30 * vegN) + 0.45 * smoothstep(0.25, 0.9, relief), 0, 1);
-  const dry = smoothstep(-0.45, 0.5, 1.3 * vegN + 0.6 * relief + 0.12 * fineN);
+  // tálus/cascalho: cones da erosão térmica no pé das encostas íngremes + ravinas muito erodidas
+  const scree = clamp(smoothstep(16, 55, hy.tal + 12 * fineN) * smoothstep(0.96, 0.8, sD) + 0.7 * smoothstep(80, 150, hy.ero + 30 * fineN) * smoothstep(0.92, 0.76, sD), 0, 1)
+    * smoothstep(30, 140, y) * (1 - rock) * (1 - 0.6 * vale);
+  // leques aluviais / cascalheiras: deposição das gotas em terreno suave (saída dos vales)
+  const gravel = smoothstep(10, 28, hy.dep + 4 * fineN) * smoothstep(0.34, 0.5, flow) * smoothstep(0.86, 0.95, ny) * (1 - sand) * smoothstep(1, 5, y);
+  const alluv = smoothstep(3, 14, hy.dep) * smoothstep(0.85, 0.95, ny) * (1 - gravel);   // solo aluvial (verde)
+  const treeline = 1 - smoothstep(ISLANDS.TREELINE * maxH * 0.8, ISLANDS.TREELINE * maxH, y + 40 * fineN - 120 * vale);
+  // mata segue os vales (umidade) e foge das cristas
+  const f = 0.6 * forN - 0.75 * relief + 0.08 * fineN + 0.5 * vale + 0.15 * chan - 0.35 * crest;
+  const forest = smoothstep(-0.12, 0.22, f) * treeline * smoothstep(4, 12, y) * smoothstep(0.5, 0.7, ny) * (1 - sand) * (1 - rock) * (1 - 0.7 * scree) * (1 - 0.8 * gravel);
+  const scrub = clamp(smoothstep(0.2 * maxH, 0.42 * maxH, y + 30 * vegN) + 0.45 * smoothstep(0.25, 0.9, relief) - 0.5 * vale, 0, 1);
+  const dry = smoothstep(-0.15, 0.75, 1.3 * vegN + 0.6 * relief + 0.12 * fineN - 0.9 * vale);
   out.sand = sand; out.rock = rock; out.peak = peak; out.forest = forest; out.scrub = scrub; out.dry = dry;
+  out.scree = scree; out.gravel = gravel * (1 - rock); out.lush = Math.max(vale, alluv) * (1 - rock); out.wet = chan * (1 - sand);
   out.grass = clamp(1 - sand - forest, 0, 1) * (1 - rock);
   return out;
 }
@@ -404,8 +516,11 @@ function terrainColor(y, ny, relief, fineN, microN, rocky, cov, out) {
   out.copy(PAL.meadowDark).lerp(PAL.meadow, clamp(0.55 + 0.6 * relief + 0.15 * fineN, 0, 1));
   out.lerp(PAL.grassDry, cov.dry);
   out.lerp(PAL.scrub, cov.scrub * 0.85);
+  out.lerp(PAL.lush, cov.lush * 0.55);                       // fundos de vale mais verdes
   { const l = 0.2126 * out.r + 0.7152 * out.g + 0.0722 * out.b; out.lerp(_tmpB.setRGB(l, l, l), 0.18); }
   out.multiplyScalar(0.9);
+  _tmpA.copy(PAL.gravel).lerp(PAL.sandLight, 0.25 + 0.25 * fineN);
+  out.lerp(_tmpA, cov.gravel * 0.65);                        // leques aluviais (cascalho claro)
   _tmpA.copy(PAL.carpet).lerp(PAL.forestDark, clamp(0.5 + 0.5 * fineN, 0, 1));
   out.lerp(_tmpA, Math.min(1, cov.forest * 1.15));
   if (cov.sand > 0.001) {
@@ -413,10 +528,14 @@ function terrainColor(y, ny, relief, fineN, microN, rocky, cov, out) {
     _tmpB.lerp(PAL.sandLight, 0.75 * smoothstep(ISLANDS.SAND_WET_Y, ISLANDS.SAND_MAX_Y + 2, y));
     out.lerp(_tmpB, cov.sand);
   }
+  _tmpB.copy(PAL.scree).lerp(PAL.rock, clamp(0.4 + 0.5 * fineN, 0, 1));
+  out.lerp(_tmpB, cov.scree * 0.85);                         // tálus nas encostas erodidas
   _tmpB.copy(PAL.rockDark).lerp(PAL.rock, clamp(0.5 + 0.4 * fineN + 0.2 * microN, 0, 1));
   _tmpB.lerp(PAL.rockWarm, 0.5 * (1 - smoothstep(150, 400, y)));
   _tmpB.lerp(PAL.rockLight, cov.peak * clamp(0.6 + 0.4 * fineN, 0, 1));
   out.lerp(_tmpB, cov.rock);
+  // talvegues: rocha/solo molhados (escuros)
+  out.lerp(_tmpB.copy(PAL.wetRock).lerp(out, 0.3), cov.wet * 0.7);
   // submerso: areia (praias) ou rocha com algas (costas rochosas); a absorção da água é feita no shader
   if (y < 0.5) {
     _tmpA.copy(PAL.sandSub).lerp(PAL.seabedRock, clamp(rocky * 0.85 + 0.15 * microN, 0, 1));
@@ -619,6 +738,11 @@ float dtWs = 0.0, dtWr = 1.0, dtWf = 0.0, dtWg = 0.0;
     dtRough = mix(dtRough, rough, fC);
   }
   dtWs = ws; dtWr = wr; dtWf = wf; dtWg = wg;
+#ifdef DT_TERRAIN
+  // talvegues/leitos molhados: mais escuros e com brilho (a cor macro já escureceu de longe)
+  diffuseColor.rgb *= 1.0 - 0.18 * vDtCover.w * fC;
+  dtRough = mix(dtRough, 0.38, vDtCover.w * 0.75 * fC);
+#endif
 }
 #ifdef DT_WATER
 {
@@ -678,7 +802,7 @@ function patchDetailMaterial(mat, uniforms, mode) {
 // interpolação (cristas, picos, falésias) com prioridade extra na linha d'água;
 // folhas inteiras muito fundas são descartadas. Triangulação sem fendas: folha com
 // vizinho mais fino ganha vértice central + leque com os pontos médios.
-function buildTerrainMesh(ctx, B, L, targetLeaves, coastLeaf = ISLANDS.COAST_LEAF) {
+function buildTerrainMesh(ctx, B, L, targetLeaves, coastLeaf = ISLANDS.COAST_LEAF, coarse = 1) {
   const NL = 1 << L, NV = NL + 1, step = (2 * B) / NL, cx = ctx.cx, cz = ctx.cz, deep = ISLANDS.DEEP_CULL_Y;
   const cache = new Map();
   const H = (ix, iz) => {
@@ -746,6 +870,34 @@ function buildTerrainMesh(ctx, B, L, targetLeaves, coastLeaf = ISLANDS.COAST_LEA
   };
   // fase 1: a linha d'água (e a face das falésias) sempre com folhas de ≤ COAST_LEAF m
   const coastLevel = Math.min(L, Math.ceil(Math.log2((2 * B) / coastLeaf)));
+  // leitos dos rios: folhas ≤ RIVER_LEAF sobre a várzea (senão a malha grossa cobre a lâmina d'água).
+  // Máscara rasterizada (células de RIVER_LEAF/2) + tabela de somas para testar uma folha em O(1).
+  const riverLeaf = ISLANDS.RIVER_LEAF * coarse, landLeafMax = ISLANDS.LAND_LEAF_MAX * coarse;
+  const riverLevel = Math.min(L, Math.ceil(Math.log2((2 * B) / riverLeaf)));
+  const RMc = riverLeaf / 2, RMn = Math.ceil((2 * B) / RMc) + 1;
+  const RSAT = new Int32Array((RMn + 1) * (RMn + 1));
+  {
+    const M = new Uint8Array(RMn * RMn);
+    for (const r of ctx.rivers) for (let n = 0; n < r.n - 1; n++) {
+      if (r.hw[n] < ISLANDS.RIVER_LEAF_MIN_HW) continue;   // córregos estreitos: só o viés de profundidade
+      const L2 = Math.hypot(r.x[n + 1] - r.x[n], r.z[n + 1] - r.z[n]), steps = Math.max(1, Math.ceil(L2 / (RMc * 0.5)));
+      for (let q = 0; q <= steps; q++) {
+        const t = q / steps, x = r.x[n] + (r.x[n + 1] - r.x[n]) * t - (ctx.cx - B), z = r.z[n] + (r.z[n + 1] - r.z[n]) * t - (ctx.cz - B);
+        const rad = (r.hw[n] + ISLANDS.RIVER_PLAIN + 3) / RMc, ci = x / RMc, cj = z / RMc;
+        for (let b = Math.floor(cj - rad); b <= Math.ceil(cj + rad); b++) for (let a = Math.floor(ci - rad); a <= Math.ceil(ci + rad); a++) {
+          if (a < 0 || b < 0 || a >= RMn || b >= RMn || (a - ci) * (a - ci) + (b - cj) * (b - cj) > rad * rad) continue;
+          M[b * RMn + a] = 1;
+        }
+      }
+    }
+    for (let b = 0; b < RMn; b++) for (let a = 0; a < RMn; a++)
+      RSAT[(b + 1) * (RMn + 1) + a + 1] = M[b * RMn + a] + RSAT[b * (RMn + 1) + a + 1] + RSAT[(b + 1) * (RMn + 1) + a] - RSAT[b * (RMn + 1) + a];
+  }
+  const nearRiver = (l, i, j) => {
+    const s = NL >> l, a0 = Math.max(0, Math.floor(i * s * step / RMc)), b0 = Math.max(0, Math.floor(j * s * step / RMc));
+    const a1 = Math.min(RMn, Math.ceil((i + 1) * s * step / RMc)), b1 = Math.min(RMn, Math.ceil((j + 1) * s * step / RMc));
+    return RSAT[b1 * (RMn + 1) + a1] - RSAT[b0 * (RMn + 1) + a1] - RSAT[b1 * (RMn + 1) + a0] + RSAT[b0 * (RMn + 1) + a0] > 0;
+  };
   const isCoast = (l, i, j) => {
     const s = NL >> l, x0 = i * s, z0 = j * s, h = s >> 1;
     let mn = Infinity, mx = -Infinity;
@@ -757,8 +909,8 @@ function buildTerrainMesh(ctx, B, L, targetLeaves, coastLeaf = ISLANDS.COAST_LEA
     const stack = [[0, 0, 0]];
     while (stack.length) {
       const [l, i, j] = stack.pop();
-      const big = (NL >> l) * step > ISLANDS.LAND_LEAF_MAX && H((NL >> l) * i + (NL >> (l + 1)), (NL >> l) * j + (NL >> (l + 1))) > -3;
-      if (!big && (l >= coastLevel || !isCoast(l, i, j))) continue;
+      const big = (NL >> l) * step > landLeafMax && H((NL >> l) * i + (NL >> (l + 1)), (NL >> l) * j + (NL >> (l + 1))) > -3;
+      if (!big && (l >= coastLevel || !isCoast(l, i, j)) && (l >= riverLevel || !nearRiver(l, i, j))) continue;
       split(KEY(l, i, j), l, i, j, []);
       for (let c = 0; c < 4; c++) stack.push([l + 1, 2 * i + (c & 1), 2 * j + (c >> 1)]);
     }
@@ -1096,6 +1248,134 @@ function makeStackGeometry() {
   return g;
 }
 
+// ======================= rios (polilinhas assadas → lâmina d'água) =======================
+// As polilinhas D8 da drenagem assada são suavizadas (Chaikin ×2) e reamostradas; o nível d'água
+// é monotônico (nunca sobe rio abaixo) e mergulha sob o mar na foz, que se alarga (estuário).
+// Afluentes terminam na margem do rio principal.
+function buildRivers(island, bilH) {
+  const src = island.terrain.rivers, cs = island.terrain.cs;
+  const step = Math.max(9, cs * 0.85);
+  const mix3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  const out = src.map((r) => {
+    let P = [];
+    for (let n = 0; n < r.pts.length; n += 3) P.push([r.pts[n], r.pts[n + 1], r.pts[n + 2]]);
+    for (let it = 0; it < 2 && P.length > 2; it++) {
+      const Q = [P[0]];
+      for (let n = 0; n < P.length - 1; n++) { Q.push(mix3(P[n], P[n + 1], 0.25), mix3(P[n], P[n + 1], 0.75)); }
+      Q.push(P[P.length - 1]); P = Q;
+    }
+    // reamostra por comprimento de arco
+    const R = [P[0]];
+    let acc = 0;
+    for (let n = 1; n < P.length; n++) {
+      const a = P[n - 1], b = P[n], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      let t0 = 0;
+      while (acc + L * (1 - t0) >= step) { t0 += (step - acc) / L; R.push(mix3(a, b, t0)); acc = 0; }
+      acc += L * (1 - t0);
+    }
+    if (acc > step * 0.3) R.push(P[P.length - 1]); else R[R.length - 1] = P[P.length - 1];
+    let len = 0;
+    for (let n = 1; n < R.length; n++) len += Math.hypot(R[n][0] - R[n - 1][0], R[n][1] - R[n - 1][1]);
+    return { P: R, join: r.join, len };
+  });
+  const rivers = out.map((r) => {
+    const n = r.P.length;
+    const x = new Float32Array(n), z = new Float32Array(n), hw = new Float32Array(n), yw = new Float32Array(n);
+    let ymin = Infinity;
+    for (let i = 0; i < n; i++) {
+      x[i] = r.P[i][0]; z[i] = r.P[i][1]; hw[i] = 0.5 * r.P[i][2];
+      ymin = Math.min(ymin, bilH(x[i], z[i]));
+      yw[i] = ymin + 0.3;
+    }
+    // foz: a lâmina desce abaixo do mar e o leito se alarga (estuário)
+    if (r.join < 0) {
+      let m = n - 1;
+      for (let i = 0; i < n; i++) if (yw[i] < 0.9) { m = i; break; }
+      const m0 = Math.max(0, m - 4);
+      for (let i = m0; i < n; i++) {
+        const t = (i - m0) / Math.max(1, n - 1 - m0);
+        yw[i] = Math.min(yw[i], lerp(Math.min(yw[m0], 0.9), -1.2, t));
+        hw[i] *= 1 + 1.4 * smoothstep(0, 1, t);
+      }
+    }
+    return { n, x, z, hw, yw, join: r.join, len: r.len, mainLen: 0 };
+  });
+  // afluentes: terminam na margem do principal (sem lâminas sobrepostas)
+  for (const r of rivers) {
+    if (r.join < 0 || !rivers[r.join]) continue;
+    const p = rivers[r.join], ex = r.x[r.n - 1], ez = r.z[r.n - 1];
+    let phw = 4;
+    { let bd = Infinity; for (let i = 0; i < p.n; i++) { const d = Math.hypot(p.x[i] - ex, p.z[i] - ez); if (d < bd) { bd = d; phw = p.hw[i]; } } }
+    while (r.n > 2 && Math.hypot(r.x[r.n - 2] - ex, r.z[r.n - 2] - ez) < phw * 0.9) r.n--;
+    r.x[r.n - 1] = r.x[r.n - 2] + (r.x[r.n - 1] - r.x[r.n - 2]) * 0.6; r.z[r.n - 1] = r.z[r.n - 2] + (r.z[r.n - 1] - r.z[r.n - 2]) * 0.6;
+  }
+  return rivers.filter((r) => r.len > 110 && r.n >= 3);
+}
+
+// Fita d'água de cada rio (3 vértices na seção: margens rasas e claras, centro fundo; corredeiras
+// espumam onde o declive é forte). aFlow = direção × velocidade da correnteza (ondulação no shader).
+function buildRiverGeometry(ctx) {
+  const pos = [], col = [], flw = [], idx = [];
+  const cx = ctx.cx, cz = ctx.cz, cDeep = PAL.river, cEdge = PAL.riverShallow, foam = new THREE.Color(0xdfe8e6), c = new THREE.Color();
+  for (const r of ctx.rivers) {
+    const base = pos.length / 3;
+    for (let i = 0; i < r.n; i++) {
+      const a = Math.max(0, i - 1), b = Math.min(r.n - 1, i + 1);
+      let tx = r.x[b] - r.x[a], tz = r.z[b] - r.z[a];
+      const L = Math.hypot(tx, tz) || 1; tx /= L; tz /= L;
+      const drop = Math.max(0, (r.yw[a] - r.yw[b]) / L);
+      const rap = smoothstep(0.35, 0.8, drop);
+      const w = r.hw[i] * 1.18, y = r.yw[i] + 0.12, nx = -tz, nz = tx;
+      const sp = 0.6 + 4 * Math.min(0.4, drop);
+      for (let s = -1; s <= 1; s++) {
+        pos.push(r.x[i] + nx * w * s - cx, y, r.z[i] + nz * w * s - cz);
+        c.copy(s === 0 ? cDeep : cEdge).lerp(cEdge, s === 0 ? smoothstep(10, 3, r.hw[i]) * 0.5 : 0).lerp(foam, rap * (s === 0 ? 0.3 : 0.5));
+        col.push(c.r, c.g, c.b);
+        flw.push(tx * sp, tz * sp);
+      }
+      if (i < r.n - 1) {
+        const q = base + i * 3;
+        idx.push(q, q + 1, q + 3, q + 1, q + 4, q + 3, q + 1, q + 2, q + 4, q + 2, q + 5, q + 4); // face para cima
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(pos.length).map((_, k) => (k % 3 === 1 ? 1 : 0)), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
+  g.setAttribute('aFlow', new THREE.BufferAttribute(new Float32Array(flw), 2));
+  g.setIndex(idx);
+  g.computeBoundingSphere();
+  return g;
+}
+// Água dos rios: PBR liso (reflete o céu/HDRI) + ondulação que corre rio abaixo (tMisc) e um
+// pequeno viés de profundidade (∝ distância) para a lâmina não sumir sob triângulos grossos do terreno.
+function makeRiverMaterial(uniforms) {
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.28, metalness: 0, envMapIntensity: 0.35 });
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.tMisc = uniforms.tMisc; shader.uniforms.uTime = uniforms.uTime;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec2 aFlow;\nvarying vec3 vRvPos;\nvarying vec2 vRvFlow;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRvPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvRvFlow = aFlow;')
+      .replace('#include <logdepthbuf_vertex>', '#include <logdepthbuf_vertex>\n#ifdef USE_LOGARITHMIC_DEPTH_BUFFER\nvFragDepth = 1.0 + gl_Position.w * 0.9986;\n#endif');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform sampler2D tMisc;\nuniform float uTime;\nvarying vec3 vRvPos;\nvarying vec2 vRvFlow;')
+      .replace('#include <normal_fragment_maps>', `{
+        vec2 uv1 = vRvPos.xz * (1.0 / 7.0) - vRvFlow * uTime * 0.16;
+        vec2 uv2 = vRvPos.xz * (1.0 / 2.9) - vRvFlow * uTime * 0.3 + 0.37;
+        const float e = 0.015;
+        float a = texture(tMisc, uv1).r + 0.5 * texture(tMisc, uv2).r;
+        float b = texture(tMisc, uv1 + vec2(e, 0.0)).r + 0.5 * texture(tMisc, uv2 + vec2(e, 0.0)).r;
+        float c = texture(tMisc, uv1 + vec2(0.0, e)).r + 0.5 * texture(tMisc, uv2 + vec2(0.0, e)).r;
+        float fade = 1.0 - smoothstep(300.0, 2500.0, length(cameraPosition - vRvPos));
+        vec3 nW = normalize(vec3((a - b) * 1.6 * fade, 1.0, (a - c) * 1.6 * fade));
+        normal = normalize((viewMatrix * vec4(nW, 0.0)).xyz);
+      }`);
+  };
+  mat.customProgramCacheKey = () => 'ruppen-river';
+  return mat;
+}
+
 // ------------------------------ uma ilha ------------------------------
 function buildIsland(island, opts) {
   const { quality, materials, geos } = opts;
@@ -1106,7 +1386,19 @@ function buildIsland(island, opts) {
 
   // ---- malha adaptativa ----
   const L = ISLANDS.TERRAIN_LEVELS;
-  const { geo, H } = buildTerrainMesh(ctx, B, L, low ? ISLANDS.TERRAIN_LEAVES_LOW : ISLANDS.TERRAIN_LEAVES_HIGH, ISLANDS.COAST_LEAF * (low ? 2 : 1));
+  // orçamento: se as folhas forçadas (costa, rios) somadas ao refinamento passarem do teto de triângulos,
+  // refaz com menos folhas no refinamento guloso
+  const maxTris = low ? ISLANDS.TERRAIN_TRIS_LOW : ISLANDS.TERRAIN_TRIS_HIGH;
+  let target = low ? ISLANDS.TERRAIN_LEAVES_LOW : ISLANDS.TERRAIN_LEAVES_HIGH;
+  let coarse = 1;
+  let mesh = buildTerrainMesh(ctx, B, L, target, ISLANDS.COAST_LEAF * (low ? 2 : 1), coarse);
+  for (let it = 0; it < 4 && mesh.geo.index.count / 3 > maxTris; it++) {
+    const over = (mesh.geo.index.count / 3) / maxTris;
+    target = Math.floor(target / Math.pow(over, 1.6) * 0.97);
+    if (it > 0 || over > 1.1) coarse *= 1.25;   // as folhas forçadas também engrossam (rios, terra firme)
+    mesh = buildTerrainMesh(ctx, B, L, target, ISLANDS.COAST_LEAF * (low ? 2 : 1) * Math.sqrt(coarse), coarse);
+  }
+  const { geo, H } = mesh;
 
   // ---- grade regular de cobertura (reaproveita as alturas da malha) ----
   const RN = ISLANDS.RASTER, RV = RN + 1, rs = (1 << L) / RN, rstep = (2 * B) / RN;
@@ -1124,13 +1416,15 @@ function buildIsland(island, opts) {
   const REL = new Float32Array(RV * RV);
   for (let k = 0; k < RV * RV; k++) REL[k] = clamp((RY[k] - Hb[k]) / 70, -1, 1);
   const RF = new Float32Array(RV * RV), RS = new Float32Array(RV * RV), RR = new Float32Array(RV * RV), RG = new Float32Array(RV * RV);
-  const cov = { sand: 0, grass: 0, forest: 0, rock: 0, peak: 0, scrub: 0, dry: 0 };
+  const cov = { sand: 0, grass: 0, forest: 0, rock: 0, peak: 0, scrub: 0, dry: 0, scree: 0, gravel: 0, lush: 0, wet: 0 };
+  const hy = { flow: 0, ero: 0, dep: 0, tal: 0, slope: 0, cav: 0 };
+  const RW = new Uint8Array(RV * RV); // perto de rio (sem árvores nem pedras)
   for (let j = 0; j < RV; j++) for (let i = 0; i < RV; i++) {
     const k = j * RV + i, y = RY[k];
     if (y < -2) continue;
     const x = cx - B + i * rstep, z = cz - B + j * rstep;
-    coverAt(y, RNY[k], REL[k], ctx.vegAt(x, z), ctx.forAt(x, z), ctx.bchAt(x, z), ctx.fineAt(x, z), maxH, cov);
-    RF[k] = cov.forest; RS[k] = cov.sand; RR[k] = cov.rock; RG[k] = cov.grass;
+    coverAt(y, RNY[k], REL[k], ctx.vegAt(x, z), ctx.forAt(x, z), ctx.bchAt(x, z), ctx.fineAt(x, z), maxH, ctx.hydro(x, z, hy), cov);
+    RF[k] = cov.forest; RS[k] = cov.sand + 0.5 * cov.gravel; RR[k] = Math.max(cov.rock, cov.scree); RG[k] = cov.grass;
   }
   const s = { y: 0, ny: 1, forest: 0, sand: 0, rock: 0, grass: 0, rel: 0 };
   const bil = (A, a, b, c, d, u, v) => (A[a] * (1 - u) + A[b] * u) * (1 - v) + (A[c] * (1 - u) + A[d] * u) * v;
@@ -1164,16 +1458,29 @@ function buildIsland(island, opts) {
     sampleRaster(lx, lz);
     const fineN = ctx.fineAt(x, z), microN = ctx.microAt(x, z);
     const bchN = ctx.bchAt(x, z);
-    coverAt(y, ny, s.rel, ctx.vegAt(x, z), ctx.forAt(x, z), bchN, fineN, maxH, cov);
+    ctx.hydro(x, z, hy);
+    // inclinação para a cobertura: a da grade erodida (13–21 m), não a da rugosidade fina da malha
+    if (y > 25) ny = Math.max(ny, 1 / Math.sqrt(1 + hy.slope * hy.slope) - 0.03);
+    coverAt(y, ny, s.rel, ctx.vegAt(x, z), ctx.forAt(x, z), bchN, fineN, maxH, hy, cov);
+    // leito dos rios: cascalho molhado sob a lâmina d'água e nas margens
+    if (y > -1 && ctx.riverAt(x, z)) {
+      const rq = ctx.RQ, bank = 1 - smoothstep(rq.hw + ISLANDS.RIVER_PLAIN * 0.6, rq.hw + ISLANDS.RIVER_PLAIN + 6, rq.s);
+      cov.wet = Math.max(cov.wet, bank); cov.gravel = Math.max(cov.gravel, 0.35 * bank * (1 - cov.rock));
+      cov.forest *= 1 - bank; cov.sand *= 1 - bank; cov.dry *= 1 - bank;
+    }
     const rocky = y < 1 ? ctx.rockyAt(x, z) : 0;
     terrainColor(y, ny, s.rel, fineN, microN, rocky, cov, col);
+    if (y > 2) { // oclusão/convexidade do relevo erodido (a grade tem 13–21 m: escala dos vales e ravinas)
+      const cv = clamp(hy.cav / (6 + 0.02 * maxH), -1, 1);
+      col.multiplyScalar(1 + (cv < 0 ? 0.32 : 0.14) * cv);
+    }
     colors[v * 3] = col.r; colors[v * 3 + 1] = col.g; colors[v * 3 + 2] = col.b;
-    let wr = cov.rock, ws = cov.sand * (1 - wr), wf = cov.forest;
+    let wr = Math.max(cov.rock, cov.scree + 0.45 * cov.gravel), ws = Math.min(1 - wr, cov.sand * (1 - wr) + 0.3 * cov.gravel), wf = cov.forest * (1 - cov.scree);
     if (y < 0.3) { // fundo: areia nas praias, rocha nas costas rochosas
       const kk = smoothstep(0.3, -1.0, y);
       wr = lerp(wr, Math.max(wr, 0.12 + 0.85 * rocky), kk); ws = lerp(ws, 1 - wr, kk); wf *= 1 - kk;
     }
-    cover[v * 4] = ws; cover[v * 4 + 1] = wf; cover[v * 4 + 2] = wr;
+    cover[v * 4] = ws; cover[v * 4 + 1] = wf; cover[v * 4 + 2] = wr; cover[v * 4 + 3] = y > 0.4 ? cov.wet : 0;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.setAttribute('aCover', new THREE.BufferAttribute(cover, 4));
@@ -1204,10 +1511,12 @@ function buildIsland(island, opts) {
   const broad = new THREE.InstancedMesh(geos.broadleaf, materials.tree, nBro + nBush);
   conifers.name = 'coniferas:' + island.name; broad.name = 'folhosas:' + island.name;
   let pc = 0, pb = 0;
+  const nearRiver = (x, z, m) => ctx.riverAt(x, z) && ctx.RQ.s < ctx.RQ.hw + m;
   const placeTree = (lx, lz, inWood, forcedBush) => {
     const y = ctx.renderHeight(lx + cx, lz + cz);
     if (y < 3) return;
     const x = lx + cx, z = lz + cz;
+    if (nearRiver(x, z, 4)) return;
     const sp = ctx.speciesAt(x, z);
     const pCon = clamp(0.3 + 0.55 * smoothstep(30, 260, y) + 0.4 * sp - 0.25 * s.rel, 0.04, 0.97);
     const yaw = rng() * TAU;
@@ -1294,23 +1603,26 @@ function buildIsland(island, opts) {
     if (y > 1.2 || y < -2.5 || ctx.rockyAt(lx + cx, lz + cz) < 0.4) continue;
     putRock(lx, y, lz, rng.range(2.5, 7), 1, 0);
   }
+  // matacões no sopé das encostas íngremes (cones de tálus) e depois pedras soltas (rocha, tálus, cascalho)
+  const nBoulder = surfCount + boulderCount;
+  for (let tries = 0; placedR < nBoulder && tries < boulderCount * 400; tries++) {
+    const lx = rng.range(-rMax, rMax), lz = rng.range(-rMax, rMax);
+    if (lx * lx + lz * lz > rMax * rMax || !sampleRaster(lx, lz) || s.y < 1) continue;
+    if (s.ny < 0.78 || s.rock > 0.5 || steepNear(lx, lz) > 0.66) continue;
+    const sz = rng.range(12, 28);
+    if (nearRiver(lx + cx, lz + cz, sz + 2)) continue;
+    putRock(lx, ctx.renderHeight(lx + cx, lz + cz), lz, sz, 1, 0.15);
+  }
   for (let tries = 0; placedR < rockCount && tries < rockCount * 300; tries++) {
     const lx = rng.range(-rMax, rMax), lz = rng.range(-rMax, rMax);
     if (lx * lx + lz * lz > rMax * rMax || !sampleRaster(lx, lz) || s.y < 1) continue;
     const ny = s.ny, rockW = s.rock, sandW = s.sand, forestW = s.forest;
-    const wantBoulder = placedR < surfCount + boulderCount;
-    let sz;
-    if (wantBoulder) {
-      if (ny < 0.8 || rockW > 0.4) continue;
-      if (steepNear(lx, lz) > 0.6) continue;
-      sz = rng.range(14, 30);
-    } else {
-      let prob;
-      if (rockW > 0.35 && ny > 0.3) prob = 0.9; else if (sandW > 0.5) prob = 0.06; else prob = 0.03 * (1 - forestW);
-      if (rng() > prob) continue;
-      sz = 4 + 18 * rng() * rng();
-    }
-    putRock(lx, ctx.renderHeight(lx + cx, lz + cz), lz, sz, 1, wantBoulder ? 0.15 : 0);
+    let prob;
+    if (rockW > 0.35 && ny > 0.3) prob = 0.9; else if (sandW > 0.5) prob = 0.08; else prob = 0.03 * (1 - forestW);
+    if (rng() > prob) continue;
+    const sz = 4 + 18 * rng() * rng();
+    if (nearRiver(lx + cx, lz + cz, sz + 2)) continue;
+    putRock(lx, ctx.renderHeight(lx + cx, lz + cz), lz, sz, 1, 0);
   }
   rocks.count = placedR;
   finishInst(rocks);
@@ -1329,9 +1641,17 @@ function buildIsland(island, opts) {
   stacks.count = st.length;
   finishInst(stacks);
 
+  // ---- rios: lâmina d'água nos talvegues principais até o mar ----
+  const rgeo = buildRiverGeometry(ctx);
+  const river = new THREE.Mesh(rgeo, materials.river);
+  river.name = 'rios:' + island.name;
+  river.position.set(cx, 0, cz); river.matrixAutoUpdate = false; river.updateMatrix();
+  river.renderOrder = 1;
+  const riverTris = rgeo.index ? rgeo.index.count / 3 : 0;
+
   const tris = (geo.index.count / 3) + pc * (geos.conifer.attributes.position.count / 3) + pb * (geos.broadleaf.attributes.position.count / 3)
-    + placedR * (geos.rock.attributes.position.count / 3) + st.length * (geos.stack.attributes.position.count / 3);
-  return { island, cx, cz, terrain, conifers, broad, rocks, stacks, stats: { terrainTris: geo.index.count / 3, verts: nv, conifers: pc, broadleaf: pb, rocks: placedR, stacks: st.length, tris } };
+    + placedR * (geos.rock.attributes.position.count / 3) + st.length * (geos.stack.attributes.position.count / 3) + riverTris;
+  return { island, cx, cz, terrain, conifers, broad, rocks, stacks, river, stats: { terrainTris: geo.index.count / 3, verts: nv, conifers: pc, broadleaf: pb, rocks: placedR, stacks: st.length, rivers: ctx.rivers.length, riverTris, tris } };
 }
 
 // ------------------------------ API pública ---------------------------
@@ -1363,6 +1683,7 @@ export function createIslands(scene, worldData, opts = {}) {
   const materials = {
     terrain: patchDetailMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 }), uniforms, 'terrain'),
     rock: patchDetailMaterial(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, metalness: 0 }), uniforms, 'rock'),
+    river: makeRiverMaterial(uniforms),
     tree: new THREE.MeshStandardMaterial({
       vertexColors: true, map: TA.map, normalMap: TA.nmap, normalScale: new THREE.Vector2(1.3, 1.3),
       roughness: 0.88, metalness: 0, side: THREE.DoubleSide,
@@ -1377,7 +1698,7 @@ export function createIslands(scene, worldData, opts = {}) {
   const built = [];
   for (const island of worldData.islands) {
     const it = buildIsland(island, { quality, materials, geos });
-    group.add(it.terrain, it.conifers, it.broad, it.rocks, it.stacks);
+    group.add(it.terrain, it.conifers, it.broad, it.rocks, it.stacks, it.river);
     built.push(it);
   }
   scene.add(group);

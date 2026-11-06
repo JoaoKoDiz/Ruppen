@@ -4,59 +4,78 @@
 // =====================================================================
 import * as THREE from 'three';
 import { ELEPHANT, CITY_NAMES, ISLAND_NAMES, SEED, WORLD } from '../config.js';
-import { createNoise } from '../util/noise.js';
 import { createRng } from '../util/rng.js';
-
-const noise = createNoise(SEED);
+import { ISLAND_DEFS, outlineRadiusOf, islandGrid, generateIslandTerrain, terrainSignature } from './terrainGen.js';
+import { TERRAIN_DATA } from './terrainData.js';
 
 // ------------------------------ ILHAS --------------------------------
-// Cada ilha: centro, raio base, harmônicas do contorno (formato único) e
-// parâmetros de relevo. Todas têm a mesma "composição" (montanhas altas,
-// pedras, grama, florestas e pequenas praias) — diferem pelo formato.
-const ISLAND_DEFS = [
-  { cx: -18000, cz: -12000, R: 2700, maxH: 1600, harmonics: [[0.26, 2, 0.4], [0.14, 3, 1.9], [0.07, 5, 0.3]], seedOff: 11 }, // alongada
-  { cx: 14000, cz: -20000, R: 2300, maxH: 1350, harmonics: [[0.30, 3, 2.2], [0.10, 4, 0.9], [0.06, 7, 1.1]], seedOff: 23 }, // trilobada
-  { cx: 22000, cz: 10000, R: 3100, maxH: 1800, harmonics: [[0.18, 1, 0.0], [0.22, 2, 2.6], [0.08, 6, 0.5]], seedOff: 37 }, // grande c/ baía
-  { cx: -9000, cz: 19000, R: 2400, maxH: 1400, harmonics: [[0.34, 1, 1.2], [0.12, 4, 2.4], [0.05, 9, 0.7]], seedOff: 41 }, // com "cauda"
-  { cx: -3000, cz: 5500, R: 1900, maxH: 1200, harmonics: [[0.12, 2, 0.8], [0.10, 5, 1.5], [0.05, 8, 2.2]], seedOff: 53 }, // redonda, perto do início
-];
-
-function smoothstep(a, b, x) { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
+// Contorno (harmônicas) e maciços em src/world/terrainGen.js (ISLAND_DEFS). O relevo é uma grade
+// N×N (≈13–21 m por célula) já ERODIDA (gotas + tálus), assada offline por tools/bake-terrain.js em
+// src/world/terrainData.js; heightAt amostra a grade (bilinear). Se o dado assado estiver
+// desatualizado (assinatura ≠), o relevo é gerado aqui mesmo (lento: re-asse com `node tools/bake-terrain.js`).
+async function inflateRaw(b64) {
+  const bin = atob(b64), u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  const stream = new Blob([u8]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+async function loadIslandTerrain(d, id) {
+  const T = TERRAIN_DATA, rec = T && T.islands.find((r) => r.id === id);
+  const grid = islandGrid(d);
+  if (rec && T.signature === terrainSignature() && rec.N === grid.N && typeof DecompressionStream !== 'undefined') {
+    const { N } = grid, NN = N * N;
+    const [hb, mb] = await Promise.all([inflateRaw(rec.h), inflateRaw(rec.m)]);
+    const dq = new Uint16Array(hb.buffer, hb.byteOffset, NN), q = new Uint16Array(NN), h = new Float32Array(NN);
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const k = j * N + i;
+      const pred = i > 0 ? (2 * q[k - 1] - (i > 1 ? q[k - 2] : q[k - 1])) : (j > 0 ? q[k - N] : 0);
+      q[k] = (dq[k] + pred) & 0xffff;
+      h[k] = T.hMin + q[k] * T.hStep;
+    }
+    const flow = new Float32Array(NN), ero = new Float32Array(NN), dep = new Float32Array(NN), tal = new Float32Array(NN);
+    for (let k = 0; k < NN; k++) {
+      flow[k] = mb[k] / 255;
+      const e = mb[NN + k] / 255, p = mb[2 * NN + k] / 255, t = mb[3 * NN + k] / 255;
+      ero[k] = e * e * T.eMax; dep[k] = p * p * T.dMax; tal[k] = t * t * T.tMax;
+    }
+    const rivers = rec.rivers.map((r) => ({ join: r.j, pts: r.p.map((v, n) => (n % 3 === 0 ? v + d.cx : n % 3 === 1 ? v + d.cz : v)) }));
+    return { ...grid, h, flow, ero, dep, tal, rivers, baked: true };
+  }
+  console.warn(`[worldData] relevo da ilha ${id} gerado em tempo de carga (terrainData.js desatualizado: rode node tools/bake-terrain.js)`);
+  const t = generateIslandTerrain(d, id);
+  return { ...grid, h: t.h, flow: t.flow, ero: t.ero, dep: t.dep, tal: t.tal, rivers: t.rivers, baked: false };
+}
+const _t0 = performance.now();
+const TERRAINS = await Promise.all(ISLAND_DEFS.map(loadIslandTerrain));
+const TERRAIN_LOAD_MS = performance.now() - _t0; // decodificação do relevo assado (diagnóstico)
 
 export const islands = ISLAND_DEFS.map((d, i) => {
+  const T = TERRAINS[i];
+  const { N, cs, x0, z0, h: HG } = T;
+  const inv = 1 / cs;
+  let peak = 0;
+  for (let k = 0; k < HG.length; k++) if (HG[k] > peak) peak = HG[k];
+  const B = d.R * 1.75, B2 = B * B;
   const island = {
     id: i,
     name: ISLAND_NAMES[i],
-    cx: d.cx, cz: d.cz, R: d.R, maxH: d.maxH,
-    boundRadius: d.R * 1.75, // círculo que certamente contém a ilha (para rejeição rápida)
+    cx: d.cx, cz: d.cz, R: d.R,
+    maxH: peak,             // altura real do pico mais alto (após a erosão)
+    boundRadius: B,         // círculo que certamente contém a ilha (para rejeição rápida)
+    terrain: T,             // grade erodida: { N, G, cs, x0, z0, h, flow, ero, dep, tal, rivers } (para o renderizador)
     // raio do contorno (linha da costa) numa direção (ângulo em rad, medido de +X para +Z)
-    outlineRadius(theta) {
-      let f = 1;
-      for (const [a, k, p] of d.harmonics) f += a * Math.sin(k * theta + p);
-      return d.R * Math.max(0.35, f);
-    },
-    // Altura do terreno (m) no ponto (x,z) do mundo. Abaixo de 0 = submerso.
+    outlineRadius(theta) { return outlineRadiusOf(d, theta); },
+    // Altura do terreno (m) no ponto (x,z) do mundo: bilinear na grade erodida. Abaixo de 0 = submerso.
     // Retorna -Infinity fora da área da ilha.
     heightAt(x, z) {
-      const dx = x - d.cx, dz = z - d.cz;
-      const dist = Math.hypot(dx, dz);
-      if (dist > island.boundRadius) return -Infinity;
-      const theta = Math.atan2(dz, dx);
-      const rr = island.outlineRadius(theta);
-      const u = dist / rr;                 // 0 no centro, 1 na costa
-      if (u > 1.25) return -Infinity;
-      const s = 1 / 1400;                  // escala do ruído das montanhas
-      const ox = (d.seedOff * 1000) | 0;
-      const ridge = noise.ridged2((x + ox) * s, (z - ox) * s, 5, 2.1, 0.5);        // [0,1]
-      const hills = noise.fbm2((x - ox) * s * 3.1, (z + ox) * s * 3.1, 3, 2, 0.5);  // [-1,1]
-      const inland = smoothstep(1.0, 0.62, u);     // 1 no interior, 0 na costa
-      const core = smoothstep(0.95, 0.25, u);      // montanhas concentradas no centro
-      const mountain = d.maxH * Math.pow(ridge, 1.7) * core * (0.75 + 0.25 * hills);
-      const lowland = 60 * inland + 35 * hills * inland;
-      const beach = 14 * smoothstep(1.03, 0.9, u); // faixa de praia suave ~ +14 m
-      // abaixo da costa o fundo desce rápido para esconder a borda da malha
-      const shelf = u > 1.0 ? -(u - 1.0) * 1600 : 0;
-      return mountain + lowland + beach + shelf - 10 * (1 - inland);
+      const dx = x - d.cx, dz = z - d.cz, r2 = dx * dx + dz * dz;
+      if (r2 > B2) return -Infinity;
+      if (r2 > 1.5 * d.R * d.R && Math.sqrt(r2) > 1.25 * outlineRadiusOf(d, Math.atan2(dz, dx))) return -Infinity;
+      let fx = (x - x0) * inv, fz = (z - z0) * inv;
+      fx = fx < 0 ? 0 : fx > N - 1.001 ? N - 1.001 : fx;
+      fz = fz < 0 ? 0 : fz > N - 1.001 ? N - 1.001 : fz;
+      const ix = fx | 0, iz = fz | 0, u = fx - ix, v = fz - iz, k = iz * N + ix;
+      return (HG[k] * (1 - u) + HG[k + 1] * u) * (1 - v) + (HG[k + N] * (1 - u) + HG[k + N + 1] * u) * v;
     },
     // polígono da costa para o mapa (N pontos em coordenadas do mundo)
     outlinePolygon(n = 72) {
@@ -148,5 +167,6 @@ export const WORLD_DATA = {
   islandHeightAt,
   islandAt,
   bounds: { min: -WORLD.HALF, max: WORLD.HALF },
+  terrainLoadMs: TERRAIN_LOAD_MS,
 };
 export default WORLD_DATA;
