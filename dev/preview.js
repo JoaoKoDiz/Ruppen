@@ -8,6 +8,7 @@
 //   t=<segundos> frames=<n>   avança o tempo/animação antes de renderizar
 //   orbit=1                   OrbitControls interativo (para olhar no navegador)
 //   quality=low|high|ultra   (os módulos do mundo recebem low/high)   ao=0 desliga a SSAO   postdebug=1|2 mostra a AO
+//   godrays=0 flare=0 mblur=0 grain=0 ca=0 autoexp=0   desligam os efeitos de câmera (cine=0: todos)
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { WORLD, ELEPHANT, DOVE } from '../src/config.js';
@@ -49,7 +50,9 @@ const shadowFocus = q.cx !== undefined ? new THREE.Vector3(num('lx', 0), num('ly
 const viewDist = q.cx !== undefined ? shadowFocus.distanceTo(new THREE.Vector3(num('cx', 0), num('cy', 100), num('cz', 0))) : num('dist', d.dist);
 const focusSubject = viewDist > 2;
 const lighting = createLighting(scene, renderer, { quality, shadowRange: focusSubject ? THREE.MathUtils.clamp(viewDist * 0.9, 12, 4800) : undefined }); // mesmo envMap/sombras do jogo
-const post = createPost(renderer, scene, camera, { quality, ao: q.ao !== '0', debug: num('postdebug', 0) });   // mesmo pós-processamento do jogo
+const cineFlag = (k) => q[k] !== undefined ? q[k] !== '0' : q.cine !== '0'; // godrays=0 flare=0 mblur=0 grain=0 ca=0 autoexp=0 (cine=0: todos)
+const cine = Object.fromEntries(['godrays', 'flare', 'mblur', 'grain', 'ca', 'autoexp'].map((k) => [k, cineFlag(k)]));
+const post = createPost(renderer, scene, camera, { quality, ao: q.ao !== '0', debug: num('postdebug', 0), cine });   // mesmo pós-processamento do jogo
 
 // -------- ambiente opcional (sempre tenta; stubs funcionam) --------
 const updaters = [];
@@ -121,7 +124,7 @@ camera.fov = num('fov', 55); camera.updateProjectionMatrix();
 
 let time = num('t', 0);
 if (q.cx === undefined) shadowFocus.copy(target); // (kind=islands escolhe a ilha depois de criar a luz)
-function tick(dt) { time += dt; lighting.update(focusSubject ? shadowFocus : camera); lighting.refreshShadows(scene, dt); for (const u of updaters) u(time, dt); }
+function tick(dt) { time += dt; lighting.update(focusSubject ? shadowFocus : camera); lighting.refreshShadows(scene, dt); for (const u of updaters) u(time, dt); post.update(camera, time, dt); }
 lighting.enableShadows(scene);
 for (let i = 0; i < num('frames', 3); i++) tick(1 / 30);
 
