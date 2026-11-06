@@ -416,15 +416,15 @@ export function createPackageSystem({ scene, dove, flight, elephants = [], islan
       const h = e.getSurfaceHeight(state.p.x, state.p.z);
       if (h === null || h === undefined || !Number.isFinite(h)) continue;
       if (bottom > h) continue;
-      // estava fora da superfície no quadro anterior? (vindo de cima ou entrando de lado num degrau da cidade)
+      // Abaixo da superfície: pousa SEMPRE (nunca fica caindo dentro do elefante).
+      // Se entrou de lado numa parede (muito abaixo do novo topo) e o quadro anterior estava
+      // fora/mais baixo, pousa no pé da parede, na posição anterior; senão pousa no topo informado.
       const hPrev = e.getSurfaceHeight(state.pPrev.x, state.pPrev.z);
-      const prevBottom = state.pPrev.y - CAGE_HEIGHT;
-      const wasOutside = hPrev === null || hPrev === undefined || !Number.isFinite(hPrev) || prevBottom > hPrev;
-      if (wasOutside) {
-        // entrou de lado numa parede (muito abaixo do novo topo): pousa no pé da parede, na posição anterior
-        if (bottom < h - P.LAND_DEPTH_TOLERANCE && hPrev !== null && Number.isFinite(hPrev)) { state.p.x = state.pPrev.x; state.p.z = state.pPrev.z; land(e, hPrev); return; }
-        land(e, h); return;
+      const prevOk = hPrev !== null && hPrev !== undefined && Number.isFinite(hPrev);
+      if (bottom < h - P.LAND_DEPTH_TOLERANCE && prevOk && hPrev < h - P.LAND_DEPTH_TOLERANCE) {
+        state.p.x = state.pPrev.x; state.p.z = state.pPrev.z; land(e, hPrev); return;
       }
+      land(e, h); return;
     }
     // mar ou ilha?
     const g = groundAt(state.p.x, state.p.z);
