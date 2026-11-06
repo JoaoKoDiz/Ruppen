@@ -1,0 +1,92 @@
+{
+  "source": "https://polyhaven.com (CC0)",
+  "resolution": "1k",
+  "textures": {
+    "aerial_rocks_02": {
+      "diff": "assets/tex/aerial_rocks_02_diff.jpg",
+      "nor_gl": "assets/tex/aerial_rocks_02_nor_gl.jpg",
+      "rough": "assets/tex/aerial_rocks_02_rough.jpg"
+    },
+    "cliff_side": {
+      "diff": "assets/tex/cliff_side_diff.jpg",
+      "nor_gl": "assets/tex/cliff_side_nor_gl.jpg",
+      "rough": "assets/tex/cliff_side_rough.jpg"
+    },
+    "aerial_grass_rock": {
+      "diff": "assets/tex/aerial_grass_rock_diff.jpg",
+      "nor_gl": "assets/tex/aerial_grass_rock_nor_gl.jpg",
+      "rough": "assets/tex/aerial_grass_rock_rough.jpg"
+    },
+    "forest_ground_04": {
+      "diff": "assets/tex/forest_ground_04_diff.jpg",
+      "nor_gl": "assets/tex/forest_ground_04_nor_gl.jpg",
+      "rough": "assets/tex/forest_ground_04_rough.jpg"
+    },
+    "coast_sand_01": {
+      "diff": "assets/tex/coast_sand_01_diff.jpg",
+      "nor_gl": "assets/tex/coast_sand_01_nor_gl.jpg",
+      "rough": "assets/tex/coast_sand_01_rough.jpg"
+    },
+    "damp_beach_sand": {
+      "diff": "assets/tex/damp_beach_sand_diff.jpg",
+      "nor_gl": "assets/tex/damp_beach_sand_nor_gl.jpg",
+      "rough": "assets/tex/damp_beach_sand_rough.jpg"
+    },
+    "bark_brown_02": {
+      "diff": "assets/tex/bark_brown_02_diff.jpg",
+      "nor_gl": "assets/tex/bark_brown_02_nor_gl.jpg"
+    },
+    "fabric_leather_02": {
+      "diff": "assets/tex/fabric_leather_02_diff.jpg",
+      "nor_gl": "assets/tex/fabric_leather_02_nor_gl.jpg",
+      "rough": "assets/tex/fabric_leather_02_rough.jpg"
+    },
+    "brown_mud_dry": {
+      "diff": "assets/tex/brown_mud_dry_diff.jpg",
+      "nor_gl": "assets/tex/brown_mud_dry_nor_gl.jpg",
+      "rough": "assets/tex/brown_mud_dry_rough.jpg"
+    },
+    "poly_wool_herringbone": {
+      "diff": "assets/tex/poly_wool_herringbone_diff.jpg",
+      "nor_gl": "assets/tex/poly_wool_herringbone_nor_gl.jpg",
+      "rough": "assets/tex/poly_wool_herringbone_rough.jpg"
+    },
+    "wool_boucle": {
+      "diff": "assets/tex/wool_boucle_diff.jpg",
+      "nor_gl": "assets/tex/wool_boucle_nor_gl.jpg"
+    },
+    "brown_leather": {
+      "diff": "assets/tex/brown_leather_diff.jpg",
+      "nor_gl": "assets/tex/brown_leather_nor_gl.jpg",
+      "rough": "assets/tex/brown_leather_rough.jpg"
+    },
+    "white_stucco_02": {
+      "diff": "assets/tex/white_stucco_02_diff.jpg",
+      "nor_gl": "assets/tex/white_stucco_02_nor_gl.jpg",
+      "rough": "assets/tex/white_stucco_02_rough.jpg"
+    },
+    "beige_wall_001": {
+      "diff": "assets/tex/beige_wall_001_diff.jpg",
+      "nor_gl": "assets/tex/beige_wall_001_nor_gl.jpg",
+      "rough": "assets/tex/beige_wall_001_rough.jpg"
+    },
+    "clay_roof_tiles_02": {
+      "diff": "assets/tex/clay_roof_tiles_02_diff.jpg",
+      "nor_gl": "assets/tex/clay_roof_tiles_02_nor_gl.jpg",
+      "rough": "assets/tex/clay_roof_tiles_02_rough.jpg"
+    },
+    "brick_wall_02": {
+      "diff": "assets/tex/brick_wall_02_diff.jpg",
+      "nor_gl": "assets/tex/brick_wall_02_nor_gl.jpg",
+      "rough": "assets/tex/brick_wall_02_rough.jpg"
+    },
+    "marble_01": {
+      "diff": "assets/tex/marble_01_diff.jpg",
+      "nor_gl": "assets/tex/marble_01_nor_gl.jpg",
+      "rough": "assets/tex/marble_01_rough.jpg"
+    }
+  },
+  "hdri": {
+    "kloofendal_48d_partly_cloudy_puresky": "assets/hdri/kloofendal_48d_partly_cloudy_puresky_1k.hdr"
+  }
+}
