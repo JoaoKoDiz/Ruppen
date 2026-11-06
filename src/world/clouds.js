@@ -731,7 +731,8 @@ export function createClouds(scene, worldData, opts = {}) {
       for (let i = 0; i < NUM_ANCHORS; i++) anchors.push(elephants[i % elephants.length]);
       sortTimer = Infinity;
       // ossos das patas (inclinação do passo): o raio das nuvens pára na superfície da pata
-      if (vol) vol.setLegBones(anchors.map((e) => (e && e.group && e.group.getObjectByName) ? LEG_NAMES.map((n) => e.group.getObjectByName(n) || null) : null));
+      // (nomes antigos legFL… ou novos hipFL… — mesma ordem FL, FR, BL, BR e mesma convenção rotation.z)
+      if (vol) vol.setLegBones(anchors.map((e) => (e && e.group && e.group.getObjectByName) ? LEG_NAMES.map((n) => e.group.getObjectByName(n) || e.group.getObjectByName(n.replace('leg', 'hip')) || null) : null));
     },
     // Modo recomendado com o pós (src/world/post.js): as nuvens viram um passe 'beforeGrade' (depois da
     // AO, antes do bloom) com oclusão exata pela profundidade da cena. main.js: clouds.attachPost?.(post)
