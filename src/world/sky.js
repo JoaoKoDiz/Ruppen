@@ -23,7 +23,7 @@ export const SKY_MODEL = {
   betaM: 0.8e-5,                       // Mie (haze leve: dia limpo mas leitoso no horizonte)
   HM: 1200,
   g: 0.70,                             // Henyey-Greenstein (lobo para a frente: clareamento ao redor do sol)
-  sunI: [7.4, 7.5, 7.9],               // irradiância do sol (já com um leve azul: céu de verão)
+  sunI: [6.5, 6.7, 7.2],               // irradiância do sol (leve azul: zênite azul profundo como nas referências)
   hazeK: 0.10,                         // véu de espalhamento múltiplo em função da massa de ar
   hazeMix: 0.75,
 };

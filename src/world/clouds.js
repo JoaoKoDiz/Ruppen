@@ -261,9 +261,9 @@ void main() {
   float relief = 1.0 - 0.75 * vBacklit;
   float wrapL = mix(0.62, saturate(ndl * 0.65 + 0.35), relief);
   // "powder"/espalhamento múltiplo: miolo denso um pouco mais escuro, bordas finas claras
-  float powder = 1.0 - (0.40 - 0.22 * vBacklit) * dens * dens;
+  float powder = 1.0 - (0.48 - 0.26 * vBacklit) * dens * dens;
   // auto-sombra da massa acima: base da nuvem escura, topo claro
-  float heightLit = mix(0.16, 1.0, pow(vShade, 0.8));
+  float heightLit = mix(0.10, 1.0, pow(vShade, 1.3));
   // silver lining: borda fina (baixa densidade) dos puffs do contorno superior, em contraluz
   float edge = pow(1.0 - dens, 3.0) * smoothstep(0.02, 0.35, tx.a);
   vec2 sd = vSunB.xy / max(length(vSunB.xy), 1e-3);
@@ -519,17 +519,17 @@ function generatePuffs(worldData, scale, clusters) {
       const ang = (i / nBig) * Math.PI * 2 + rng.range(-0.15, 0.15);
       const rad = R * rng.range(0.78, 1.08);
       const size = rng.range(850, 1050);
-      out.push({ x: Math.cos(ang) * rad, y: size * 0.38, z: Math.sin(ang) * rad, size, shade: 0.45, rot: rng.range(-0.3, 0.3), variant: variant(), group: e });
+      out.push({ x: Math.cos(ang) * rad, y: size * 0.24, z: Math.sin(ang) * rad, size, shade: 0.45, rot: rng.range(-0.3, 0.3), variant: variant(), group: e });
     }
     for (let i = 0; i < nFoot; i++) {
       const ang = rng.range(0, Math.PI * 2);
-      // mar de nuvens: denso perto das patas (0,6–1,2 R), estendendo-se até ~1,7 R e baixando para fora
+      // mar de nuvens: denso perto das patas (0,6–1,2 R), estendendo-se até ~1,45 R e baixando para fora
       // (concentrado: puffs vizinhos sempre se sobrepõem — massa contínua, sem bolas soltas)
-      const rad = Math.min(1.7 * R, Math.max(0.3 * R, R * (0.92 + rng.gauss() * 0.30)));
-      const outer = clamp01((rad / R - 1.15) / 0.55);            // 0 dentro do anel, 1 na borda externa
+      const rad = Math.min(1.45 * R, Math.max(0.3 * R, R * (0.92 + rng.gauss() * 0.28)));
+      const outer = clamp01((rad / R - 1.1) / 0.35);            // 0 dentro do anel, 1 na borda externa
       const yt = Math.pow(rng(), 2.0) * (1 - 0.6 * outer);       // a maioria fica baixa, junto à água
       const size = (380 + 420 * rng()) * (1 - 0.15 * yt);        // puffs grandes e sobrepostos (massa contínua)
-      const y = Math.max(size * 0.36, yt * bankTop);
+      const y = Math.max(size * 0.24, yt * bankTop);             // a base do puff mergulha no mar (sem fresta sob o banco)
       const shade = 0.30 + 0.70 * clamp01(y / bankTop);
       out.push({ x: Math.cos(ang) * rad, y, z: Math.sin(ang) * rad, size, shade, rot: rng.range(-0.4, 0.4), variant: variant(), group: e });
     }
@@ -603,9 +603,9 @@ export function createClouds(scene, worldData, opts = {}) {
     THREE.UniformsLib.fog,
     {
       uMap: { value: null },
-      uSunColor: { value: new THREE.Color(COLORS.sunLight).multiplyScalar(1.85) },
-      uAmbTop: { value: new THREE.Color(COLORS.cloudLit).multiplyScalar(0.78) },
-      uShade: { value: new THREE.Color(COLORS.cloudShade).multiplyScalar(1.0) },
+      uSunColor: { value: new THREE.Color(COLORS.sunLight).multiplyScalar(1.7) },
+      uAmbTop: { value: new THREE.Color(COLORS.cloudLit).multiplyScalar(0.72) },
+      uShade: { value: new THREE.Color(COLORS.cloudShade).multiplyScalar(0.9) },
       uAnchors: { value: anchorVals },
       uWind: { value: WIND.clone() },
       uTime: { value: 0 },
