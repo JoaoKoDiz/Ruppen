@@ -32,8 +32,10 @@
 //  cauda) e grupos de material (pele, tecido da tromba, panos, marfim, ouro,
 //  cidade, borla, olhos, prata) + 4 InstancedMesh (tapete de casas ×2, tachas,
 //  pompons). Tudo o que é rígido vai preso ao osso raiz; o que anima vai preso
-//  ao osso da parte. Resultado: 14 draw calls e ≈ 208 k triângulos por elefante
-//  (quality=high; ≈ 120 k em low).
+//  ao osso da parte. Resultado: 16 draw calls e ≈ 309 k triângulos por elefante com o tapete visível
+//  (quality=high, sem contar a passada de sombra).
+//  Materiais PBR (ELEPHANT_MATERIALS): pele com normal micro (rugas + fendas + poros), roughnessMap fosco,
+//  rugas finas onduladas pintadas e AO de cavidade por vértice tirado da própria malha esculpida.
 //
 //  Espaço local: +X = frente, +Y = cima, +Z = lado direito; origem no
 //  nível do mar entre as patas (ver config.js / ARCHITECTURE.md).
@@ -636,13 +638,13 @@ function makePompomTextures() {
   // base quase branca: a cor real vem da instância (evita escurecer duas vezes)
   ctx.fillStyle = '#ededed'; ctx.fillRect(0, 0, S, S);
   const blot = noiseCanvas(128, 61, 9, 3, 170, 255);
-  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.8; ctx.drawImage(blot, 0, 0, S, S);
+  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.45; ctx.drawImage(blot, 0, 0, S, S);
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
   const rng = createRng(SEED + 606);
   const b = makeCanvas(S, S), bctx = b.getContext('2d');
   bctx.fillStyle = '#808080'; bctx.fillRect(0, 0, S, S);
-  for (let i = 0; i < 2600; i++) {
-    const x = rng() * S, y = rng() * S, a = rng() * TAU, L = 4 + rng() * 9, w = 0.8 + rng() * 1.4;
+  for (let i = 0; i < 4200; i++) {
+    const x = rng() * S, y = rng() * S, a = rng() * TAU, L = 4 + rng() * 9, w = 0.7 + rng() * 1.2;
     const light = rng() < 0.5;
     ctx.strokeStyle = light ? `rgba(255,255,255,${0.25 + rng() * 0.35})` : `rgba(40,40,40,${0.15 + rng() * 0.3})`;
     ctx.lineWidth = w; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(a) * L, y + Math.sin(a) * L); ctx.stroke();
@@ -716,7 +718,7 @@ function getShared() {
     pink: new THREE.MeshStandardMaterial({ map: tassel, vertexColors: true, roughness: 0.85, metalness: 0, envMapIntensity: 0.4 }),
     // olho: esclera molhada (clearcoat + roughness baixa); brilho branco acende via emissiveMap
     eye: new THREE.MeshPhysicalMaterial({ map: eye, emissiveMap: eye, emissive: 0xffffff, emissiveIntensity: 0.45, roughness: MT.EYE_ROUGHNESS, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 1 }),
-    silver: new THREE.MeshStandardMaterial({ color: 0xc9c6c2, metalness: 1, roughness: 1, roughnessMap: gold.rough, normalMap: gold.normal, normalScale: new THREE.Vector2(0.3, 0.3), emissive: 0x24221f, emissiveIntensity: 0.5, envMapIntensity: 0.75 }),
+    silver: new THREE.MeshStandardMaterial({ color: 0xbdb9b2, metalness: 1, roughness: 1, roughnessMap: gold.rough, normalMap: gold.normal, normalScale: new THREE.Vector2(0.3, 0.3), emissive: 0x2a2724, emissiveIntensity: 0.5, envMapIntensity: 0.55 }),
     // lã: sem brilho algum + pelos em relevo (a cor vem da instância)
     pompom: new THREE.MeshStandardMaterial({ map: pom.map, normalMap: pom.normal, normalScale: new THREE.Vector2(1.1, 1.1), roughness: 1.0, metalness: 0, envMapIntensity: 0.4 }),
     // crosta de casinhas do dorso (casca fina; alfa por vértice esmaece as bordas)
@@ -911,7 +913,12 @@ function fuzzySphere(r, ws, hs, amount) {
   const g = new THREE.SphereGeometry(r, ws, hs);
   // deslocamento radial por hash do vértice (tufos); mergeVertices antes para o polo deslocar junto
   const m = mergeVertices(g);
-  mapVertices(m, (v) => { const k = 9 / r; const n = hashInt(Math.round(v.x * k * 1.31), Math.round(v.y * k * 1.07), Math.round(v.z * k * 1.19)); v.multiplyScalar(1 + amount * (n - 0.5)); });
+  // tufos: lóbulos de baixa frequência (ruído 3D) + fibras soltas (hash por vértice) → lã, não pedra
+  mapVertices(m, (v) => {
+    const k = 9 / r; const n = hashInt(Math.round(v.x * k * 1.31), Math.round(v.y * k * 1.07), Math.round(v.z * k * 1.19));
+    const lobe = noise.noise3(v.x / r * 2.2 + 4.1, v.y / r * 2.2, v.z / r * 2.2);
+    v.multiplyScalar(1 + amount * (0.55 * (n - 0.5) + 0.6 * lobe));
+  });
   return m;
 }
 
@@ -1936,7 +1943,7 @@ export function createElephant(route, index, opts = {}) {
   // ---- pompons (instâncias com cor) ----
   {
     // lã fibrosa: mais tufos (deslocamento maior) + normal de pelos; cores levemente dessaturadas e variadas
-    const pomGeo = fuzzySphere(1, low ? 10 : 14, low ? 7 : 10, MT.POMPOM_FUZZ);
+    const pomGeo = fuzzySphere(1, low ? 12 : 18, low ? 8 : 12, MT.POMPOM_FUZZ);
     scaleUV(pomGeo, 2, 1);
     const inst = new THREE.InstancedMesh(pomGeo, S.mat.pompom, garland.length);
     const dummy = new THREE.Object3D(); const col = new THREE.Color(), grey = new THREE.Color(0x8c8c8c);
