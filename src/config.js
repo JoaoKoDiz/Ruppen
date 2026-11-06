@@ -454,11 +454,15 @@ export const ELEPHANT_MODEL = {
   LOD_DISTANCE: 10000,      // m (mundo) — além desta distância da câmera o tapete instanciado some (fica a crosta)
   PALACE_X: -262,           // x local do centro do palácio (atrás do centro)
   PALACE_SIZE: { hx: 250, hz: 190 },    // meio-lados do bloco arcado principal do palácio (≈ 1/3 do corpo)
-  PLAZA: { x0: -60, x1: 120, hz: 75 },  // praça de mercado (no centro do dorso: ponto da entrega)
+  // praça de mercado (no centro do dorso, À FRENTE do muro de tijolos do palácio, x 20..60: ponto da entrega).
+  // top: piso calçado (local); a pele esculpida é CORTADA num terraço plano (sculpt.js) cut m abaixo do
+  // piso (a crosta fica logo abaixo dele) no retângulo + cutMargin [x, z]; onde a pele cai abaixo do
+  // piso (laterais), o piso é sustentado por um muro de arrimo em degraus (tier: [largura, altura]).
+  PLAZA: { x0: 68, x1: 228, hz: 66, top: 1522, cut: 3.4, cutMargin: [36, 52], tier: [2.4, 2.4] },
   TUSK_HOUSE_DIV: 19,       // lado da casinha da presa = diâmetro local / TUSK_HOUSE_DIV
   TUSK_HOUSE_GAP: 1.4,      // passo entre casinhas da presa (× lado)
   TUSK_HOUSE_SPAN: 1.35,    // rad — meio-ângulo coberto pelas casas (±: quase toda a metade de cima da presa)
-  TUSK_HOUSE_MAX: 1150,     // limite de casinhas por par de presas (orçamento de triângulos)
+  TUSK_HOUSE_MAX: 950,     // limite de casinhas por par de presas (orçamento de triângulos)
   TUSK_TOWERS: 9,           // torres brancas por presa
   FOLD_BODY: 28,            // m — amplitude das dobras esculpidas do corpo (geometria; legíveis a 5–10 km)
   FOLD_HEAD: 9,             // m — idem cabeça
@@ -528,7 +532,7 @@ export const ELEPHANT_CITY = {
   EAVE: 0.28,               // beiral dos telhados de 4 águas
   ROOF_PITCH: 0.42,         // altura da cumeeira = ROOF_PITCH × lado menor (≈ 40°)
   AWNING_Y: 0.92,           // altura da borda presa dos toldos (térreo)
-  TILE: { stucco: 1.6, beige: 2.2, roof: 0.9, brick: 1.5, marble: 3.2, pave: [1.3, 0.9] },   // m por ladrilho das texturas reais / lajes
+  TILE: { stucco: 1.6, beige: 2.2, roof: 0.9, brick: 1.5, marble: 3.2, pave: [0.7, 0.5] },   // m por ladrilho das texturas reais / lajes
   SHUTTERS: 0.45,           // fração das casas com venezianas
   LIT_WINDOWS: 0.06,        // fração das janelas acesas (quentes)
   ENV: 0.6,                 // envMapIntensity do material da cidade
@@ -540,12 +544,25 @@ export const ELEPHANT_CITY = {
   AVENUE_EVERY: 4,
   WARP: 16,                 // deformação da grade das ruas (m)
   FILL: { min: 0.9, max: 0.98 },         // fração da célula ocupada pela casa (o resto: becos)
-  MIX: { flat: 0.3, hip: 0.53, tall: 0.11, dome: 0.06 },      // arquétipos do tapete
+  MIX: { flat: 0.31, hip: 0.53, tall: 0.11, dome: 0.05 },      // arquétipos do tapete
   STOREYS: { flat: [3, 5], hip: [2, 4], tall: [5, 7], dome: [3, 4] },
   PLAZAS: 4,                // pracinhas espalhadas (com cúpula/obelisco/chafariz no centro)
   PLAZA_R: { min: 18, max: 30 },
-  STALLS: 110,              // bancas do mercado (praça da entrega)
-  UMBRELLAS: 30,
+  // mercado (praça da entrega) em escala humana: banca ≈ 5,5 m × 3,5 m no mundo (modelo-base ×3)
+  STALLS: 300,              // bancas em fileiras duplas (costas com costas) com corredores
+  UMBRELLAS: 50,            // guarda-sóis avulsos (vendedores no chão) nas bordas livres
+  CARTS: 20,                // carrinhos de mão com mercadoria
+  CRATES: 80,               // caixotes empilhados nas pontas das fileiras e junto aos carrinhos
+  MARKET: {
+    STALL_W: [1.75, 2.0], STALL_H: [1.08, 1.28], STALL_D: [1.2, 1.4],   // escala (local) da banca unitária
+    UMB: [1.05, 1.35],      // escala (local) do guarda-sol
+    ROW_PITCH: 6.4,         // passo (z) das fileiras duplas: 2 bancas (≈2,6) + corredor (≈3,8 → 11 m no mundo)
+    ROW_Z0: 10,             // centro da 1ª fileira dupla (|z|): bulevar central livre com o chafariz
+    BAZAAR: [42, 36],       // meia-extensão (x a partir do centro, |z|) do bazar; fora dele: praça livre (guarda-sóis, carrinhos)
+    SEG: [6, 9],            // bancas por trecho de fileira (entre corredores transversais)
+    CROSS: 5,               // largura dos corredores transversais
+    FOUNTAIN_CLEAR: 24,     // raio livre ao redor do chafariz
+  },
   CRUST_FADE: [5200, 7600], // m (mundo): a crosta passa de "chão de pedra" (perto) a "casinhas vistas do alto" (longe)
 };
 // Pele ESCULPIDA como uma única malha (src/elephant/sculpt.js): campo de distância com união suave

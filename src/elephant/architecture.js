@@ -213,7 +213,7 @@ vec3 archTn = vec3( 1.0, 0.0, 0.0 ), archBn = vec3( 0.0, 1.0, 0.0 );
 		vec3 cc = tint;
 		float pr = fract( rnd * 5.71 );
 		if ( vSurf.y > 0.5 ) cc = pr < 0.25 ? vec3( 0.55, 0.08, 0.06 ) : ( pr < 0.5 ? vec3( 0.12, 0.32, 0.14 ) : ( pr < 0.75 ? vec3( 0.10, 0.22, 0.45 ) : vec3( 0.75, 0.48, 0.12 ) ) );
-		float stp = mix( step( 0.5, fract( u / 0.55 ) ), 0.5, smoothstep( 0.1, 0.3, fw ) );
+		float stp = mix( step( 0.5, fract( u / 0.3 ) ), 0.5, smoothstep( 0.06, 0.18, fw ) );
 		if ( fract( rnd * 9.13 ) > 0.5 ) cc = mix( cc, vec3( 0.82, 0.8, 0.74 ), stp );
 		col = cc; archNXY = archNrm( tStuN, f, fdx, fdy, 2.0 / ARCH_T_STU ) * 0.25; archRough = 0.95;
 	} else if ( ty == 9 ) {                                     // madeira
@@ -222,10 +222,10 @@ vec3 archTn = vec3( 1.0, 0.0, 0.0 ), archBn = vec3( 0.0, 1.0, 0.0 );
 		col = vec3( 0.03, 0.08, 0.09 ); archRough = 0.06; archF90 = 1.0;
 		archNXY = 0.08 * vec2( sin( f.x * 3.1 + f.y * 1.3 ), sin( f.y * 2.7 - f.x * 0.9 ) );
 	} else if ( ty == 14 ) {                                    // frutas e cestos nas bancas
-		vec2 pc = f / 0.32; vec2 ci = floor( pc ); float hp = aH1( ci + 1.3 + rnd * 17.0 );
+		vec2 pc = f / 0.11; vec2 ci = floor( pc ); float hp = aH1( ci + 1.3 + rnd * 17.0 );
 		vec3 pcol = hp < 0.2 ? vec3( 0.8, 0.32, 0.04 ) : ( hp < 0.4 ? vec3( 0.55, 0.05, 0.04 ) : ( hp < 0.6 ? vec3( 0.2, 0.38, 0.06 ) : ( hp < 0.8 ? vec3( 0.85, 0.62, 0.1 ) : vec3( 0.5, 0.3, 0.15 ) ) ) );
 		float dm = smoothstep( 0.42, 0.3, length( fract( pc ) - 0.5 ) );
-		col = mix( vec3( 0.3, 0.2, 0.1 ), pcol, mix( dm, 0.6, smoothstep( 0.08, 0.25, fw ) ) ); archRough = 0.7;
+		col = mix( vec3( 0.3, 0.2, 0.1 ), pcol, mix( dm, 0.6, smoothstep( 0.03, 0.09, fw ) ) ); archRough = 0.7;
 	}
 	// ---------------- janelas em arco (casas, palácio, arcadas de tijolo) ----------------
 	if ( ty == 0 || ty == 4 || ty == 5 ) {
@@ -543,16 +543,46 @@ export function getArchetypes() {
     b.quad([-X, Y, Z], [X, Y, Z], [X, Y, -Z], [-X, Y, -Z], [SF.PRODUCE, 0]);
     const C = [SF.CANVAS, 0];
     b.quad([-0.56, 0.8, 0.48], [0.56, 0.8, 0.48], [0.56, 1, 0], [-0.56, 1, 0], C); b.quad([0.56, 0.8, -0.48], [-0.56, 0.8, -0.48], [-0.56, 1, 0], [0.56, 1, 0], C);
-    for (const [x, z] of [[-0.48, 0.4], [0.48, 0.4], [-0.48, -0.4], [0.48, -0.4]]) b.quad([x - 0.018, 0, z], [x + 0.018, 0, z], [x + 0.018, 0.82, z], [x - 0.018, 0.82, z], W);
+    // 2 postes na frente (os de trás ficam colados aos da banca vizinha: as bancas vão em pares de costas)
+    for (const [x, z] of [[-0.48, 0.4], [0.48, 0.4]]) b.quad([x - 0.018, 0, z], [x + 0.018, 0, z], [x + 0.018, 0.82, z], [x - 0.018, 0.82, z], W);
     out.stall = b.build();
   }
   // guarda-sol redondo (cone de lona listrada + haste)
   {
-    const b = new GeoB(), C = [SF.CANVAS, 0], n = 8;
+    const b = new GeoB(), C = [SF.CANVAS, 0], n = 6;
     for (let i = 0; i < n; i++) { const a0 = (i / n) * TAU, a1 = ((i + 1) / n) * TAU; b.tri([Math.cos(a1) * 0.55, 0.8, Math.sin(a1) * 0.55], [Math.cos(a0) * 0.55, 0.8, Math.sin(a0) * 0.55], [0, 1, 0], C); }
     b.quad([-0.015, 0, 0], [0.015, 0, 0], [0.015, 0.95, 0], [-0.015, 0.95, 0], [SF.WOOD, 0]);
     b.quad([0, 0, -0.015], [0, 0, 0.015], [0, 0.95, 0.015], [0, 0.95, -0.015], [SF.WOOD, 0]);
     out.umbrella = b.build();
+  }
+  // carrinho de mão (geometria em metros do modelo-base; escala ≈ 1 → ≈ 3,3 × 1,4 m no mundo): caçamba de
+  // tábuas com a carga (frutas), 2 rodas raiadas (octógonos de 2 faces) e 2 varais
+  {
+    const b = new GeoB(), W = [SF.WOOD, 0], P = [SF.PRODUCE, 0];
+    const box = (x0, x1, y0, y1, z0, z1, s, topS = s) => {
+      b.quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], s); b.quad([x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], s);
+      b.quad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], s); b.quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], s);
+      b.quad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], topS);
+    };
+    box(-0.5, 0.42, 0.2, 0.42, -0.23, 0.23, W, P);                          // caçamba com a carga
+    for (const z of [-0.185, 0.185]) b.quad([0.42, 0.35, z + 0.02], [1.0, 0.33, z + 0.02], [1.0, 0.33, z - 0.02], [0.42, 0.35, z - 0.02], W);   // varais
+    for (const zs of [-0.26, 0.26]) {
+      const n = 6, r = 0.2, cyy = 0.2;
+      for (let i = 0; i < n; i++) {
+        const a0 = (i / n) * TAU, a1 = ((i + 1) / n) * TAU, c = [0.08, cyy, zs];
+        const p0 = [0.08 + Math.cos(a0) * r, cyy + Math.sin(a0) * r, zs], p1 = [0.08 + Math.cos(a1) * r, cyy + Math.sin(a1) * r, zs];
+        b.tri(c, p0, p1, W); b.tri(c, p1, p0, W);
+      }
+    }
+    out.cart = b.build();
+  }
+  // caixote de madeira (unitário: x,z ±0.5, y 0..1) com frutas/verduras por cima
+  {
+    const b = new GeoB(), W = [SF.WOOD, 0];
+    b.quad([-0.5, 0, 0.5], [0.5, 0, 0.5], [0.5, 1, 0.5], [-0.5, 1, 0.5], W); b.quad([0.5, 0, -0.5], [-0.5, 0, -0.5], [-0.5, 1, -0.5], [0.5, 1, -0.5], W);
+    b.quad([0.5, 0, 0.5], [0.5, 0, -0.5], [0.5, 1, -0.5], [0.5, 1, 0.5], W); b.quad([-0.5, 0, -0.5], [-0.5, 0, 0.5], [-0.5, 1, 0.5], [-0.5, 1, -0.5], W);
+    b.quad([-0.5, 1, 0.5], [0.5, 1, 0.5], [0.5, 1, -0.5], [-0.5, 1, -0.5], [SF.PRODUCE, 0]);
+    out.crate = b.build();
   }
   archetypeCache = out;
   return out;

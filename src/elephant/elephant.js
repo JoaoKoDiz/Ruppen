@@ -94,7 +94,43 @@ const BRICK = { x: 215, z: -205, hx: 105, hz: 70 }, BRICK_TOP = 1690; // prédio
 const PALACE_PLINTH = 1545;      // topo do soco de tijolos arcado do palácio
 const PALACE_T2 = { hx: PS.hx * 0.62, hz: PS.hz * 0.72 };   // 2º corpo (recuado) do palácio
 const DOME_HF = 1.12;            // altura da cúpula em bulbo / raio
-const PLAZA_TOP = 1518;          // piso da praça de mercado (centro do dorso)
+// Praça do mercado (ponto da entrega): o piso é calculado da superfície esculpida REAL (pele + dobras +
+// crosta) amostrada no retângulo da praça — a pele é cortada num terraço plano ali (sculpt.js, PLAZA_CUT),
+// então normalmente o piso = PZ.top; se a escultura mudar, o piso sobe o necessário para nada furar.
+// Onde a pele cai abaixo do piso (laterais), muro de arrimo em degraus (PZ.tier: [largura, altura]).
+let PLAZA_INFO = null;
+function plazaInfo() {
+  if (PLAZA_INFO) return PLAZA_INFO;
+  const n = new V3(), p = new V3();
+  const skinH = (x, z) => { const y = skinTopY(x, z); if (y === null) return null; gradient(x, y, z, n); p.set(x, y, z); return y + foldAt(p, n) * n.y; };
+  const CO = EM.CRUST_OFFSET;
+  let maxIn = -Infinity;
+  for (let x = PZ.x0 - 1.5; x <= PZ.x1 + 1.6; x += (PZ.x1 - PZ.x0 + 3) / 48) for (let z = -PZ.hz - 1.5; z <= PZ.hz + 1.6; z += (2 * PZ.hz + 3) / 40) {
+    const h = skinH(x, z); if (h !== null) maxIn = Math.max(maxIn, h);
+  }
+  const top = Math.max(PZ.top ?? 1518, Math.ceil((maxIn + CO + 0.3) * 10) / 10);
+  const [TW, TH] = PZ.tier || [2.4, 2.4];
+  // borda do retângulo: pele mais baixa → quantos degraus o muro de arrimo precisa
+  let minEdge = Infinity;
+  const per = [];
+  for (let t = 0; t <= 1.0001; t += 1 / 40) { const x = lerp(PZ.x0, PZ.x1, t), z = lerp(-PZ.hz, PZ.hz, t); per.push([x, -PZ.hz], [x, PZ.hz], [PZ.x0, z], [PZ.x1, z]); }
+  for (const [x, z] of per) { const h = skinH(x, z); if (h !== null) minEdge = Math.min(minEdge, h); }
+  const NT = Math.max(0, Math.min(8, Math.ceil((top - (minEdge + CO)) / TH)));
+  let minAll = minEdge;
+  const M = NT * TW + 2;
+  for (const [x, z] of per) { const h = skinH(x + Math.sign(x - (PZ.x0 + PZ.x1) / 2) * M * (Math.abs(z) < PZ.hz ? 1 : 0), z + Math.sign(z) * M * (Math.abs(z) >= PZ.hz ? 1 : 0)); if (h !== null) minAll = Math.min(minAll, h); }
+  PLAZA_INFO = { top, maxSkin: maxIn, minEdge, NT, TW, TH, bottom: Math.min(minAll, minEdge) - 24, cx: (PZ.x0 + PZ.x1) / 2 };
+  return PLAZA_INFO;
+}
+// distância (caixa, Chebyshev) para fora do retângulo da praça (≤ 0 dentro)
+const plazaOut = (x, z) => Math.max(PZ.x0 - x, x - PZ.x1, Math.abs(z) - PZ.hz);
+// altura do piso da praça / do degrau do muro de arrimo em (x,z); −∞ fora dos degraus
+function plazaLevel(x, z) {
+  const P = plazaInfo(), o = plazaOut(x, z);
+  if (o <= 0) return P.top;
+  const k = Math.ceil(o / P.TW);
+  return k > P.NT ? -Infinity : P.top - k * P.TH;
+}
 
 // ------------------------------------------------------------------
 //  utilidades
@@ -1659,7 +1695,7 @@ export function createElephant(route, index, opts = {}) {
   // entrega) com bancas de toldo colorido, guarda-sóis e chafariz; 2 templos; terraços nos flancos;
   // mesquitas e torres espalhadas. Tudo num único material (architecture.js).
   const carpet = { flat: [], hip: [], tall: [], dome: [] };   // instâncias do tapete: {m: Matrix4, c: cor}
-  const market = { stall: [], umbrella: [] };
+  const market = { stall: [], umbrella: [], cart: [], crate: [] };
   const tuskInst = [];                      // instâncias das casinhas das presas
   const rngCity = createRng(SEED + 9001 + index * 31);
   const RX = B.rx * BODY_SX;
@@ -1672,6 +1708,7 @@ export function createElephant(route, index, opts = {}) {
   const inBrick = (x, z) => Math.abs(x - BRICK.x) < BRICK.hx + 6 && Math.abs(z - BRICK.z) < BRICK.hz + 6;
   const inPlaza = (x, z) => x > PZ.x0 && x < PZ.x1 && Math.abs(z) < PZ.hz;
   const nearPlaza = (x, z) => x > PZ.x0 - 40 && x < PZ.x1 + 40 && Math.abs(z) < PZ.hz + 40;
+  const PL = plazaInfo(), plazaTop = PL.top;
   const TEMPLES = [{ x: 390, z: 235, hx: 80, hz: 58, h: 140, ang: 0.25 }, { x: -95, z: -335, hx: 72, hz: 56, h: 125, ang: -0.2 }];
   const inTemple = (x, z) => TEMPLES.some((t) => Math.abs(x - t.x) < t.hx + 30 && Math.abs(z - t.z) < t.hz + 30);
   // tintas pastel das fachadas (multiplicam o reboco real): branco, creme, rosa-pálido, ocre, terracota clara
@@ -1736,6 +1773,7 @@ export function createElephant(route, index, opts = {}) {
         if (insideNeckOrHead(tmp3)) continue;
         if (Math.abs(nx2) < 0.075 && Math.abs(p2) > 1.05) continue; // trama da barriga
         if (inPalace(lx, lz) || inBrick(lx, lz) || inPlaza(lx, lz) || inTemple(lx, lz) || inSmallPlaza(lx, lz)) continue;
+        if (plazaLevel(lx, lz) > tmp3.y + EM.CRUST_OFFSET - 0.3) continue;   // degraus do muro de arrimo da praça à vista
         if (Math.abs(lz) < 9 && lx > PZ.x1) continue;      // avenida central: da praça para a frente
         const flank = Math.abs(p2) / phiMax;
         if (rngCity() > 1 - 0.1 * flank * flank * flank) continue;
@@ -1807,6 +1845,7 @@ export function createElephant(route, index, opts = {}) {
       const nx = -0.985 + fi * (0.985 + 0.96), k = Math.sqrt(Math.max(0.02, 1 - nx * nx)), phi = -phiMax + fj * 2 * phiMax;
       dirv.set(nx, Math.cos(phi) * k, Math.sin(phi) * k); const own = skinBody(dirv, tmp3, nrm, true);
       tmp3.addScaledVector(nrm, EM.CRUST_OFFSET);
+      if (plazaOut(tmp3.x, tmp3.z) < 2) tmp3.y = Math.min(tmp3.y, plazaTop - 0.4);   // sob o piso da praça (nunca fura)
       pos.push(tmp3.x, tmp3.y, tmp3.z); uv.push(fi * REP, fj * REP * 1.35);
       const edge = noise.noise2(nx * 3 + index * 1.3, phi * 2.2) * 0.25;
       let a = 1 - smooth(phiMax - 0.55, phiMax - 0.05, Math.abs(phi) + edge);
@@ -1927,33 +1966,98 @@ export function createElephant(route, index, opts = {}) {
     at(rimRing(BRICK.hx * 2 + 6, BRICK.hz * 2 + 6, 10, 2.5, SF.CRENEL, 7, 0xfbe9e2), BRICK.x, BRICK_TOP + 5, BRICK.z);
     minaret(BRICK.x + BRICK.hx + 18, y0, BRICK.z + BRICK.hz - 12, 300, 10);
   }
-  // --- praça de mercado (terraço calçado no centro do dorso; ponto da entrega): bancas de toldo
-  //     colorido, guarda-sóis e chafariz no centro ---
+  // --- praça de mercado (terraço calçado no centro do dorso, à frente do muro do palácio; ponto da entrega):
+  //     piso nivelado sobre a pele cortada (sculpt.js), muro de arrimo em degraus onde a pele cai,
+  //     chafariz e bazar em ESCALA HUMANA (banca ≈ 5,5 × 3,5 m no mundo) em fileiras duplas com
+  //     corredores, guarda-sóis, carrinhos e caixotes nas áreas livres ---
   {
-    const top = PLAZA_TOP, cx = (PZ.x0 + PZ.x1) / 2;
-    at(facBox(PZ.x1 - PZ.x0, 80, PZ.hz * 2, { side: [SF.BRICK, 6, 9], top: [SF.PAVE], color: 0xffffff }), cx, top - 40, 0);
-    // chafariz: tanque octogonal de mármore com água, coluna, taça e pináculo
-    at(facCyl(16, 17, 2.4, 16, { side: MARB, cap: MARB, color: 0xeee8de }), cx, top + 1.2, 0);
-    at(facCyl(15, 15, 0.3, 16, { side: MARB, cap: [SF.WATER] }), cx, top + 2.3, 0);
-    at(facCyl(1.6, 2.4, 7, 10, { side: MARB, cap: MARB }), cx, top + 5.8, 0);
-    at(facCyl(5.5, 2.4, 1.6, 12, { side: MARB, cap: [SF.WATER] }), cx, top + 9.6, 0);
-    at(whiteDome(1.4, 8, 4, 0xf2efe8, SF.MARBLE), cx, top + 10.4, 0);
-    // bancas em fileiras com corredores (e guarda-sóis nos corredores), longe do chafariz
-    const mr = createRng(SEED + 4242 + index);
+    const top = plazaTop, cx = PL.cx, mr = createRng(SEED + 4242 + index), MK = CT.MARKET;
+    const W = PZ.x1 - PZ.x0, D = PZ.hz * 2, RET = [SF.BRICK, 4.2, 2.6];
+    at(facBox(W, top - PL.bottom, D, { side: RET, top: [SF.PAVE], color: 0xffffff }), cx, (top + PL.bottom) / 2, 0);
+    at(rimRing(W + 0.5, D + 0.5, 0.32, 1.1, SF.MARBLE, 1, 0xece6dc), cx, top - 0.12, 0);       // meio-fio de mármore
+    for (let k = 1; k <= PL.NT; k++) {   // degraus do muro de arrimo (escondidos na pele/crosta onde ela é mais alta)
+      const ty = top - k * PL.TH, m = 2 * k * PL.TW;
+      at(facBox(W + m, ty - PL.bottom, D + m, { side: RET, top: [SF.PAVE], color: 0xf3e4d8 }), cx, (ty + PL.bottom) / 2, 0);
+      at(rimRing(W + m + 0.3, D + m + 0.3, 0.26, 0.7, SF.MARBLE, 1, 0xe6dfd2), cx, ty - 0.08, 0);
+    }
+    // chafariz: estrado octogonal de mármore com 2 degraus, tanque (borda ≈ 1 m no mundo), coluna, taça
+    // com água e pináculo (≈ 13 m); 8 ciprestes em vasos ao redor (a multidão contorna o raio do estrado)
+    at(facCyl(12.5, 12.9, 0.3, 8, { side: MARB, cap: MARB, color: 0xe2d9ca }), cx, top + 0.15, 0);
+    at(facCyl(9.6, 9.9, 0.3, 8, { side: MARB, cap: MARB, color: 0xeee8de }), cx, top + 0.45, 0);
+    at(facCyl(6.2, 6.4, 0.42, 20, { side: MARB, cap: MARB, color: 0xeee8de }), cx, top + 0.81, 0);
+    at(facCyl(5.85, 5.85, 0.1, 20, { side: MARB, cap: [SF.WATER] }), cx, top + 1.0, 0);
+    at(facCyl(0.45, 0.7, 2.0, 10, { side: MARB, cap: MARB }), cx, top + 2.0, 0);
+    at(facCyl(2.3, 0.55, 0.5, 14, { side: MARB, cap: [SF.WATER] }), cx, top + 3.2, 0);
+    at(facCyl(0.22, 0.32, 0.9, 8, { side: MARB, cap: MARB }), cx, top + 3.9, 0);
+    at(whiteDome(0.42, 8, 4, 0xf2efe8, SF.MARBLE), cx, top + 4.35, 0);
+    for (let i = 0; i < 8; i++) {
+      const a = ((i + 0.5) / 8) * TAU, px = cx + Math.cos(a) * 15.5, pz = Math.sin(a) * 15.5;
+      at(facBox(1.3, 0.55, 1.3, { side: MARB, top: [SF.PLAIN], color: 0x6b5a45 }), px, top + 0.27, pz);
+      at(facCyl(0.02, 0.7, 4.2, 6, { side: [SF.PLAIN], open: true, color: 0x3a4c2c }), px, top + 0.5 + 2.1, pz);   // cipreste
+    }
+    // bazar: fileiras duplas (bancas de costas) ao longo de x, em trechos separados por corredores
+    // transversais; trechos sorteados até CT.STALLS (os que sobram viram pracinhas no meio do bazar)
     const CAN = [0xf2ede2, 0xb0322a, 0x3d7a45, 0x2f5e9e, 0xd29a3a, 0xd9692e, 0x4f86c6, 0x8a3a6a, 0xe8d6b0, 0x6f9e4a];
-    for (let gx = PZ.x0 + 9; gx < PZ.x1 - 7 && market.stall.length < CT.STALLS; gx += 12.5) {
-      for (let gz = -PZ.hz + 8; gz < PZ.hz - 6 && market.stall.length < CT.STALLS; gz += 10) {
-        if (Math.hypot(gx - cx, gz) < 28 || mr() < 0.1) continue;
-        const s = mr.range(5.4, 7);
-        dummy.position.set(gx + mr.range(-0.8, 0.8), top, gz + mr.range(-0.6, 0.6)); dummy.quaternion.setFromAxisAngle(_up, mr() < 0.5 ? 0 : Math.PI); dummy.scale.set(s * mr.range(1, 1.25), s * 0.85, s); dummy.updateMatrix();
-        market.stall.push({ m: dummy.matrix.clone(), c: mr.pick(CAN) });
+    const cands = [], zMax = Math.min(MK.BAZAAR[1], PZ.hz - 5), xEnd = cx + MK.BAZAAR[0];
+    for (const side of [-1, 1]) for (let r = 0; ; r++) {
+      const zc = side * (MK.ROW_Z0 + r * MK.ROW_PITCH); if (Math.abs(zc) > zMax) break;
+      let x = cx - MK.BAZAAR[0] + mr.range(0, 2.5);
+      while (x < xEnd - 4) {
+        const n = mr.int(MK.SEG[0], MK.SEG[1]), seg = { st: [], x0: x, x1: x, zc };
+        for (let i = 0; i < n && x < xEnd; i++) {
+          const w = mr.range(MK.STALL_W[0], MK.STALL_W[1]), px = x + w * 0.56, h = mr.range(MK.STALL_H[0], MK.STALL_H[1]);
+          x += w * 1.12 + mr.range(0.05, 0.3);
+          for (const fz of [-1, 1]) {
+            const d = mr.range(MK.STALL_D[0], MK.STALL_D[1]), z = zc + fz * (d * 0.48 + 0.03);
+            if (Math.hypot(px - cx, z) < MK.FOUNTAIN_CLEAR || mr() < 0.05) continue;
+            seg.st.push({ x: px + mr.range(-0.06, 0.06), z, w, h: h * mr.range(0.97, 1.03), d, yaw: fz > 0 ? 0 : Math.PI, c: mr.pick(CAN) });
+          }
+          seg.x1 = x;
+        }
+        if (seg.st.length) cands.push(seg);
+        x += MK.CROSS + mr.range(0, 1.5);
       }
     }
+    for (let i = cands.length - 1; i > 0; i--) { const j = Math.floor(mr() * (i + 1)); const t = cands[i]; cands[i] = cands[j]; cands[j] = t; }
+    const kept = [];
+    for (const sg of cands) { if (market.stall.length + sg.st.length > CT.STALLS) continue; kept.push(sg); for (const st of sg.st) {
+      dummy.position.set(st.x, top, st.z); dummy.quaternion.setFromAxisAngle(_up, st.yaw); dummy.scale.set(st.w, st.h, st.d); dummy.updateMatrix();
+      market.stall.push({ m: dummy.matrix.clone(), c: st.c });
+    } }
+    // caixotes (pilhas de 1–3) nas pontas dos trechos
+    const crate = (x, z, s0, yaw) => {
+      let y = top; const n = mr() < 0.5 ? 1 : mr() < 0.6 ? 2 : 3;
+      for (let k = 0; k < n && market.crate.length < CT.CRATES; k++) {
+        const s = s0 * mr.range(0.85, 1.05);
+        dummy.position.set(x + mr.range(-0.05, 0.05), y, z + mr.range(-0.05, 0.05)); dummy.quaternion.setFromAxisAngle(_up, yaw + mr.range(-0.25, 0.25)); dummy.scale.set(s, s * 0.78, s * mr.range(0.8, 1)); dummy.updateMatrix();
+        market.crate.push({ m: dummy.matrix.clone(), c: mr.pick([0xb08a5a, 0x9c7a4e, 0xc49a62, 0x8a6a44]) }); y += s * 0.78;
+      }
+    };
+    for (const sg of kept) for (const ex of [sg.x0 - 0.55, sg.x1 + 0.35]) for (const fz of [-1, 1]) if (mr() < 0.55) crate(ex, sg.zc + fz * mr.range(0.3, 0.9), mr.range(0.34, 0.46), mr() * TAU);
+    // áreas livres (fora do bazar e do chafariz): guarda-sóis de vendedores no chão e carrinhos de mão
+    const inBazaar = (x, z, m) => Math.abs(x - cx) < MK.BAZAAR[0] + m && Math.abs(z) < MK.BAZAAR[1] + m;
+    const used = [];
+    const freeSpot = (m, tries = 40) => {
+      for (let t = 0; t < tries; t++) {
+        const x = mr.range(PZ.x0 + 4, PZ.x1 - 4), z = mr.range(-PZ.hz + 4, PZ.hz - 4);
+        if (inBazaar(x, z, 2.5) || Math.hypot(x - cx, z) < 19 || used.some((u) => Math.hypot(u[0] - x, u[1] - z) < u[2] + m)) continue;
+        used.push([x, z, m]); return [x, z];
+      }
+      return null;
+    };
     for (let i = 0; i < CT.UMBRELLAS; i++) {
-      const gx = mr.range(PZ.x0 + 6, PZ.x1 - 6), gz = mr.range(-PZ.hz + 6, PZ.hz - 6); if (Math.hypot(gx - cx, gz) < 24) continue;
-      const s = mr.range(5.2, 6.8);
-      dummy.position.set(gx, top, gz); dummy.quaternion.setFromAxisAngle(_up, mr() * TAU); dummy.scale.set(s, s * 0.9, s); dummy.updateMatrix();
+      const p = freeSpot(2.2); if (!p) continue;
+      const s = mr.range(MK.UMB[0], MK.UMB[1]);
+      dummy.position.set(p[0], top, p[1]); dummy.quaternion.setFromAxisAngle(_up, mr() * TAU); dummy.scale.set(s, s * 0.95, s); dummy.updateMatrix();
       market.umbrella.push({ m: dummy.matrix.clone(), c: mr.pick(CAN) });
+      if (mr() < 0.8) crate(p[0] + mr.range(-0.6, 0.6), p[1] + mr.range(-0.6, 0.6), mr.range(0.32, 0.42), mr() * TAU);
+    }
+    for (let i = 0; i < CT.CARTS; i++) {
+      const p = freeSpot(2.4); if (!p) continue;
+      const s = mr.range(0.9, 1.1), yaw = mr() * TAU;
+      dummy.position.set(p[0], top, p[1]); dummy.quaternion.setFromAxisAngle(_up, yaw); dummy.scale.set(s, s, s); dummy.updateMatrix();
+      market.cart.push({ m: dummy.matrix.clone(), c: mr.pick([0xffffff, 0xe8dcc8, 0xd9c7a8]) });
+      if (mr() < 0.5) crate(p[0] - Math.sin(yaw) * 1.1, p[1] - Math.cos(yaw) * 1.1, mr.range(0.34, 0.44), yaw);
     }
   }
   // --- pracinhas: calçamento + chafariz, obelisco ou quiosque de cúpula no centro ---
@@ -2118,7 +2222,7 @@ export function createElephant(route, index, opts = {}) {
     };
     // tapete do dorso: grupo próprio (some além de LOD_DISTANCE; a crosta fica)
     for (const k of ['flat', 'hip', 'tall', 'dome']) if (carpet[k].length) carpetGroup.add(makeInst(AT[k], carpet[k], 'carpet_' + k));
-    for (const k of ['stall', 'umbrella']) if (market[k].length) carpetGroup.add(makeInst(AT[k], market[k], 'market_' + k));
+    for (const k of ['stall', 'umbrella', 'cart', 'crate']) if (market[k].length) carpetGroup.add(makeInst(AT[k], market[k], 'market_' + k));
     rig.add(carpetGroup);
     // casinhas das presas (sempre visíveis: são poucas)
     if (tuskInst.length) headAttach(makeInst(AT.hipRed, tuskInst, 'tusk_houses'));
@@ -2250,6 +2354,8 @@ export function createElephant(route, index, opts = {}) {
     cityTopLocal: E.SHOULDER_HEIGHT + 60,
     cityFootprint: { rx: (B.rx * BODY_SX + 150) * SCALE, rz: (B.rz + 150) * SCALE },
     deliveryMarker: new THREE.Vector3(),
+    get plazaTop() { return (plazaTop + rig.position.y) * SCALE; },   // piso da praça do mercado (mundo, com o balanço do passo)
+    plazaTopLocal: plazaTop,
     bones: B2,
     body: rig,                 // nó que balança com o passo (cestas pousadas são presas aqui)
     lodDistance: EM.LOD_DISTANCE,   // m (mundo): além disto o tapete instanciado de casas some (fica a crosta)
@@ -2294,7 +2400,7 @@ export function createElephant(route, index, opts = {}) {
       updateSpray(time);
       S.upgrade();   // texturas reais assim que carregarem
       for (const c of colliders) c.center.copy(c.local).applyMatrix4(rig.matrixWorld);
-      ent.deliveryMarker.set((PZ.x0 + PZ.x1) / 2, ent.cityTopLocal + 260, 0).applyMatrix4(group.matrixWorld);
+      ent.deliveryMarker.set(PL.cx, plazaTop + 300, 0).applyMatrix4(group.matrixWorld);   // sobre o centro da praça
     },
     // Altura (mundo) da superfície do elefante/cidade na vertical de (x,z); null fora.
     getSurfaceHeight(x, z) {
@@ -2310,11 +2416,12 @@ export function createElephant(route, index, opts = {}) {
       let h = ys + foldAt(_sh, _sn2) * _sn2.y;
       const q = (px / RX) ** 2 + (pz / B.rz) ** 2;
       if (q < 1 && px < 560) {
-        if (inPlaza(px, pz)) h = Math.max(h, PLAZA_TOP);
+        if (inPlaza(px, pz)) h = Math.max(h, plazaTop);
         else if (inPalace(px, pz)) { const ax = Math.abs(px - PALACE_X), az = Math.abs(pz); h = Math.max(h, ax < PALACE_T2.hx && az < PALACE_T2.hz ? PALACE_BASE_TOP + PALACE_TIER_H + 6 : ax < PS.hx && az < PS.hz ? PALACE_BASE_TOP + 7 : ax < PS.hx + 8 && az < PS.hz + 8 ? PALACE_PLINTH : h); const rr = Math.hypot(px - PALACE_X, pz); if (rr < DOME_R + 8) h = Math.max(h, rr < DOME_R ? DOME_CY + DOME_HF * Math.sqrt(Math.max(0, DOME_R * DOME_R - rr * rr)) : DOME_CY); }
         else if (inBrick(px, pz)) h = Math.max(h, BRICK_TOP);
         else if (inTemple(px, pz)) { const T = TEMPLES.find((tt) => Math.abs(px - tt.x) < tt.hx + 30 && Math.abs(pz - tt.z) < tt.hz + 30); h += T.h; }
-        else if (_sn2.y > 0.3) h += EM.CRUST_OFFSET + (nearPlaza(px, pz) ? 8 : HOUSE_AVG);
+        else if (nearPlaza(px, pz)) { const lv = plazaLevel(px, pz), g = h + EM.CRUST_OFFSET; h = lv > g - 0.3 ? lv : g + (_sn2.y > 0.3 ? 8 : 0); }   // degraus do arrimo ou casas da borda
+        else if (_sn2.y > 0.3) h += EM.CRUST_OFFSET + HOUSE_AVG;
       } else if (((px - NC.x) / NC.rx) ** 2 + (pz / NC.rz) ** 2 < 1 && _sn2.y > 0.3 && px < HD.cx - 60) h += EM.CRUST_OFFSET + HOUSE_AVG;   // casas do pescoço
       best = h;
       return best === -Infinity ? null : (best + rig.position.y) * SCALE;

@@ -1197,7 +1197,7 @@ vec3 birdPos; `)
         f.anchor.set(ELEPHANT.HEAD.cx, ELEPHANT.HEAD.cy, 0); g.localToWorld(f.anchor);
       } else if (f.kind === 'cityDoves') {
         const it = els[0]; if (!it) { f.active = false; continue; }
-        f.anchor.set(-60, it.e.cityTopLocal ?? (ELEPHANT.SHOULDER_HEIGHT + 60), 0); it.e.group.localToWorld(f.anchor);
+        f.anchor.set((ELEPHANT_MODEL.PLAZA.x0 + ELEPHANT_MODEL.PLAZA.x1) / 2, it.e.plazaTopLocal ?? it.e.cityTopLocal ?? (ELEPHANT.SHOULDER_HEIGHT + 60), 0); it.e.group.localToWorld(f.anchor);
       } else if (f.kind === 'market') {
         const it = els[0]; if (!it) { f.active = false; continue; }
         plazaWorld(it.e, f.anchor);

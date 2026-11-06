@@ -231,8 +231,35 @@ function groupDist(g, x, y, z) {
   }
   return d;
 }
+// Terraço da praça do mercado (ELEPHANT_MODEL.PLAZA): a pele do alto do dorso é cortada num plano
+// (cut m abaixo do piso da praça) no retângulo da praça + margem, e as dobras somem ali — a crosta e o
+// piso calçado ficam nivelados, sem a pele/crosta furando o piso.
+const PLZ = EM.PLAZA;
+export const PLAZA_CUT = PLZ && PLZ.top ? (() => {
+  const mx = PLZ.cutMargin?.[0] ?? 36, mz = PLZ.cutMargin?.[1] ?? 52;
+  const x0 = PLZ.x0 - mx, x1 = PLZ.x1 + mx;
+  return { x0, x1, cx: (x0 + x1) / 2, hx: (x1 - x0) / 2, hz: PLZ.hz + mz, y: PLZ.top - (PLZ.cut ?? 3.8), k: 16 };
+})() : null;
+function plazaCut(d, x, y, z) {
+  const C = PLAZA_CUT;
+  if (!C || y < C.y - 30 || y > C.y + 400) return d;
+  const qx = Math.abs(x - C.cx) - C.hx, qz = Math.abs(z) - C.hz;
+  if (qx > 40 || qz > 40) return d;
+  const qy = Math.abs(y - (C.y + 300)) - 300;   // caixa de y = C.y até C.y + 600
+  const ox = Math.max(qx, 0), oy = Math.max(qy, 0), oz = Math.max(qz, 0);
+  const bd = Math.sqrt(ox * ox + oy * oy + oz * oz) + Math.min(Math.max(qx, qy, qz), 0);
+  return smax(d, -bd, C.k);
+}
+// 1 dentro do retângulo cortado (dobras zeradas), → 0 a 30 m fora dele
+function plazaFoldMask(x, y, z) {
+  const C = PLAZA_CUT;
+  if (!C || y < C.y - 80) return 0;
+  const ox = Math.max(Math.abs(x - C.cx) - C.hx, 0), oz = Math.max(Math.abs(z) - C.hz, 0);
+  return 1 - smooth(0, 30, Math.hypot(ox, oz));
+}
 function post(d, x, y, z) {
   if (y < SOLE_Y + 60) d = smax(d, SOLE_Y - y, 12);
+  d = plazaCut(d, x, y, z);
   for (let i = 0; i < SOCKETS.length; i++) {
     const s = SOCKETS[i], dx = x - s[0], dy = y - s[1], dz = z - s[2], r = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (r < s[3] + 60) d = smax(d, s[3] - r, 16);
@@ -347,6 +374,7 @@ export function foldDisp(x, y, z, nx, ny, nz, W = null) {
   const cNeck = W[1] * (W[0] + W[2]), cTrunk = W[3] * (W[2] + W[1]);
   const c = 4 * (cLeg * SC.CREASE_LEG + cNeck * SC.CREASE_NECK + cTrunk * SC.CREASE_TRUNK);
   if (c > 0.05) disp += -0.45 * c + 1.1 * c * sheets(x, y, z, 0.15, 1, 0.1, 44, 11.7);
+  const pm = plazaFoldMask(x, y, z); if (pm > 0) disp *= 1 - pm;   // terraço da praça: pele lisa
   return disp;
 }
 // deslocamento das dobras num ponto/normal quaisquer (uma avaliação detalhada)
