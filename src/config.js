@@ -327,7 +327,7 @@ export const ELEPHANT_MODEL = {
   TUSK_HOUSE_DIV: 30,       // lado da casinha da presa = diâmetro local / TUSK_HOUSE_DIV
   TUSK_HOUSE_GAP: 2.0,      // passo entre casinhas da presa (× lado)
   TUSK_HOUSE_SPAN: 1.35,    // rad — meio-ângulo coberto pelas casas (±: quase toda a metade de cima da presa)
-  TUSK_HOUSE_MAX: 6000,     // limite de casinhas por par de presas
+  TUSK_HOUSE_MAX: 2200,     // limite de casinhas por par de presas (orçamento de triângulos)
   TUSK_TOWERS: 9,           // torres brancas por presa
   FOLD_BODY: 20,            // m — amplitude das dobras esculpidas do corpo (geometria)
   FOLD_HEAD: 8,             // m — idem cabeça
@@ -335,9 +335,9 @@ export const ELEPHANT_MODEL = {
   FOLD_EAR: 12,             // m — idem orelhas
   SPRAY_PERIOD: { min: 70, max: 110 },  // s — intervalo entre jatos d'água da tromba (semente por elefante)
   SPRAY_DURATION: 12,       // s — duração de cada jato
-  SPRAY_LIFE: 4.2,          // s — vida de cada gota (arco de ≈ 1,2 corpos de comprimento)
+  SPRAY_LIFE: 5.2,          // s — vida de cada gota (arco alto de ≈ 1,5 corpo de comprimento)
   SPRAY_POINTS: 1500,
-  SPRAY_POINT_SIZE: 70,     // m (modelo-base) — tamanho dos sprites do jato
+  SPRAY_POINT_SIZE: 115,    // m (modelo-base) — tamanho dos sprites do jato (sobrepostos: jato cheio)
 };
 export const ELEPHANT_POLISH = {
   EYE_RADIUS: 34,           // raio do globo ocular
