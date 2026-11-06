@@ -50,8 +50,16 @@
 //  ouro, borla, olhos, prata) e a cidade mesclada (material "arch") + InstancedMesh (tapete ×4, mercado
 //  ×2, casinhas das presas, tachas, pompons — estes três presos ao osso da cabeça) + crosta. Faixas dos
 //  tornozelos, unhas e manga da tromba são lançadas na pele esculpida; cidade, crosta, placa, olhos e
-//  guirlanda usam as consultas de superfície do campo. ≈ 22 draw calls e ≈ 379 k triângulos por
+//  guirlanda usam as consultas de superfície do campo. ≈ 20 draw calls e ≈ 388 k triângulos por
 //  elefante com o tapete visível (high).
+//  Rodada 6 (look-dev): lençóis de dobra mais fundos/largos e de vinco íngreme (legíveis a 5–10 km),
+//  curvatura (atributo skinCurv) → poeira clara e fosca nas cristas, vinco escuro e mais liso; albedo
+//  cinza-castanho quente; lama seca clara subindo das patas/barriga, faixa molhada na linha d'água;
+//  terminador quente (subsuperfície barata); manchas finas esmaecem de longe. Patas com pé alargado,
+//  dedos e 5 unhas grandes de marfim, anéis de rugas no tornozelo, joelho saliente; faixas re-assentadas.
+//  Manto da orelha: cobertor vinho-castanho com caimento em dobras (geometria + sombra no vértice),
+//  trama real (herringbone) + couro gasto em uv1 métrico, borda grossa listrada tecida, cordão de ouro
+//  e franja desfiada na barra.
 //  Espaço local: +X = frente, +Y = cima, +Z = lado direito; origem no
 //  nível do mar entre as patas (ver config.js / ARCHITECTURE.md).
 // =====================================================================
@@ -266,7 +274,7 @@ function makeSkinTextures() {
   ctx.globalAlpha = 0.5; ctx.drawImage(getCrease().col, 0, 0, W, H);   // AO dos vincos orgânicos (vales escuros)
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
   // manchas (mottling): rosado-castanho nas zonas finas da pele, castanho escuro em placas, poeira por cima
-  ctx.drawImage(tintedNoise(256, 121, 5, 3, 0x7a605a, 0.55, 0.8, 0.4), 0, 0, W, H);
+  ctx.drawImage(tintedNoise(256, 121, 5, 3, 0x74624f, 0.55, 0.8, 0.35), 0, 0, W, H);
   ctx.drawImage(tintedNoise(256, 122, 7, 3, 0x463a35, 0.56, 0.82, 0.3), 0, 0, W, H);
   ctx.drawImage(tintedNoise(256, 123, 3.5, 3, 0x84796f, 0.6, 0.86, 0.26), 0, 0, W, H);
   // rugas finas onduladas (ref.: linhas paralelas sinuosas por cima das dobras grandes): segmentos de
@@ -421,39 +429,77 @@ function makeClothTextures() {
   const b = makeCanvas(S, S), bctx = b.getContext('2d');
   bctx.fillStyle = '#8c8c8c'; bctx.fillRect(0, 0, S, S);
   const rng = createRng(SEED + 44);
-  // --- manto (y 0..512): miolo (y 0..256, v 0.75..1) tecido ESCURO quente com linhas onduladas
-  //     laranja discretas; borda (y 256..512, v 0.5..0.75) = faixa LISTRADA laranja/creme/rosa
-  //     (v cresce da borda externa para dentro: as listras ficam concêntricas ao contorno da orelha) ---
-  ctx.fillStyle = hex(MT.EAR_CLOTH_COLOR); ctx.fillRect(0, 0, S, 256);
-  // vincos orgânicos suaves no tecido escuro (o mesmo campo da pele, mais contrastado) + 4 linhas
-  // onduladas laranja/rosa muito discretas
-  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.45; ctx.drawImage(getCrease().col, 0, 0, 512, 512, 0, 0, S, 256);
-  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
-  bctx.globalAlpha = 0.8; bctx.drawImage(getCrease().bump, 0, 0, 512, 512, 0, 0, S, 256); bctx.globalAlpha = 1;
-  const thin = [0xb8703e, 0xc98a92, 0x8a5a48, COLORS.cloth];
-  for (let i = 0; i < 4; i++) {
-    const y = 40 + i * 58, ph = rng() * TAU, kk = rng.int(2, 4), amp = 6 + rng() * 6;
-    ctx.strokeStyle = rgba(thin[i % thin.length], 0.16 + rng() * 0.08); ctx.lineWidth = 2 + rng() * 2; ctx.beginPath();
-    for (let x = 0; x <= S; x += 8) { const yy = y + amp * Math.sin(TAU * kk * x / S + ph); if (x === 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy); }
-    ctx.stroke();
+  // --- manto (y 0..512) ---
+  // miolo (y 0..256, v 0.75..1): cobertor tecido ESCURO quente (marrom-vinho / índigo-castanho), gerado
+  // pixel a pixel em metros da orelha (u: ~0,84 m/px sem repetir; v: ~4,5 m/px): variação tonal larga,
+  // áreas gastas/desbotadas, manchas e uns fios soltos; a trama vem da normal/cor real (uv1).
+  // borda (y 256..512, v 0.5..0.75): faixa GROSSA listrada tecida (laranja, creme, castanho, rosa
+  // empoeirado, fio de ouro), com sarja diagonal, fios do urdume, desgaste e barra desfiada por fora.
+  {
+    const CC = MT.EAR_CLOTH, n = createNoise(SEED + 4411), img = ctx.createImageData(S, 256), D = img.data;
+    const c0 = [(CC.color >> 16) & 255, (CC.color >> 8) & 255, CC.color & 255], c1 = [(CC.alt >> 16) & 255, (CC.alt >> 8) & 255, CC.alt & 255], cw = [(CC.worn >> 16) & 255, (CC.worn >> 8) & 255, CC.worn & 255];
+    for (let y = 0; y < 256; y++) for (let x = 0; x < S; x++) {
+      const X = x * 0.84, Y = y * 4.5;   // metros (aprox.)
+      const big = n.fbm2(X / 260, Y / 260, 3), alt = smooth(-0.1, 0.45, n.fbm2(X / 170 + 9, Y / 420, 3));
+      const worn = smooth(0.18, 0.55, n.fbm2(X / 90 + 3, Y / 130 + 5, 4)) * CC.wear;
+      const stain = smooth(0.45, 0.75, n.fbm2(X / 110 + 17, Y / 140, 3)) * 0.22;
+      const k = (y * S + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        let v = c0[c] + (c1[c] - c0[c]) * alt * 0.6;
+        v *= 1 + 0.16 * big;
+        v += (cw[c] - v) * worn;
+        v *= 1 - stain;
+        D[k + c] = Math.max(0, Math.min(255, v));
+      }
+      D[k + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    // fios soltos e cerzidos (traços finos claros/escuros, curtos)
+    for (let i = 0; i < 260; i++) {
+      const x = rng() * S, y = rng() * 256, L = 6 + rng() * 26, a = (rng() - 0.5) * 0.8 + (rng() < 0.5 ? 0 : Math.PI / 2);
+      ctx.strokeStyle = rng() < 0.5 ? 'rgba(150,110,90,0.22)' : 'rgba(20,12,14,0.3)'; ctx.lineWidth = 1 + rng();
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(a) * L, y + Math.sin(a) * L * 0.2); ctx.stroke();
+    }
+    ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.3; ctx.drawImage(getCrease().col, 0, 0, 512, 512, 0, 0, S, 256);
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+    bctx.globalAlpha = 0.8; bctx.drawImage(getCrease().bump, 0, 0, 512, 512, 0, 0, S, 256); bctx.globalAlpha = 1;
   }
-  ctx.fillStyle = hex(COLORS.cloth); ctx.fillRect(0, 256, S, 256);
-  // 7 listras (creme / rosa / creme / castanho / creme / rosa / creme) sobre o laranja, bordas onduladas
-  // (ref. 1: borda GROSSA listrada laranja/creme com fios castanhos e rosa)
-  const stripes = [[COLORS.cream, 264, 24], [0xc98a92, 300, 16], [COLORS.cream, 328, 26], [COLORS.clothDark, 366, 18], [COLORS.cream, 396, 26], [0xb8703e, 434, 14], [COLORS.cream, 460, 26]];
-  for (const [col, y, h] of stripes) {
-    const ph = rng() * TAU, kk = rng.int(3, 6), amp = 3 + rng() * 4;
-    ctx.fillStyle = hex(col);
-    ctx.beginPath();
-    for (let x = 0; x <= S; x += 8) { const yy = y + amp * Math.sin(TAU * kk * x / S + ph); if (x === 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy); }
-    for (let x = S; x >= 0; x -= 8) ctx.lineTo(x, y + h + amp * Math.sin(TAU * kk * x / S + ph));
-    ctx.closePath(); ctx.fill();
-    bctx.strokeStyle = 'rgba(0,0,0,0.5)'; bctx.lineWidth = 2; bctx.beginPath();
-    for (let x = 0; x <= S; x += 8) { const yy = y + amp * Math.sin(TAU * kk * x / S + ph); if (x === 0) bctx.moveTo(x, yy); else bctx.lineTo(x, yy); }
-    bctx.stroke();
+  {
+    // listras da borda, de fora (y=507, v≈0.505) para dentro (y=261, v≈0.745); larguras relativas
+    const ST = MT.EAR_BORDER_STRIPES, tot = ST.reduce((a, s) => a + s[1], 0), y0 = 507, y1 = 261;
+    const edges = []; let acc = 0; for (const s of ST) { edges.push(acc / tot); acc += s[1]; }
+    const n = createNoise(SEED + 4412), img = ctx.createImageData(S, 256), D = img.data;
+    const rgbOf = (c) => [(c >> 16) & 255, (c >> 8) & 255, c & 255];
+    const cols = ST.map((s) => rgbOf(s[0]));
+    const warpCol = new Float32Array(S); for (let x = 0; x < S; x++) warpCol[x] = 0.07 * n.noise2(x * 0.9, 3.3) + 0.04 * n.noise2(x * 0.13, 8.1);
+    for (let yy = 0; yy < 256; yy++) for (let x = 0; x < S; x++) {
+      const y = 256 + yy;
+      const f0 = (y0 - y) / (y0 - y1);   // 0 fora … 1 dentro
+      const u = x / S;
+      const wob = 0.008 * Math.sin(TAU * 7 * u + 1.3) + 0.006 * n.noise2(x / 40, 1.7);
+      const f = f0 + wob;
+      let si = 0; for (let i = 0; i < edges.length; i++) if (f >= edges[i]) si = i;
+      let col = cols[Math.max(0, Math.min(cols.length - 1, si))];
+      if (f < 0 || f0 < 0) col = cols[0];
+      // sarja diagonal (fios do mesmo tom ±), urdume vertical, desgaste (desbota) e sujeira
+      const twill = ((x + yy) % 6 < 3 ? 1.06 : 0.94) * (1 + warpCol[x]);
+      const wear = smooth(0.25, 0.6, n.fbm2(x / 70 + 5, yy / 30, 3)) * MT.EAR_CLOTH.borderWear;
+      const dirt = smooth(0.3, 0.7, n.fbm2(x / 120 + 11, yy / 60 + 2, 3)) * 0.22;
+      // barra desfiada: perto da borda de fora, fios irregulares escuros/claros
+      const fray = f0 < 0.05 ? (n.noise2(x * 0.7, yy * 0.15) > 0.1 ? 0.55 : 1.15) : 1;
+      const k = (yy * S + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        let v = col[c] * twill * fray;
+        v += (0.82 * (col[0] + col[1] + col[2]) / 3 + 18 - v) * wear * 0.5;   // desbotado
+        v *= 1 - dirt;
+        D[k + c] = Math.max(0, Math.min(255, v));
+      }
+      D[k + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 256);
+    // sulcos entre listras (bump)
+    for (const e of edges.slice(1)) { const y = y0 - e * (y0 - y1); bctx.strokeStyle = 'rgba(0,0,0,0.45)'; bctx.lineWidth = 2; bctx.beginPath(); bctx.moveTo(0, y); bctx.lineTo(S, y); bctx.stroke(); }
   }
-  // costura escura na borda externa (v=0.5) e interna (v=0.75)
-  ctx.fillStyle = 'rgba(60,30,20,0.5)'; ctx.fillRect(0, 256, S, 5); ctx.fillRect(0, 506, S, 6);
   // --- faixas de tornozelo (y 512..768): listras horizontais laranja/vermelho/creme ---
   const bands = [COLORS.cloth, 0xa65a4e, COLORS.cream, COLORS.clothDark, COLORS.cream, 0xc98a92, COLORS.cloth, 0xd9b07a, COLORS.cream, 0xa65a4e];
   let y = 512; let k = 0;
@@ -478,11 +524,12 @@ function makeClothTextures() {
   ctx.strokeStyle = hex(COLORS.goldDark); ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(0, 772); ctx.lineTo(S, 772); ctx.moveTo(0, 1020); ctx.lineTo(S, 1020); ctx.stroke();
   // trama fina em tudo (cor) + desgaste do tecido: cristas das dobras mais claras (manto e faixas)
   const weave = noiseCanvas(256, 31, 40, 2, 150, 255);
-  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.3; ctx.drawImage(weave, 0, 0, S, S);
-  ctx.globalCompositeOperation = 'screen'; ctx.globalAlpha = 0.14; ctx.drawImage(getCrease().col, 0, 0, 512, 512, 0, 0, S, 768);
+  ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = 0.3; ctx.drawImage(weave, 0, 512, S, 512);
+  ctx.globalCompositeOperation = 'screen'; ctx.globalAlpha = 0.14; ctx.drawImage(getCrease().col, 0, 0, 512, 256, 0, 512, S, 256);
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
-  const R = MT.CLOTH_WEAVE_REPEAT;
-  return { map: canvasTexture(c), normal: linearTexture(normalCanvas(getWeave(), 8), R, R) };
+  // normal da trama no 2º canal de UV (uv1 em ladrilhos métricos: escala igual em todos os panos)
+  const nt = linearTexture(normalCanvas(getWeave(), 8), 1, 1); nt.channel = 1;
+  return { map: canvasTexture(c), normal: nt };
 }
 
 function makeTasselTexture() {
@@ -567,6 +614,35 @@ function makeSprayTexture() {
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 
+// Panos (manto das orelhas, faixas dos tornozelos, trama da barriga): cor do atlas (uv) + trama REAL
+// (poly_wool_herringbone: normal, rugosidade e luminância da cor) no 2º canal de UV (uv1, ladrilhos
+// métricos) + couro gasto (brown_leather) em escala larga na normal (amassado/desgaste do tecido).
+function makeClothMaterial(cloth) {
+  const m = new THREE.MeshStandardMaterial({ map: cloth.map, vertexColors: true, normalMap: cloth.normal, normalScale: new THREE.Vector2(0.6, 0.6), roughness: MT.CLOTH_ROUGHNESS, metalness: 0, envMapIntensity: 0.45 });
+  const o = { repeat: 1, anisotropy: 16 };   // anisotropia própria → entradas de cache só deste material (channel = 1)
+  const real = { clothN: tex('poly_wool_herringbone', 'nor_gl', o), clothR: tex('poly_wool_herringbone', 'rough', o), clothD: tex('poly_wool_herringbone', 'diff', o), clothBig: tex('brown_leather', 'nor_gl', o) };
+  real.clothN.channel = 1; real.clothR.channel = 1;
+  const uni = { clothReady: { value: 0 }, clothD: { value: real.clothD }, clothBig: { value: real.clothBig }, bigScale: { value: MT.CLOTH_TILE / MT.CLOTH_BIG_TILE }, bigK: { value: MT.CLOTH_BIG_NORMAL }, weaveK: { value: MT.CLOTH_WEAVE_COLOR } };
+  m.userData.real = { clothN: real.clothN, clothR: real.clothR, clothD: real.clothD, clothBig: real.clothBig };
+  m.userData.onReady = () => { m.normalMap = real.clothN; m.roughnessMap = real.clothR; m.roughness = 1; m.normalScale.set(0.85, 0.85); uni.clothReady.value = 1; m.needsUpdate = true; };
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, uni);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform sampler2D clothD, clothBig;\nuniform float clothReady, bigScale, bigK, weaveK;')
+      .replace('#include <map_fragment>', `#include <map_fragment>
+#ifdef USE_NORMALMAP
+if ( clothReady > 0.5 ) {
+  float hl = dot( texture2D( clothD, vNormalMapUv ).rgb, vec3( 0.333 ) ), hm = dot( texture2D( clothD, vec2( 0.5 ), 16.0 ).rgb, vec3( 0.333 ) );
+  diffuseColor.rgb *= mix( 1.0, clamp( hl / max( hm, 0.02 ), 0.55, 1.5 ), weaveK );
+}
+#endif`)
+      .replace('#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps.replace('mapN.xy *= normalScale;', `mapN.xy *= normalScale;
+if ( clothReady > 0.5 ) { vec3 bN = texture2D( clothBig, vNormalMapUv * bigScale + 0.27 ).xyz * 2.0 - 1.0; mapN.xy += bN.xy * bigK; }`));
+  };
+  m.customProgramCacheKey = () => 'ruppen-cloth-6';
+  return m;
+}
+
 let shared = null;
 function getShared() {
   if (shared) return shared;
@@ -582,7 +658,7 @@ function getShared() {
     skin: new THREE.MeshStandardMaterial({ map: skin.map, vertexColors: true, normalMap: skin.normal, normalScale: NS, roughnessMap: skin.rough, roughness: 1, metalness: 0, envMapIntensity: MT.SKIN_ENV }),
     // manga listrada da tromba: tecido (trama tecida na normal)
     trunk: new THREE.MeshStandardMaterial({ map: trunk.map, normalMap: trunk.normal, normalScale: new THREE.Vector2(0.6, 0.6), roughness: MT.CLOTH_ROUGHNESS, metalness: 0, envMapIntensity: 0.45 }),
-    cloth: new THREE.MeshStandardMaterial({ map: cloth.map, normalMap: cloth.normal, normalScale: new THREE.Vector2(0.6, 0.6), roughness: MT.CLOTH_ROUGHNESS, metalness: 0, envMapIntensity: 0.45 }),
+    cloth: makeClothMaterial(cloth),
     // marfim: creme levemente translúcido (sheen + clearcoat fraco), veios ao longo da presa
     ivory: new THREE.MeshPhysicalMaterial({ map: ivory.map, normalMap: ivory.normal, normalScale: new THREE.Vector2(0.35, 0.35), roughness: MT.IVORY_ROUGHNESS, metalness: 0, clearcoat: MT.IVORY_CLEARCOAT, clearcoatRoughness: 0.4, sheen: 0.3, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xfff2dc), envMapIntensity: 0.8 }),
     // ouro-bronze escovado: metal puro (reflete o envMap); emissivo residual fraco para não ficar preto sem envMap
@@ -608,7 +684,7 @@ function getShared() {
   //   pompons: lã procedural (o bouclé real tem trama em grade e virava xadrez).
   const herr = (ru, rv, map) => tex('poly_wool_herringbone', map, { repeat: [ru, rv] });
   const real = {
-    clothN: herr(MT.CLOTH_WEAVE_REPEAT, MT.CLOTH_WEAVE_REPEAT, 'nor_gl'), clothR: herr(MT.CLOTH_WEAVE_REPEAT, MT.CLOTH_WEAVE_REPEAT, 'rough'),
+    ...mat.cloth.userData.real,
     trunkN: herr(MT.TRUNK_WEAVE_REPEAT.u, MT.TRUNK_WEAVE_REPEAT.v, 'nor_gl'), trunkR: herr(MT.TRUNK_WEAVE_REPEAT.u, MT.TRUNK_WEAVE_REPEAT.v, 'rough'),
   };
   const all = [...Object.values(real), ...Object.values(mat.skinTri.userData.real)];
@@ -618,7 +694,7 @@ function getShared() {
     if (upgraded || !all.every((t) => t && t.image && t.image.width)) return;
     upgraded = true;
     mat.skinTri.userData.onReady();
-    mat.cloth.normalMap = real.clothN; mat.cloth.roughnessMap = real.clothR; mat.cloth.roughness = 1; mat.cloth.normalScale.set(0.8, 0.8);
+    mat.cloth.userData.onReady();
     mat.trunk.normalMap = real.trunkN; mat.trunk.roughnessMap = real.trunkR; mat.trunk.roughness = 1; mat.trunk.normalScale.set(0.8, 0.8);
     // pompons: SÓ lã procedural (o bouclé real tem trama em grade → xadrez/tartã na luz)
     for (const k of ['cloth', 'trunk']) mat[k].needsUpdate = true;
@@ -892,10 +968,10 @@ function getFitted(low) {
   const out = { bands: [], nails: [], sleeve: null, sleeveRings: [] };
   const P = new V3(), o = new V3(), dir = new V3();
   // --- faixas dos tornozelos: casca que segue a pele (dobras incluídas) 11 m acima dela ---
-  const BAND_Y0 = 62, BAND_Y1 = 232, RAD = 30, ROWS = 7;
+  const BAND_Y0 = SC.ANKLE_BAND.y0, BAND_Y1 = SC.ANKLE_BAND.y1, RAD = 30, ROWS = 7;
   for (let li = 0; li < 4; li++) {
     const [sx, sz] = LEGS[li];
-    const pos = [], uv = [], idx = [], ringR = [];
+    const pos = [], uv = [], uv1 = [], idx = [], ringR = [];
     for (let r = 0; r <= ROWS; r++) {
       const y = lerp(BAND_Y0, BAND_Y1, r / ROWS); let acc = 0;
       legAxis(sx, sz, y, o);
@@ -903,22 +979,24 @@ function getFitted(low) {
         const a = (j / RAD) * TAU; dir.set(Math.cos(a), 0, Math.sin(a));
         if (j === RAD) { pos.push(pos[(r * (RAD + 1)) * 3], pos[(r * (RAD + 1)) * 3 + 1], pos[(r * (RAD + 1)) * 3 + 2]); }
         else { fitOut(o, dir, 11, 400, P); pos.push(P.x, P.y, P.z); acc += Math.hypot(P.x - o.x, P.z - o.z); }
-        uv.push(j / RAD, 0.255 + 0.24 * (r / ROWS));
+        uv.push(j / RAD, 0.255 + 0.24 * (r / ROWS)); uv1.push((j / RAD) * TAU * 250 / MT.CLOTH_TILE, y / MT.CLOTH_TILE);
       }
       ringR.push({ y, r: acc / RAD, c: o.clone() });
     }
     for (let r = 0; r < ROWS; r++) for (let j = 0; j < RAD; j++) { const a = r * (RAD + 1) + j, b = a + RAD + 1; idx.push(a, b, a + 1, b, b + 1, a + 1); }
     const g = new THREE.BufferGeometry(); g.setIndex(idx);
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('uv1', new THREE.Float32BufferAttribute(uv1, 2));
     g.computeVertexNormals(); weldSeam(g, (k) => k * (RAD + 1), (k) => k * (RAD + 1) + RAD, ROWS + 1);
     { const n = new V3().fromBufferAttribute(g.attributes.normal, (RAD + 1) * 2); const p0 = new V3().fromBufferAttribute(g.attributes.position, (RAD + 1) * 2); legAxis(sx, sz, p0.y, o); if (n.dot(p0.sub(o)) < 0) { flipWinding(g); g.computeVertexNormals(); } }
     out.bands.push({ g, rings: [ringR[0], ringR[ROWS]] });
-    // unhas: 5 na borda do pé, da frente para os lados
+    // unhas: 5 nos lóbulos dos dedos da borda do pé, da frente para os lados (sempre à frente, +X),
+    // inclinadas com a normal da pele (o pé alarga para baixo) e meio enterradas
     const nails = [];
-    legAxis(sx, sz, -14, o);
-    for (const a of [-1.05, -0.52, 0, 0.52, 1.05]) {
-      dir.set(Math.cos(a), 0, Math.sin(a)); fitOut(o, dir, -6, 400, P, false);   // unhas sempre à frente (+X)
-      nails.push({ p: P.clone(), d: dir.clone() });
+    legAxis(sx, sz, SC.NAIL.y, o);
+    for (const a of SC.TOE.angles) {
+      dir.set(Math.cos(a), 0, Math.sin(a)); fitOut(o, dir, SC.NAIL.sink, 400, P, false);
+      const n = gradient(P.x, P.y, P.z, new V3()); n.y = Math.max(-0.2, Math.min(0.45, n.y)); n.normalize();
+      nails.push({ p: P.clone(), d: n });
     }
     out.nails.push(nails);
   }
@@ -977,6 +1055,15 @@ function makeTriplanarSkin(src) {
     // o detalhe fino (couro, rachaduras) esmaece com a distância (em metros do MUNDO): de longe a pele lê como
     // dobras pesadas e lisas, sem o aspecto "felpudo"
     fadeL: { value: new THREE.Vector2(SC.DETAIL_FADE.leather[0], SC.DETAIL_FADE.leather[1]) }, fadeM: { value: new THREE.Vector2(SC.DETAIL_FADE.mud[0], SC.DETAIL_FADE.mud[1]) },
+    // rodada 6: poeira nas cristas, vinco escuro/liso, lama seca subindo das patas/barriga, faixa molhada,
+    // terminador quente (subsuperfície), manchas finas esmaecendo de longe
+    dustCol: { value: new THREE.Vector3(...SC.DUST_COLOR) }, dustK: { value: SC.DUST_CREST }, creaseK: { value: SC.CREASE_DARK },
+    roughCC: { value: new THREE.Vector3(SC.ROUGH_CREST, SC.ROUGH_CREASE, SC.ROUGH_WET) },
+    mudA: { value: new THREE.Vector4(SC.MUD.bottom, SC.MUD.top, SC.MUD.amount, SC.MUD.belly) }, mudB: { value: SC.MUD.bellyTop }, mudTint: { value: new THREE.Vector4(...SC.MUD.color, SC.MUD.texColor) },
+    wetA: { value: new THREE.Vector3(SC.WET.top, SC.WET.soft, SC.WET.dark) },
+    sssCol: { value: new THREE.Vector3(...SC.SSS.color) }, sssA: { value: new THREE.Vector2(SC.SSS.wrap, SC.SSS.amount) },
+    farF: { value: new THREE.Vector2(SC.FAR_FLATTEN[0], SC.FAR_FLATTEN[1]) },
+    skinMean: { value: new THREE.Color(MT.SKIN_COLOR).multiplyScalar(0.92) },
   };
   // pronto quando as 4 imagens tiverem chegado (verificado a cada quadro pelo elefante)
   // (as texturas só entram nos uniformes depois de carregadas: antes disso ficam os mapas procedurais)
@@ -986,8 +1073,8 @@ function makeTriplanarSkin(src) {
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uni);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vTriP;\nvarying vec3 vTriN;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTriP = position;\nvTriN = normal;');
+      .replace('#include <common>', '#include <common>\nvarying vec3 vTriP;\nvarying vec3 vTriN;\nattribute float skinCurv;\nvarying float vCurv;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTriP = position;\nvTriN = normal;\nvCurv = skinCurv;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 varying vec3 vTriP;
@@ -995,7 +1082,12 @@ varying vec3 vTriN;
 uniform sampler2D triMap, triNormal, triRough, leatherN, leatherR, mudN, mudD;
 uniform float triScaleC, triScaleN, triNS, triSharp, triReady, nsLeather, nsMud, mudTone;
 uniform vec2 scLeather, scMud, fadeL, fadeM;
-float triKL = 1.0, triKM = 1.0;
+varying float vCurv;
+uniform vec3 dustCol, roughCC, wetA, sssCol, skinMean;
+uniform vec4 mudA, mudTint;
+uniform vec2 sssA, farF;
+uniform float dustK, creaseK, mudB;
+float triKL = 1.0, triKM = 1.0, skMud = 0.0, skWet = 0.0, skCrest = 0.0, skCrease = 0.0;
 // normal em espaço tangente de uma projeção: couro (2 escalas) + lama rachada, mistura "whiteout"
 vec3 triTanN(vec2 p) {
   vec3 a = texture2D(leatherN, p * scLeather.x).xyz * 2.0 - 1.0, b = texture2D(leatherN, p * scLeather.y + 0.37).xyz * 2.0 - 1.0;
@@ -1017,19 +1109,51 @@ vec3 triPerturb(vec3 eyePos, vec3 N, vec2 uv, vec3 mapN) {
   return normalize(mat3(T * sc, B * sc, N) * mapN);
 }`)
       .replace('#include <map_fragment>', `{
+  float vd = length( vViewPosition ); triKL = 1.0 - smoothstep( fadeL.x, fadeL.y, vd ); triKM = 1.0 - smoothstep( fadeM.x, fadeM.y, vd );
+  float far = smoothstep( farF.x, farF.y, vd );
   vec3 tw = triW(); vec3 tp = vTriP * triScaleC;
   vec4 tc = texture2D(triMap, tp.zy) * tw.x + texture2D(triMap, tp.xz) * tw.y + texture2D(triMap, tp.xy) * tw.z;
-  if (triReady > 0.5) tc.rgb *= triMud(vTriP.zy) * tw.x + triMud(vTriP.xz) * tw.y + triMud(vTriP.xy) * tw.z;
+  // de longe: as manchas finas viram o tom médio (sem "felpa"); ficam as dobras e a curvatura
+  tc.rgb = mix(tc.rgb, skinMean, far * 0.75);
+  float mudL = 0.5;
+  if (triReady > 0.5) {
+    tc.rgb *= mix(triMud(vTriP.zy) * tw.x + triMud(vTriP.xz) * tw.y + triMud(vTriP.xy) * tw.z, 1.0, far * 0.8);
+    mudL = dot(texture2D(mudD, vTriP.zy * scMud.y * 0.31 + 0.13).rgb * tw.x + texture2D(mudD, vTriP.xz * scMud.y * 0.31 + 0.13).rgb * tw.y + texture2D(mudD, vTriP.xy * scMud.y * 0.31 + 0.13).rgb * tw.z, vec3(0.333)) / 0.16;
+  }
+  // cristas (−) e vincos (+) da dobra: poeira clara e seca nas cristas, fundo escuro nos vincos
+  skCrest = smoothstep(0.05, 0.85, -vCurv); skCrease = smoothstep(0.1, 0.95, vCurv);
+  tc.rgb *= 1.0 - creaseK * skCrease;
+  tc.rgb = mix(tc.rgb, dustCol, dustK * skCrest);
+  // lama seca clara: sobe das patas (some com a altura, borda irregular) e cobre a barriga
+  vec3 nb = normalize(vTriN);
+  float y = vTriP.y;
+  float hM = 1.0 - smoothstep(mudA.x, mudA.y, y + (mudL - 1.0) * 160.0);
+  float bM = smoothstep(-0.25, -0.8, nb.y) * (1.0 - smoothstep(mudB - 220.0, mudB, y)) * mudA.w;
+  skMud = clamp(max(hM * mudA.z, bM) * (0.85 + 0.25 * skCrest) * clamp(0.55 + 0.6 * mudL, 0.0, 1.3), 0.0, 1.0);
+  // lama: cor própria (bege-acinzentado claro) modulada pela luminância (e um pouco pela cor) da lama real
+  vec3 mudC = mudTint.rgb;
+  if (triReady > 0.5) {
+    vec3 mt = texture2D(mudD, vTriP.zy * scMud.x * 0.7 + 0.4).rgb * tw.x + texture2D(mudD, vTriP.xz * scMud.x * 0.7 + 0.4).rgb * tw.y + texture2D(mudD, vTriP.xy * scMud.x * 0.7 + 0.4).rgb * tw.z;
+    float ml = dot(mt, vec3(0.333)); vec3 mc = mt / max(ml, 1e-3) * 0.333;
+    mudC = mudTint.rgb * mix(vec3(1.0), mc * 3.0, mudTint.a) * clamp(mix(1.0, ml / 0.16, 1.0 - far), 0.7, 1.4);
+  }
+  tc.rgb = mix(tc.rgb, mudC, skMud);
+  // faixa molhada (escura, lisa) na linha d'água das patas
+  skWet = 1.0 - smoothstep(wetA.x - wetA.y, wetA.x + wetA.y, y + (mudL - 1.0) * 30.0);
+  tc.rgb *= mix(1.0, wetA.z, skWet);
   diffuseColor *= tc;
 }`)
       .replace('#include <roughnessmap_fragment>', `float roughnessFactor = roughness;
-{ float vd = length( vViewPosition ); triKL = 1.0 - smoothstep( fadeL.x, fadeL.y, vd ); triKM = 1.0 - smoothstep( fadeM.x, fadeM.y, vd ); }
 {
   vec3 tw = triW(); vec3 tp = vTriP * triScaleN;
+  // empoeirada (fosca) nas cristas, levemente úmida (mais lisa) no fundo dos vincos
+  float rc = mix(roughCC.y, roughCC.x, smoothstep(0.9, -0.7, vCurv));
   if (triReady > 0.5) {
     vec2 s = vec2(scLeather.x); float r = texture2D(leatherR, vTriP.zy * s.x).g * tw.x + texture2D(leatherR, vTriP.xz * s.x).g * tw.y + texture2D(leatherR, vTriP.xy * s.x).g * tw.z;
-    roughnessFactor *= mix(0.86, clamp(0.62 + 0.45 * r, 0.6, 0.97), triKL);
-  } else roughnessFactor *= texture2D(triRough, tp.zy).g * tw.x + texture2D(triRough, tp.xz).g * tw.y + texture2D(triRough, tp.xy).g * tw.z;
+    roughnessFactor *= rc * mix(1.0, clamp(0.72 + 0.52 * r, 0.7, 1.12), triKL);
+  } else roughnessFactor *= rc * (0.6 + 0.4 * (texture2D(triRough, tp.zy).g * tw.x + texture2D(triRough, tp.xz).g * tw.y + texture2D(triRough, tp.xy).g * tw.z));
+  roughnessFactor = mix(roughnessFactor, 0.98, skMud * 0.8);
+  roughnessFactor = clamp(mix(roughnessFactor, roughCC.z, skWet), 0.04, 1.0);
 }`)
       .replace('#include <normal_fragment_maps>', `{
   vec3 tw = triW(); vec3 tp = vTriP * triScaleN;
@@ -1042,9 +1166,18 @@ vec3 triPerturb(vec3 eyePos, vec3 N, vec2 uv, vec3 mapN) {
   }
   vec3 nAcc = tw.x * triPerturb(-vViewPosition, normal, tp.zy, mx) + tw.y * triPerturb(-vViewPosition, normal, tp.xz, my) + tw.z * triPerturb(-vViewPosition, normal, tp.xy, mz);
   normal = normalize(nAcc);
-}`);
+}`)
+      // subsuperfície barata: perto do terminador a luz do sol "vaza" num tom quente (transição orgânica)
+      .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+#if NUM_DIR_LIGHTS > 0
+for ( int i = 0; i < NUM_DIR_LIGHTS; i ++ ) {
+  float nl = dot( normal, directionalLights[ i ].direction );
+  float band = smoothstep( -sssA.x, 0.0, nl ) * ( 1.0 - smoothstep( 0.0, sssA.x * 0.8, nl ) );
+  reflectedLight.directDiffuse += material.diffuseColor * directionalLights[ i ].color * sssCol * ( band * sssA.y );
+}
+#endif`);
   };
-  m.customProgramCacheKey = () => 'ruppen-skin-triplanar';
+  m.customProgramCacheKey = () => 'ruppen-skin-triplanar-6';
   return m;
 }
 
@@ -1068,7 +1201,11 @@ export function createElephant(route, index, opts = {}) {
   const parts = { skin: [], trunk: [], cloth: [], ivory: [], gold: [], city: [], pink: [], eye: [], silver: [] };
   // pele: oclusão de cavidade (AO dos vincos esculpidos) gravada na cor do vértice
   // (malhas em grade regular apenas: a orelha tesselada tem triângulos desiguais → cavity = ruído; cavity=false)
-  const add = (key, g, bone = 0, color, cavity = true) => { const pg = prep(g, bone, color); if (key === 'skin' && cavity) bakeCavity(pg); parts[key].push(pg); return g; };
+  const add = (key, g, bone = 0, color, cavity = true) => {
+    const pg = prep(g, bone, color); if (key === 'skin' && cavity) bakeCavity(pg);
+    if (!pg.attributes.uv1) pg.setAttribute('uv1', pg.attributes.uv.clone());   // 2º canal (trama métrica dos panos)
+    parts[key].push(pg); return g;
+  };
   const tmp = new V3(), tmp2 = new V3(), tmp3 = new V3();
   const fitted = getFitted(low);
   // cidade mesclada (palácio, templos, praça, orelhas, presas, alto da cabeça): geometrias já com osso → um
@@ -1115,8 +1252,12 @@ export function createElephant(route, index, opts = {}) {
   for (let li = 0; li < 4; li++) {
     const bone = legBone(li, true);
     for (const nl of fitted.nails[li]) {
-      const n = new THREE.SphereGeometry(1, 10, 7); n.scale(36, 24, 22);
-      placeGeom(n, nl.p, new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), nl.d));
+      // unha: casca ovalada (topo arredondado, base reta), larga e baixa; a orientação mantém a altura vertical
+      const NS = SC.NAIL.size, n = new THREE.SphereGeometry(1, 10, 7); n.scale(NS[0] / 2, NS[1] / 2, NS[2] / 2);
+      { const pa = n.attributes.position; for (let i = 0; i < pa.count; i++) { const y = pa.getY(i); if (y < 0) pa.setY(i, y * 0.55); } n.computeVertexNormals(); }
+      const zq = new THREE.Quaternion().setFromUnitVectors(new V3(0, 0, 1), new V3(nl.d.x, 0, nl.d.z).normalize());
+      const tilt = new THREE.Quaternion().setFromAxisAngle(new V3(1, 0, 0), -Math.asin(nl.d.y));
+      placeGeom(n, nl.p, zq.multiply(tilt));
       add('ivory', n, bone);
     }
     const band = fitted.bands[li];
@@ -1206,12 +1347,36 @@ export function createElephant(route, index, opts = {}) {
     for (let i = 0; i < NS; i++) for (let j = 0; j < NT; j++) { const a = i * (NT + 1) + j, b = a + NT + 1; idx.push(a, b, a + 1, a + 1, b, b + 1); }
     const g = new THREE.BufferGeometry(); g.setIndex(idx); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array((pos.length / 3) * 2), 2));
+    g.setAttribute('uv1', new THREE.Float32BufferAttribute(new Float32Array((pos.length / 3) * 2), 2));
     return mergeVertices(g);   // solda a emenda θ = 0/2π e o centro
   };
   const EAR_BAY = 3.2, EAR_ST = 3.4;   // janelas das casas da orelha (casas grandes: ~9 vãos × 6 andares)
   const earScaleOf = (x, y) => { const dx = x - EAR_C.x, dy = y - EAR_C.y; return Math.hypot(dx, dy) / outlineDist(Math.atan2(dy, dx)); };
   // deformação da orelha: topo enrolando para fora, traseira abrindo, lobo de baixo abrindo um pouco,
   // leve concavidade no miolo e dobras esculpidas (lençóis quase verticais, ondulados)
+  // caimento do cobertor: dobras largas e macias PENDENDO (cristas quase verticais que se abrem para
+  // baixo), amplitude crescendo do topo (preso) para a barra; uma 2ª família menor quebra a regularidade
+  const DR = MT.EAR_DRAPE;
+  const earDrape = (x, y) => {
+    const v = Math.min(1, Math.max(0, -y / EAR_H));
+    const xs = x / (1 + 0.35 * v);   // as dobras se abrem para baixo
+    const ph = (TAU * xs) / DR.wave + 1.4 * noise.noise2(x / 420 + 3.7, y / 600) + 0.6 * Math.sin(y / 260);
+    const f1 = Math.sin(ph), f2 = Math.sin(ph * 2.13 + 1.9 + noise.noise2(x / 200, y / 300 + 5));
+    const soft = Math.sign(f1) * Math.pow(Math.abs(f1), 0.75);
+    return DR.amp * (DR.grow + (1 - DR.grow) * Math.pow(v, 1.15)) * (soft + 0.3 * f2);
+  };
+  // sombreamento do caimento gravado na cor do vértice (antes da deformação): vale da dobra escuro,
+  // crista um pouco mais clara (gasta) — lê de longe mesmo com luz frontal
+  const drapeShade = (g) => {
+    const p = g.attributes.position, n = p.count, col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const x = p.getX(i), y = p.getY(i), v = Math.min(1, Math.max(0, -y / EAR_H));
+      const d = earDrape(x, y) / (DR.amp * (DR.grow + (1 - DR.grow) * Math.pow(v, 1.15)) * 1.3);
+      const f = d < 0 ? 1 - DR.shade * Math.min(1, -d) : 1 + DR.shade * 0.45 * Math.min(1, d);
+      col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = f;
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  };
   const earWarp = (p) => {
     const u = Math.min(1, Math.max(0, -p.x / EAR_W)), v = Math.min(1, Math.max(0, -p.y / EAR_H));
     const topCurl = Math.max(0, 1 - v / 0.3); p.z += 120 * topCurl * topCurl;        // borda de cima enrola para fora
@@ -1219,6 +1384,7 @@ export function createElephant(route, index, opts = {}) {
     const low2 = Math.max(0, (v - 0.55) / 0.45); p.z += 55 * low2 * low2;           // base abre para fora (afasta do ombro)
     p.z -= 38 * Math.sin(Math.PI * u) * Math.sin(Math.PI * Math.min(1, v * 1.15));  // miolo levemente côncavo
     p.z += EM.FOLD_EAR * foldValue(p.x / 70 + 2, p.y / 210, 0.3) + noise.noise2(p.x / 260 + 7, p.y / 260) * 6;
+    p.z += earDrape(p.x, p.y);
   };
   const earUV = (g) => {
     g.computeBoundingBox(); const bb = g.boundingBox; const p = g.attributes.position; const uv = g.attributes.uv;
@@ -1228,18 +1394,24 @@ export function createElephant(route, index, opts = {}) {
   // uv do miolo do manto (tecido escuro, v 0.75..1): planar
   const coreUV = (g) => {
     const p = g.attributes.position, uv = g.attributes.uv;
-    for (let i = 0; i < p.count; i++) uv.setXY(i, ((p.getX(i) + EAR_W) / EAR_W) * 2.5, 0.75 + 0.25 * 0.98 * ((p.getY(i) + EAR_H) / (EAR_H + 90)));
+    const uv1 = g.attributes.uv1, T = MT.CLOTH_TILE;
+    for (let i = 0; i < p.count; i++) {
+      uv.setXY(i, (p.getX(i) + EAR_W + 20) / (EAR_W + 70), 0.75 + 0.25 * 0.98 * ((p.getY(i) + EAR_H) / (EAR_H + 90)));
+      uv1.setXY(i, p.getX(i) / T, p.getY(i) / T);
+    }
   };
   // uv da borda listrada (v 0.5..0.75): v = distância ao contorno (listras concêntricas), u = ângulo ao redor
   const ringUV = (g, sOut, sIn) => {
-    const p = g.attributes.position, uv = g.attributes.uv;
+    const p = g.attributes.position, uv = g.attributes.uv, T = MT.CLOTH_TILE;
+    const uv1 = new THREE.BufferAttribute(new Float32Array(p.count * 2), 2); g.setAttribute('uv1', uv1);
     for (let i = 0; i < p.count; i++) {
       const x = p.getX(i), y = p.getY(i); const sc = earScaleOf(x, y);
+      uv1.setXY(i, x / T, y / T);
       const f = Math.min(1, Math.max(0, (sOut - sc) / (sOut - sIn)));
       uv.setXY(i, (Math.atan2(y - EAR_C.y, x - EAR_C.x) / TAU + 0.5) * 9, 0.505 + 0.24 * f);
     }
   };
-  const RING_OUT = 0.985, RING_IN = 0.875;   // borda listrada ≈ 11 % do raio da orelha
+  const RING_OUT = 0.985, RING_IN = 0.835;   // borda listrada GROSSA ≈ 15 % do raio da orelha
   const corePoly = earShape(RING_IN - 0.02).extractPoints(8).shape;
   const HR_ = EM.EAR_HOUSE_RECT;
   const HOUSE_RECT = { x0: HR_.x0 * EAR_W, x1: HR_.x1 * EAR_W, y0: HR_.y0 * EAR_H, y1: HR_.y1 * EAR_H };
@@ -1258,13 +1430,51 @@ export function createElephant(route, index, opts = {}) {
     // miolo: grade POLAR regular no espaço do contorno (sem os leques de triângulos finos da tampa extrudada)
     // e vértices soldados → normais suaves: o tecido lê macio, sem facetas
     const core = earPolarGrid(RING_IN + 0.01, low ? 72 : 104, low ? 16 : 24, Z_BL + 6); coreUV(core);
+    drapeShade(core);
     mapVertices(core, earWarp);
     add('cloth', finish(core), bone);
     const ringShape = earShape(RING_OUT); ringShape.holes.push(earShape(RING_IN));
     let ring = new THREE.ExtrudeGeometry(ringShape, { depth: 12, bevelEnabled: true, bevelThickness: 4, bevelSize: 4, bevelSegments: 1, curveSegments: 6 });
-    ring.translate(0, 0, Z_BL - 2); ring = tessellate(ring, low ? 80 : 55); ringUV(ring, RING_OUT, RING_IN);
+    ring.translate(0, 0, Z_BL - 2); ring = tessellate(ring, low ? 80 : 55); ringUV(ring, RING_OUT, RING_IN); drapeShade(ring);
     mapVertices(ring, earWarp); ring.deleteAttribute('normal'); ring = mergeVertices(ring); ring.computeVertexNormals();
     add('cloth', finish(ring), bone);
+    // cordão de fio de ouro na borda de dentro da faixa (degrau entre a faixa e o miolo)
+    {
+      const pts = earShape(RING_IN + 0.004).extractPoints(40).shape.map((q) => { const v = new V3(q.x, q.y, Z_BL + 11); earWarp(v); return v; });
+      if (pts.length > 2 && pts[0].distanceTo(pts[pts.length - 1]) < 1) pts.pop();
+      const cc = new THREE.CatmullRomCurve3(pts, true); cc.arcLengthDivisions = 600;
+      const cord = new THREE.TubeGeometry(cc, low ? 160 : 210, 7.5, 5, true);
+      add('gold', finish(cord), bone);
+    }
+    // barra desfiada: franja de fios curtos (creme/laranja/castanho) pendendo da borda de baixo e de trás
+    {
+      const FR = DR.fringe, frng = createRng(SEED + 909 + side), fg = [];
+      const outl = earShape(RING_OUT - 0.004).extractPoints(60).shape;
+      const fcol = [0xeedcb8, 0xc8792f, 0x6b3a24, 0xd0823a, 0xeedcb8, 0xb87a7a];
+      let carry = 0;
+      for (let i = 0; i + 1 < outl.length; i++) {
+        const a = outl[i], b = outl[i + 1], L = Math.hypot(b.x - a.x, b.y - a.y);
+        let t = carry;
+        for (; t < L; t += FR.step) {
+          const x = a.x + (b.x - a.x) * (t / L), y = a.y + (b.y - a.y) * (t / L);
+          // só a metade de baixo e a borda de trás (tecido pendendo); a borda de cima/frente fica presa
+          if (!(y < EAR_C.y - 0.05 * EAR_H || x < -0.86 * EAR_W)) continue;
+          if (frng() < 0.12) continue;   // falhas (fios arrancados)
+          const len = frng.range(FR.len[0], FR.len[1]) * (frng() < 0.1 ? 0.4 : 1), r = FR.r * frng.range(0.7, 1.2);
+          const strand = new THREE.CylinderGeometry(r * 0.6, r, len, 3, 2, true);
+          strand.translate(0, -len / 2, 0);
+          { const pa = strand.attributes.position; for (let k = 0; k < pa.count; k++) { const yy = pa.getY(k); pa.setX(k, pa.getX(k) + Math.sin(yy * 0.15 + i) * 1.5); pa.setZ(k, pa.getZ(k) + yy * yy * 0.004); } }
+          strand.rotateZ(frng.range(-0.18, 0.18));
+          strand.translate(x, y + 2, Z_BL + 5);
+          const uvA = strand.attributes.uv; for (let k = 0; k < uvA.count; k++) uvA.setXY(k, uvA.getX(k), 0.05 + 0.4 * uvA.getY(k));
+          setColorRange(strand, frng.pick(fcol));
+          mapVertices(strand, earWarp);
+          fg.push(strand);
+        }
+        carry = t - L;
+      }
+      if (fg.length) add('pink', finish(mergeGeometries(fg, false)), bone);
+    }
     // bloco de casinhas em terraços sobre o manto, na parte superior-externa: MUITAS fileiras de
     // caixinhas (profundidades 6–14), com 1–2 recortes e algumas torrinhas finas na borda de cima
     const hrng = createRng(SEED + 500 + index * 13 + side);
@@ -1423,17 +1633,17 @@ export function createElephant(route, index, opts = {}) {
   }
   // ============================ TRAMA DA BARRIGA ===================
   {
-    const pos = [], uv = [], idx = [];
+    const pos = [], uv = [], uv1 = [], idx = [];
     const nx0 = 0.0, rows = [nx0 - 0.045, nx0 + 0.045]; const N = 64;
     const k = Math.sqrt(1 - nx0 * nx0); const phi0 = Math.acos(Math.min(1, 0.42 / k));
     for (let r = 0; r < 2; r++) for (let i = 0; i <= N; i++) {
       const phi = phi0 + (i / N) * (TAU - 2 * phi0); const kk = Math.sqrt(1 - rows[r] * rows[r]);
       tmp.set(rows[r], Math.cos(phi) * kk, Math.sin(phi) * kk);
-      bodyPoint(tmp, tmp2, true, tmp3).addScaledVector(tmp3, 9); pos.push(tmp2.x, tmp2.y, tmp2.z); uv.push((i / N) * 9, 0.03 + r * 0.19);
+      bodyPoint(tmp, tmp2, true, tmp3).addScaledVector(tmp3, 9); pos.push(tmp2.x, tmp2.y, tmp2.z); uv.push((i / N) * 9, 0.03 + r * 0.19); uv1.push((i / N) * 3000 / MT.CLOTH_TILE, r * 60 / MT.CLOTH_TILE);
     }
     for (let i = 0; i < N; i++) idx.push(i, i + 1, N + 1 + i, N + 1 + i, i + 1, N + 2 + i);
     const g = new THREE.BufferGeometry(); g.setIndex(idx);
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.computeVertexNormals();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('uv1', new THREE.Float32BufferAttribute(uv1, 2)); g.computeVertexNormals();
     { const n = new V3().fromBufferAttribute(g.attributes.normal, Math.floor(N / 2)); tmp.set(nx0, Math.cos(Math.PI) , 0); if (n.dot(new V3(0, -1, 0)) < 0) { flipWinding(g); g.computeVertexNormals(); } }
     add('cloth', g);
   }

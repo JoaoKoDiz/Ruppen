@@ -126,7 +126,9 @@ export function legAxis(sx, sz, y, out) {
   return out.set(sx * LG.offsetX + sx * 18 * kf + sx * 10 * smooth(560, 900, y), y, sz * LG.offsetZ - sz * EM.LEG_HIP_LEAN * smooth(600, 968, y));
 }
 const LR = EM.LEG_HIP_RADIUS;
-export const LEG_PROFILE = [[-40, 1.09], [60, 1.04], [200, 0.95], [410, 0.89], [600, 0.93], [800, 1.0], [960, 1.06]];
+// pé alargado (sola chata e larga, borda com as unhas), tornozelo estreito com anéis de rugas, canela,
+// joelho saliente (perfil + bossa à frente), coxa cheia
+export const LEG_PROFILE = SC.LEG_PROFILE;
 export function legRadius(y) {
   const P = LEG_PROFILE; if (y <= P[0][0]) return P[0][1] * LR;
   for (let i = 1; i < P.length; i++) if (y <= P[i][0]) return lerp(P[i - 1][1], P[i][1], (y - P[i - 1][0]) / (P[i][0] - P[i - 1][0])) * LR;
@@ -185,9 +187,19 @@ const EAR_MAT = [];
       legAxis(sx, sz, P[i][0], P0); legAxis(sx, sz, P[i + 1][0], P1);
       lp.push(cone(P0.x, P0.y, P0.z, P1.x, P1.y, P1.z, P[i][1] * LR, P[i + 1][1] * LR, 34));
     }
+    const KB = SC.KNEE_BULGE;
     legAxis(sx, sz, SC.KNEE_Y, P0);
-    if (sx > 0) lp.push(ell(P0.x + 0.74 * LR, SC.KNEE_Y + 10, P0.z, 70, 112, 132, 60));    // joelho (carpo) à frente
-    else { legAxis(sx, sz, 300, P0); lp.push(ell(P0.x - 0.74 * LR, 300, P0.z, 72, 105, 130, 60)); }  // jarrete atrás
+    if (sx > 0) {
+      lp.push(ell(P0.x + KB.fwd * LR, SC.KNEE_Y + 8, P0.z, KB.rx, KB.ry, KB.rz, 70));                // joelho (carpo) à frente
+      lp.push(ell(P0.x + 0.2 * LR, SC.KNEE_Y - 4, P0.z, 0.9 * LR, KB.ry * 0.8, 0.98 * LR, 80));      // anel do joelho (bossa geral)
+    } else {
+      legAxis(sx, sz, 300, P0); lp.push(ell(P0.x - 0.74 * LR, 300, P0.z, 78, 110, 138, 60));        // jarrete atrás
+      lp.push(ell(P0.x + 0.1 * LR, 300, P0.z, 0.9 * LR, KB.ry * 0.75, 0.97 * LR, 80));
+      legAxis(sx, sz, 640, P0); lp.push(ell(P0.x + 0.7 * LR, 640, P0.z, KB.rx * 0.9, KB.ry * 1.1, KB.rz * 0.95, 80));  // joelho de trás (à frente, alto)
+    }
+    // dedos: lóbulos baixos na borda da frente do pé (as unhas de marfim encaixam neles)
+    legAxis(sx, sz, SC.TOE.y, P0);
+    for (const a of SC.TOE.angles) lp.push(ell(P0.x + Math.cos(a) * SC.TOE.r, SC.TOE.y, P0.z + Math.sin(a) * SC.TOE.r, SC.TOE.size[0], SC.TOE.size[1], SC.TOE.size[0], 26));
     group(REGION.LEG_FL + li, SC.K_LEG, lp);
   }
   // cauda
@@ -284,11 +296,16 @@ export function gradient(x, y, z, out, e = 1.5) {
 // em cada período a pele sobe rápido logo após o vinco e desce devagar até o próximo (terraços).
 // Devolve ≈ −0.45 (vinco) … +0.55 (crista), com amplitude modulada (alguns lençóis somem).
 function sheet(u) { const s = u - Math.floor(u); return 2.16 * Math.pow(s, 0.35) * (1 - s) - 0.45; }
-function sheets(x, y, z, ax, ay, az, sp, seed) {
-  const w = 1 / (sp * 3.2), w2 = 1 / (sp * 1.25);
-  const u = (x * ax + y * ay + z * az) / sp + 0.6 * fnz.noise3(x * w + seed, y * w, z * w) + 0.22 * fnz.noise3(x * w2, y * w2 + seed, z * w2 + 7);
+// versão "lençol pesado": expoente p menor → parede mais íngreme logo após o vinco (lábio que faz sombra)
+// e descida longa até o próximo; normalizada para −0.5 (vinco) … +0.5 (crista)
+const SHP = SC.FOLD_SHARP, SHN = 1 / (Math.pow(SHP / (1 + SHP), SHP) * (1 / (1 + SHP)));
+function sheetSharp(u) { const s = u - Math.floor(u); return SHN * Math.pow(s, SHP) * (1 - s) - 0.5; }
+function sheets(x, y, z, ax, ay, az, sp, seed, sharp = false, warpK = 1) {
+  const WP = SC.FOLD_WARP;
+  const w = 1 / (sp * WP[2]), w2 = 1 / (sp * 1.25);
+  const u = (x * ax + y * ay + z * az) / sp + warpK * (WP[0] * fnz.noise3(x * w + seed, y * w, z * w) + WP[1] * fnz.noise3(x * w2, y * w2 + seed, z * w2 + 7));
   const m = 0.6 + 0.5 * fnz.noise3(x / (sp * 6) + 13, y / (sp * 6) + seed, z / (sp * 6));
-  return sheet(u) * Math.min(1, Math.max(0.08, m));
+  return (sharp ? sheetSharp(u) : sheet(u)) * Math.min(1, Math.max(SC.FOLD_MIN, m));
 }
 const TRUNK_LEN = TRUNK_CURVE.getLength();
 const BODY_AX = new V3(0.28, 1, 0.05).normalize(), HEAD_AX = new V3(0.42, 1, 0).normalize();
@@ -300,12 +317,12 @@ export function foldDisp(x, y, z, nx, ny, nz, W = null) {
     // flancos: lençóis longos levemente inclinados; rasos no alto do dorso (sob a cidade); um segundo
     // conjunto cruzado e fraco faz os lençóis se ramificarem
     const fa = EM.FOLD_BODY * (1 - 0.6 * smooth(0.4, 0.85, ny)) * (W[0] + 0.8 * W[1]) / Math.max(1e-6, wb);
-    disp += wb * fa * (sheets(x, y, z, BODY_AX.x, BODY_AX.y, BODY_AX.z, 64, 1.7) + 0.35 * sheets(x, y, z, -0.45, 1, 0.2, 41, 5.3));
+    disp += wb * fa * (sheets(x, y, z, BODY_AX.x, BODY_AX.y, BODY_AX.z, SC.FOLD_SPACING.body, 1.7, true) + 0.22 * sheets(x, y, z, -0.45, 1, 0.2, 41, 5.3));
   }
   if (W[2] > 0.01) {
     let mask = 1 - 0.6 * smooth(0.7, 0.95, ny);
     for (const e of EYES) { const r = Math.hypot(x - e.pos.x, y - e.pos.y, z - e.pos.z); mask *= 1 - 0.85 * smooth(105, 50, r); }
-    disp += W[2] * EM.FOLD_HEAD * 1.5 * mask * (sheets(x, y, z, HEAD_AX.x, HEAD_AX.y, HEAD_AX.z, 50, 3.9) + 0.3 * sheets(x, y, z, -0.3, 1, 0, 33, 8.1));
+    disp += W[2] * EM.FOLD_HEAD * 1.5 * mask * (sheets(x, y, z, HEAD_AX.x, HEAD_AX.y, HEAD_AX.z, SC.FOLD_SPACING.head, 3.9, true) + 0.25 * sheets(x, y, z, -0.3, 1, 0, 33, 8.1));
   }
   if (W[3] > 0.01) {
     const t = trunkT, r = trunkR(t);
@@ -317,9 +334,12 @@ export function foldDisp(x, y, z, nx, ny, nz, W = null) {
   for (let li = 0; li < 4; li++) {
     const w = W[4 + li]; if (w < 0.01) continue;
     const [sx, sz] = LEGS[li];
-    const fade = smooth(-40, 60, y);
-    const knee = 1 + 0.7 * Math.exp(-(((y - SC.KNEE_Y) / 110) ** 2)) + 0.4 * Math.exp(-(((y - 130) / 70) ** 2));   // joelho e tornozelo mais vincados
-    disp += w * EM.FOLD_LEG * 1.45 * fade * knee * sheets(x, y, z, 0.06 * sx, 1, 0.05 * sz, 46, 2.3 + li);
+    const fade = smooth(-10, 50, y);
+    const knee = 1 + 0.8 * Math.exp(-(((y - SC.KNEE_Y) / 120) ** 2)) + 0.4 * Math.exp(-(((y - 150) / 80) ** 2));   // joelho e tornozelo mais vincados
+    disp += w * EM.FOLD_LEG * 1.45 * fade * knee * sheets(x, y, z, 0.06 * sx, 1, 0.05 * sz, SC.FOLD_SPACING.leg, 2.3 + li, true, SC.LEG_WARP);
+    // anéis de rugas do tornozelo (entre o pé e a faixa listrada): sulcos finos, quase horizontais
+    const AR = SC.ANKLE_RINGS, wa = smooth(AR.y0, AR.y0 + 18, y) * (1 - smooth(AR.y1 - 18, AR.y1, y));
+    if (wa > 0) disp += w * wa * AR.amp * sheetSharp(y / AR.spacing + 0.25 * fnz.noise3(x / 90, y / 200 + li, z / 90));
   }
   if (W[8] > 0.01) disp += W[8] * 2.5 * sheet(y / 22 + 0.3 * fnz.noise3(x / 40, y / 40, z / 40));
   // vincos fundos nas junções (zona de mistura entre regiões): sulco + anéis mais fundos ao redor
@@ -522,7 +542,7 @@ function initEyes() {
 // ------------------------------------------------------------------
 const BOUNDS = { x0: -790, x1: 1490, y0: SOLE_Y - 25, y1: 1660, z0: -575, z1: 575 };
 // AO de cavidade por curvatura da malha (média dos vizinhos − p)·n → fator multiplicativo por vértice
-function cavityFactor(pos, nrm, idx, nV, dark, lift) {
+function cavityFactor(pos, nrm, idx, nV, dark, lift, curvOut = null) {
   const sum = new Float32Array(nV * 3), cnt = new Float32Array(nV), elen = new Float32Array(nV);
   for (let t = 0; t < idx.length; t += 3) for (let e = 0; e < 3; e++) {
     const a = idx[t + e], b = idx[t + (e + 1) % 3];
@@ -536,7 +556,11 @@ function cavityFactor(pos, nrm, idx, nV, dark, lift) {
   const sm = new Float32Array(nV), sc = new Float32Array(nV);
   for (let t = 0; t < idx.length; t += 3) for (let e = 0; e < 3; e++) { const a = idx[t + e], b = idx[t + (e + 1) % 3]; sm[a] += c[b]; sc[a]++; sm[b] += c[a]; sc[b]++; }
   const f = new Float32Array(nV);
-  for (let i = 0; i < nV; i++) { const v = (0.5 * c[i] + 0.5 * (sc[i] ? sm[i] / sc[i] : c[i])) / p90; f[i] = v > 0 ? 1 - dark * smooth(0, 1.2, v) : 1 + lift * smooth(0, 1.2, -v); }
+  for (let i = 0; i < nV; i++) {
+    const v = (0.5 * c[i] + 0.5 * (sc[i] ? sm[i] / sc[i] : c[i])) / p90;
+    f[i] = v > 0 ? 1 - dark * smooth(0, 1.2, v) : 1 + lift * smooth(0, 1.2, -v);
+    if (curvOut) curvOut[i] = Math.max(-1.5, Math.min(1.5, v));
+  }
   return f;
 }
 const SKIN_CACHE = {};
@@ -547,7 +571,7 @@ export function getSkinGeometry(cell, opts = {}) {
   SKIN_CACHE[key] = g;
   return g;
 }
-export function buildSkinGeometry(h, { dark = 0.32, lift = 0.08 } = {}) {
+export function buildSkinGeometry(h, { dark = SC.CAVITY_DARK, lift = SC.CREST_LIFT } = {}) {
   initEyes();
   const T0 = (typeof performance !== 'undefined' ? performance : Date).now();
   const { x0, y0, z0 } = BOUNDS;
@@ -688,9 +712,18 @@ export function buildSkinGeometry(h, { dark = 0.32, lift = 0.08 } = {}) {
   geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geom.computeVertexNormals();
   const fn = geom.attributes.normal.array;
-  const cav = cavityFactor(pos, fn, index, nV, dark, lift);
+  // curvatura (sinal: + vinco côncavo, − crista convexa) misturada com a fase da dobra (deslocamento
+  // relativo): vai para o atributo skinCurv → poeira clara nas cristas, vinco escuro e mais liso no shader
+  const curv = new Float32Array(nV);
+  const cav = cavityFactor(pos, fn, index, nV, dark, lift, curv);
+  {
+    let m = 0; for (let v = 0; v < nV; v++) m = Math.max(m, Math.abs(disp[v]));
+    const dn = 1 / Math.max(1, m * 0.45);
+    for (let v = 0; v < nV; v++) curv[v] = Math.max(-1.5, Math.min(1.5, 0.65 * curv[v] - 0.6 * disp[v] * dn));
+  }
   for (let v = 0; v < nV; v++) { const f = cav[v]; col[v * 3] *= f; col[v * 3 + 1] *= f; col[v * 3 + 2] *= f; }
   geom.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geom.setAttribute('skinCurv', new THREE.BufferAttribute(curv, 1));
   geom.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
   geom.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
   geom.computeBoundingBox(); geom.computeBoundingSphere();
