@@ -24,7 +24,7 @@
 //  nunca mexemos nisso (o "balanço" do corpo move um sub-grupo interno).
 // =====================================================================
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { DOVE, DOVE_MODEL, SEED } from '../config.js';
 import { createNoise } from '../util/noise.js';
 import { createRng } from '../util/rng.js';
@@ -142,7 +142,7 @@ function roundedBox(w, h, d, r, pos, rot = [0, 0, 0], segs = 4) {
 // Tira chata de seção retangular arredondada ao longo de pontos (correias de
 // couro que abraçam o corpo). outward(p, t) dá a normal "para fora" (lado da
 // face larga). uv: u ao longo (em metros * uScale), v ao redor.
-function ribbon(points, outward, halfW, halfT, { closed = false, segs = 0, M = 10, uScale = 2 } = {}) {
+function ribbon(points, outward, halfW, halfT, { closed = false, segs = 0, M = 8, uScale = 2 } = {}) {
   const curve = new THREE.CatmullRomCurve3(points.map((p) => p.clone()), closed, 'centripetal');
   const N = segs || Math.max(8, points.length * 6);
   const r = Math.min(halfT, halfW) * 0.85;
@@ -331,16 +331,19 @@ function bladeWidth(s, len, wL, wT) {
 }
 
 function bladeShape(len, wL, wT, n = 14) {
+  // parte reta amostrada com ~n/2 pontos (mais densos na base afunilada) e a
+  // ponta arredondada amostrada por ângulo (contorno liso, sem "serrote")
   const s = new THREE.Shape();
+  const R = (wL + wT) * 0.95;
+  const nb = Math.max(3, Math.round(n * 0.55)), nt = Math.max(3, n - nb);
+  const ts = [];
+  for (let i = 0; i <= nb; i++) { const u = i / nb; ts.push((len - R) * (0.6 * u + 0.4 * u * u)); }
+  for (let k = 1; k <= nt; k++) ts.push(len - R + R * Math.sin((k / nt) * Math.PI / 2));
   const lead = [], trail = [];
-  for (let i = 0; i <= n; i++) {
-    const t = len * (i / n);
-    const [a, b] = bladeWidth(t, len, wL, wT);
-    lead.push([t, a]); trail.push([t, -b]);
-  }
+  for (const t of ts) { const [a, b] = bladeWidth(Math.min(t, len), len, wL, wT); lead.push([t, a]); trail.push([t, -b]); }
   s.moveTo(lead[0][0], lead[0][1]);
-  for (let i = 1; i <= n; i++) s.lineTo(lead[i][0], lead[i][1]);
-  for (let i = n - 1; i >= 0; i--) s.lineTo(trail[i][0], trail[i][1]);
+  for (let i = 1; i < lead.length; i++) s.lineTo(lead[i][0], lead[i][1]);
+  for (let i = trail.length - 2; i >= 0; i--) s.lineTo(trail[i][0], trail[i][1]);
   s.closePath();
   return s;
 }
@@ -491,7 +494,7 @@ function leatherMaps(S, baseHex, { stitch = true, seed = 11 } = {}) {
       const worn = THREE.MathUtils.smoothstep(noise.noise2(u * 3.5 + 20, v * 3.5 + 11) + 0.35 * noise.noise2(u * 9 + 5, v * 9), 0.25, 0.75);
       let hv = 0.22 * g1;
       if (stitch) {
-        for (const vr of [0.25, 0.75]) {
+        for (const vr of [0.17, 0.83]) {
           let dv = Math.abs(v - vr); dv = Math.min(dv, 1 - dv);
           hv -= 0.18 * Math.exp(-(dv * dv) / 0.00012);                // sulco da costura
           const per = 1 / 10, ph = ((u + (vr > 0.5 ? per / 2 : 0)) % per) / per;
@@ -499,11 +502,16 @@ function leatherMaps(S, baseHex, { stitch = true, seed = 11 } = {}) {
           hv += 0.42 * along * Math.exp(-(dv * dv) / 0.00005);         // ponto em relevo
         }
       }
+      // bordas gastas: faixas claras e mais lisas em v = 0.25 / 0.75 (as arestas das tiras)
+      let edgeW = 0;
+      for (const ve of [0.25, 0.75]) { const dv = Math.abs(v - ve); edgeW = Math.max(edgeW, Math.exp(-(dv * dv) / 0.0007)); }
+      edgeW *= 0.7 + 0.3 * THREE.MathUtils.smoothstep(g1, -0.4, 0.4);
+      hv -= 0.08 * edgeW;
       h[i] = hv;
-      const lum = 1 + 0.08 * g1 + 0.3 * worn;
+      const lum = 1 + 0.08 * g1 + 0.3 * worn + 0.38 * edgeW;
       TMP.c.copy(base).multiplyScalar(lum);
       if (stitch) {
-        for (const vr of [0.25, 0.75]) {
+        for (const vr of [0.17, 0.83]) {
           let dv = Math.abs(v - vr); dv = Math.min(dv, 1 - dv);
           const per = 1 / 10, ph = ((u + (vr > 0.5 ? per / 2 : 0)) % per) / per;
           const along = Math.exp(-Math.pow((ph - 0.5) / 0.28, 4));
@@ -511,7 +519,7 @@ function leatherMaps(S, baseHex, { stitch = true, seed = 11 } = {}) {
         }
       }
       rgb[i * 4] = TMP.c.r * 255; rgb[i * 4 + 1] = TMP.c.g * 255; rgb[i * 4 + 2] = TMP.c.b * 255; rgb[i * 4 + 3] = 255;
-      const ro = 0.62 - 0.2 * worn + 0.06 * g1;
+      const ro = 0.62 - 0.2 * worn + 0.06 * g1 - 0.14 * edgeW;
       rg[i * 4] = rg[i * 4 + 1] = rg[i * 4 + 2] = 255 * THREE.MathUtils.clamp(ro, 0.25, 1); rg[i * 4 + 3] = 255;
     }
   }
@@ -743,8 +751,8 @@ function makeHeadGeometry(segs) {
     [0.0, 1.03], [0.37, 1.0], [0.68, 0.9], [0.9, 0.72], [1.05, 0.46], [1.13, 0.22], [1.16, 0.0],
   ].map(([z, r]) => new THREE.Vector2(z * R, r * R));
   const curve = new THREE.SplineCurve(ctrl);
-  const pts = curve.getPoints(segs.sph + 10);
-  const g = latheZ(pts, segs.sph + 10);
+  const pts = curve.getPoints(segs.sph + 4);
+  const g = latheZ(pts, segs.sph + 6);
   const pos = g.attributes.position;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
@@ -818,7 +826,7 @@ function createRopes(count, segs, radial, radius) {
 export function createDove(opts = {}) {
   const quality = opts.quality || 'high';
   const low = quality === 'low';
-  const segs = { body: low ? 24 : 40, around: low ? 22 : 36, sph: low ? 12 : 18, edge: low ? 0.24 : 0.17, blade: low ? 0.14 : 0.09, tex: low ? 0.5 : 1 };
+  const segs = { body: low ? 24 : 40, around: low ? 22 : 32, sph: low ? 12 : 18, edge: low ? 0.24 : 0.17, blade: low ? 0.14 : 0.09, tex: low ? 0.5 : 1 };
   const rng = createRng(SEED + 4242); // variação determinística (ex.: fases iniciais)
 
   const group = new THREE.Group();
@@ -832,7 +840,8 @@ export function createDove(opts = {}) {
   const tails = tailDefs();
   const WB = { xmin: ROOT_X - 0.1, xmax: HALF_SPAN - SHOULDER_X + 0.15, ymin: -0.95, ymax: 0.8 };
   const TB = { xmin: -0.78, xmax: 0.78, ymin: -TAIL_LEN - 0.12, ymax: 0.22 };
-  const wingMaps = plumageMaps({ W: 1024 * segs.tex, H: 640 * segs.tex, bounds: WB, blades: wingBlades(fingers), seed: SEED + 7, strength: 1.6, layerStep: 0.42 });
+  const PRIM = new THREE.Color(COL.primaries).convertLinearToSRGB();
+  const wingMaps = plumageMaps({ W: 1024 * segs.tex, H: 640 * segs.tex, bounds: WB, blades: wingBlades(fingers), seed: SEED + 7, dark: [PRIM.r * 255, PRIM.g * 255, PRIM.b * 255], strength: 1.6, layerStep: 0.42 });
   const tailMaps = plumageMaps({ W: 512 * segs.tex, H: 320 * segs.tex, bounds: TB, blades: tailBlades(tails), seed: SEED + 8, strength: 1.6, layerStep: 0.42 });
   const bodyMaps = plumageMaps({ W: 512 * segs.tex, H: 512 * segs.tex, bounds: { xmin: 0, xmax: 1, ymin: 0, ymax: 1 }, blades: bodyBlades(), wrap: true, seed: SEED + 9, strength: 1.3, layerStep: 0.35, barbAmp: 0.05, edge: [205, 208, 216] });
   for (const k of ['map', 'normalMap', 'roughnessMap']) bodyMaps[k].repeat.set(BODY_TILE.repeatU, BODY_TILE.repeatV);
@@ -849,7 +858,8 @@ export function createDove(opts = {}) {
   const leatherMat = new THREE.MeshStandardMaterial({ map: saddleMaps.map, normalMap: saddleMaps.normalMap, normalScale: NS(0.8), roughnessMap: saddleMaps.roughnessMap, roughness: 1, metalness: 0 });
   const darkLeatherMat = new THREE.MeshStandardMaterial({ map: darkLeatherMaps.map, normalMap: darkLeatherMaps.normalMap, normalScale: NS(0.6), roughnessMap: darkLeatherMaps.roughnessMap, vertexColors: true, roughness: 1, metalness: 0 });
   const metalMat = new THREE.MeshStandardMaterial({ color: COL.metal, roughness: 0.35, metalness: 1 });
-  const clothMat = new THREE.MeshStandardMaterial({ normalMap: cloth.normalMap, normalScale: NS(0.8), roughnessMap: cloth.roughnessMap, vertexColors: true, roughness: 1, metalness: 0 });
+  // tecido: sheen (brilho rasante das fibras) em vez de especular plástico
+  const clothMat = new THREE.MeshPhysicalMaterial({ normalMap: cloth.normalMap, normalScale: NS(0.8), roughnessMap: cloth.roughnessMap, vertexColors: true, roughness: 1, metalness: 0, sheen: 0.6, sheenRoughness: 0.75, sheenColor: new THREE.Color(0x8a8f9a), specularIntensity: 0.35 });
   const skinMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0 });
   for (const m of [saddleMaps.map, saddleMaps.normalMap, saddleMaps.roughnessMap]) m.repeat.set(3, 3);
   for (const m of [darkLeatherMaps.map, darkLeatherMaps.normalMap, darkLeatherMaps.roughnessMap]) m.repeat.set(2, 2);
@@ -872,27 +882,38 @@ export function createDove(opts = {}) {
     const body = makeBodyGeometry(profile, segs);
     shadeBody(body);
     bodyParts.push(body);
-    // escapulares: 3 penas largas por lado, deitadas sobre a raiz da asa (escondem a junta)
+    // escapulares: penas largas deitadas sobre o dorso e a raiz da asa,
+    // apontando para trás (telhado: a anterior cobre a base da seguinte).
+    // Cada vértice é projetado na superfície do corpo -> sem fendas nem "pétalas".
     const fu = 1 / BODY_TILE.perRow / BODY_TILE.repeatU, fv = 2.3 / BODY_TILE.rows / BODY_TILE.repeatV;
-    const scap = [[-0.38, 24, 0.6, 0.095, 0.0], [-0.2, 33, 0.56, 0.09, -0.012], [-0.02, 43, 0.5, 0.085, -0.024], [0.16, 55, 0.42, 0.075, -0.036]];
+    const surfY = (x, z) => {
+      const r = profile.radiusAt(z) * 0.92;
+      const q = r > 1e-3 ? x / r : 2;
+      const y = Math.abs(q) < 1 ? 0.97 * profile.radiusAt(z) * Math.sqrt(1 - q * q) : 0;
+      return Math.max(y, SHOULDER_Y + 0.05 + 0.15 * Math.max(0, Math.abs(x) - 0.3)); // sobre a raiz da asa (planando em V)
+    };
+    // [z da base, x da base, ângulo (0 = para fora, 90 = para trás), comprimento, meia-largura]
+    const scap = [[-0.5, 0.22, 58, 0.5, 0.1], [-0.36, 0.25, 64, 0.56, 0.105], [-0.2, 0.25, 70, 0.58, 0.105], [-0.04, 0.24, 76, 0.54, 0.1], [0.12, 0.21, 81, 0.46, 0.09]];
     for (const side of [1, -1]) {
-      for (const [z0, deg, len, w, dy] of scap) {
-        const g = featherSheet(bladeShape(len, w, w, 12), { thick: WING_THICK * 0.6, camber: 0.015, chord: w, segs: 1, maxEdge: 0.12 });
+      scap.forEach(([z0, x0, deg, len, w], j) => {
+        let g = featherSheet(bladeShape(len, w, w, 8), { thick: WING_THICK * 0.5, camber: 0.012, chord: w, segs: 1, maxEdge: 0.15 });
+        g.deleteAttribute('normal');
+        g = mergeVertices(g, 1e-5);
         const p = g.attributes.position, uv = g.attributes.uv;
+        const th = deg * DEG, c = Math.cos(th), sn = Math.sin(th);
         for (let i = 0; i < p.count; i++) {
           const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
           const t = Math.max(0, x / len);
-          p.setXYZ(i, x, y - 0.1 * t * t - 0.012 * (z / w) * (z / w), z);
+          const wx = side * (x0 + x * c - z * sn), wz = z0 + x * sn + z * c;
+          const lift = (0.008 + 0.008 * (scap.length - j)) * (1 - 0.5 * (z / w) * (z / w)) + 0.014 * t * (1 - 0.4 * t);
+          p.setXYZ(i, wx, surfY(wx, wz) + lift + y, wz);
           uv.setXY(i, (0.5 - z / (2 * w) * 0.9) * fu, t * fv);
         }
+        if (side < 0) g.index.array.reverse();          // espelhado: mantém a orientação das faces
         g.computeVertexNormals();
-        const th = (side > 0 ? deg : 180 - deg) * DEG;
-        g.rotateY(-th);
-        const top = profile.surface(z0, side * 0.45, 0.01);
-        g.translate(side * 0.1, top.y + 0.02 + dy, z0);
         shadeBody(g, false);
         bodyParts.push(g);
-      }
+      });
       // almofada do ombro (cobre a raiz da chapa quando a asa sobe/desce)
       bodyParts.push(shadeBody(sphere(1, V(side * 0.27, 0.29, -0.1), [0.3, 0.045, 0.55], 16, 10), false));
     }
@@ -904,7 +925,7 @@ export function createDove(opts = {}) {
       const p = neck.attributes.position, uv = neck.attributes.uv; const n = p.count;
       for (let i = 0; i < n; i++) {
         const ring = Math.floor(i / (segs.sph + 1)), t = ring / NSg, j = i % (segs.sph + 1);
-        const s = 1.05 - 0.25 * t;
+        const s = 0.92 + 0.83 * Math.pow(1 - t, 1.5);               // base larga funde no peito, topo sob a cabeça
         const z = p.getZ(i); const y = p.getY(i); const x = p.getX(i);
         const c = neckCurve.getPoint(t, TMP.v1);
         p.setXYZ(i, c.x + (x - c.x) * s, c.y + (y - c.y) * s, c.z + (z - c.z) * s);
@@ -917,11 +938,11 @@ export function createDove(opts = {}) {
     // patas recolhidas sob a barriga (rosadas, discretas)
     for (const sx of [-1, 1]) {
       const hip = V(sx * 0.13, -0.42, 0.2), foot = V(sx * 0.15, -0.5, 0.36);
-      bodyParts.push(paint(limb(hip, foot, 0.035, 8), COL.feet));
-      bodyParts.push(paint(sphere(0.04, foot, [1.2, 0.8, 1.1], 10, 8), COL.feet));
+      bodyParts.push(paint(limb(hip, foot, 0.035, 6, 2), COL.feet));
+      bodyParts.push(paint(sphere(0.04, foot, [1.2, 0.8, 1.1], 8, 6), COL.feet));
       for (let k = -1; k <= 1; k++) {
         const toe = V(foot.x + k * 0.045 + sx * 0.01, foot.y - 0.02, foot.z + 0.13 - Math.abs(k) * 0.03);
-        bodyParts.push(paint(limb(foot, toe, 0.012, 6, 2), COL.feet));
+        bodyParts.push(paint(limb(foot, toe, 0.012, 4, 1), COL.feet));
       }
     }
   }
@@ -944,14 +965,14 @@ export function createDove(opts = {}) {
       parts.push(paint(sphere(0.006, V(sx * 0.02, 0.012, BEAK_Z - 0.04), [1.4, 0.6, 1], 6, 4), 0x303036));
     }
     // bico: tubo afunilado, levemente curvado para baixo na ponta
-    const beakCurve = new THREE.CatmullRomCurve3([V(0, -0.012, BEAK_Z + 0.03), V(0, -0.016, BEAK_Z - 0.07), V(0, -0.035, BEAK_Z - 0.165)]);
+    const beakCurve = new THREE.CatmullRomCurve3([V(0, -0.012, BEAK_Z + 0.03), V(0, -0.017, BEAK_Z - 0.05), V(0, -0.033, BEAK_Z - 0.125)]);
     const BS = 8;
     const beak = new THREE.TubeGeometry(beakCurve, BS, 0.04, 10, false);
     {
       const p = beak.attributes.position;
       for (let i = 0; i < p.count; i++) {
         const t = Math.floor(i / 11) / BS;
-        const s = 1 - 0.78 * t;                                       // afunila
+        const s = 1 - 0.74 * t;                                       // afunila
         const c = beakCurve.getPoint(t, TMP.v1);
         const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
         p.setXYZ(i, c.x + (x - c.x) * s * 0.85, c.y + (y - c.y) * s, c.z + (z - c.z) * s);
@@ -959,16 +980,15 @@ export function createDove(opts = {}) {
       beak.computeVertexNormals();
     }
     parts.push(paint(beak, COL.beak));
-    parts.push(paint(sphere(0.009, V(0, -0.035, BEAK_Z - 0.165), [0.85, 1, 1], 6, 5), COL.beak));
-    // anel do olho (pele clara) e brilho da córnea
+    parts.push(paint(sphere(0.0095, V(0, -0.033, BEAK_Z - 0.125), [0.85, 1, 1], 6, 5), COL.beak));
+    // anel do olho (pele clara); o brilho da córnea vem do material lustroso
     for (const sx of [-1, 1]) {
-      const ring = new THREE.TorusGeometry(0.034, 0.0055, 6, 18);
+      const ring = new THREE.TorusGeometry(0.034, 0.0055, 5, 16);
       ring.rotateY(Math.PI / 2); ring.translate(sx * 0.167, 0.045, -0.07);
       parts.push(paint(ring, COL.eyering));
-      parts.push(paint(sphere(0.007, V(sx * 0.178, 0.056, -0.082), [1, 1, 1], 6, 4), 0xffffff));
     }
     addMesh(headGroup, mergeAll(parts), bodyMat, 'head', true);
-    const eyes = mergeAll([-1, 1].map((sx) => sphere(0.032, V(sx * 0.15, 0.045, -0.07), [0.85, 1, 1], 14, 10)));
+    const eyes = mergeAll([-1, 1].map((sx) => sphere(0.032, V(sx * 0.15, 0.045, -0.07), [0.85, 1, 1], 12, 8)));
     addMesh(headGroup, eyes, eyeMat, 'eyes');
   }
 
@@ -979,7 +999,7 @@ export function createDove(opts = {}) {
     const sheet = skinByX(featherSheet(wingShape(fingers), { camber: 0.045, chord: 0.66, segs: 10, maxEdge: segs.edge }), WRIST_X, FAN_X);
     const parts = [sheet];
     fingers.forEach((f, i) => {
-      const g = featherSheet(bladeShape(f.len, f.w * 0.72, f.w * 1.28, 14), { thick: WING_THICK * 0.7, camber: 0.012, chord: f.w * 1.3, segs: 1, maxEdge: segs.blade });
+      const g = featherSheet(bladeShape(f.len, f.w * 0.72, f.w * 1.28, 10), { thick: WING_THICK * 0.7, camber: 0.012, chord: f.w * 1.3, segs: 1, maxEdge: segs.blade * 1.35 });
       const p = g.attributes.position, nr = g.attributes.normal;
       for (let k = 0; k < p.count; k++) {
         const x = p.getX(k), y = p.getY(k), z = p.getZ(k);
@@ -1037,7 +1057,7 @@ export function createDove(opts = {}) {
   {
     const parts = [];
     for (const d of tails) {
-      const g = featherSheet(bladeShape(d.len, d.w, d.w, 14), { thick: WING_THICK * 0.7, camber: 0.01, chord: d.w, segs: 1, maxEdge: segs.blade * 1.2 });
+      const g = featherSheet(bladeShape(d.len, d.w, d.w, 10), { thick: WING_THICK * 0.7, camber: 0.01, chord: d.w, segs: 1, maxEdge: segs.blade * 1.8 });
       const p = g.attributes.position;
       for (let k = 0; k < p.count; k++) {
         const x = p.getX(k), t = Math.max(0, x / d.len);
@@ -1069,13 +1089,13 @@ export function createDove(opts = {}) {
   const leather = [], metal = [];
   {
     // assento côncavo + abas
-    leather.push(sphere(1, V(0, SADDLE_Y + 0.02, SADDLE_Z), [0.27, 0.07, 0.36], 24, 12));
+    leather.push(sphere(1, V(0, SADDLE_Y + 0.02, SADDLE_Z), [0.27, 0.07, 0.36], 20, 10));
     leather.push(sphere(1, V(0, SADDLE_Y + 0.09, SADDLE_Z - 0.3), [0.085, 0.06, 0.06], 14, 10));                  // maçaneta (pommel)
     leather.push(roundedBox(0.36, 0.26, 0.05, 0.018, V(0, SADDLE_Y + 0.17, SADDLE_Z + 0.22), [0.22, 0, 0]));      // patilha (cantle)
     leather.push(limb(V(-0.18, SADDLE_Y + 0.3, SADDLE_Z + 0.25), V(0.18, SADDLE_Y + 0.3, SADDLE_Z + 0.25), 0.03, 10));
     for (const sx of [-1, 1]) {
-      leather.push(roundedBox(0.05, 0.14, 0.2, 0.015, V(sx * 0.19, SADDLE_Y + 0.08, SADDLE_Z + 0.14), [0, sx * 0.3, 0]));   // "orelhas" da patilha
-      leather.push(roundedBox(0.025, 0.3, 0.4, 0.01, V(sx * 0.4, SADDLE_Y - 0.17, SADDLE_Z - 0.04), [0, 0, sx * 0.34]));   // aba lateral (skirt)
+      leather.push(roundedBox(0.05, 0.14, 0.2, 0.015, V(sx * 0.19, SADDLE_Y + 0.08, SADDLE_Z + 0.14), [0, sx * 0.3, 0], 3));   // "orelhas" da patilha
+      leather.push(roundedBox(0.025, 0.3, 0.4, 0.01, V(sx * 0.4, SADDLE_Y - 0.17, SADDLE_Z - 0.04), [0, 0, sx * 0.34], 3));   // aba lateral (skirt)
       // loro do estribo: tira chata até o olhal do estribo
       const ball = footBall(sx);
       const eye = V(ball.x, ball.y + 0.105, ball.z);
@@ -1083,17 +1103,17 @@ export function createDove(opts = {}) {
       leather.push(ribbon([bar, bar.clone().lerp(eye, 0.5), eye], (p, t, o) => o.set(sx, 0, 0), 0.02, 0.005, { segs: 8 }));
       metal.push(buckle(bar.clone().lerp(eye, 0.3), 0.05, 0.035, 0.006, [0, sx * Math.PI / 2, Math.atan2(eye.y - bar.y, sx * (eye.x - bar.x)) + Math.PI / 2]));
       // estribo: arco de metal + piso + olhal
-      const arch = new THREE.TorusGeometry(0.075, 0.011, 8, 18, Math.PI);
+      const arch = new THREE.TorusGeometry(0.075, 0.011, 6, 14, Math.PI);
       arch.scale(1, 1.15, 1); arch.translate(ball.x, ball.y + 0.012, ball.z);
       metal.push(arch);
-      metal.push(roundedBox(0.16, 0.014, 0.055, 0.005, V(ball.x, ball.y, ball.z)));
-      const eyeRing = new THREE.TorusGeometry(0.016, 0.006, 6, 12); eyeRing.translate(ball.x, ball.y + 0.108, ball.z);
+      metal.push(roundedBox(0.16, 0.014, 0.055, 0.005, V(ball.x, ball.y, ball.z), [0, 0, 0], 2));
+      const eyeRing = new THREE.TorusGeometry(0.016, 0.006, 5, 10); eyeRing.translate(ball.x, ball.y + 0.108, ball.z);
       metal.push(eyeRing);
     }
     // cilha: tira chata que abraça a seção do corpo, com fivela no flanco
     const girthPts = [];
     for (let k = 0; k < 40; k++) girthPts.push(profile.surface(SADDLE_Z, (k / 40) * Math.PI * 2, 0.012));
-    leather.push(ribbon(girthPts, radial, 0.036, 0.0065, { closed: true, segs: 72 }));
+    leather.push(ribbon(girthPts, radial, 0.036, 0.0065, { closed: true, segs: 52 }));
     {
       const bp = profile.surface(SADDLE_Z, Math.PI * 0.6, 0.026);
       metal.push(buckle(bp, 0.05, 0.08, 0.006, [0, 0, -Math.PI * 0.6 + Math.PI / 2]));
@@ -1105,17 +1125,17 @@ export function createDove(opts = {}) {
         profile.surface(SADDLE_Z - 0.12, sx * 0.55, 0.012), profile.surface(-0.48, sx * 1.15, 0.012),
         profile.surface(-0.58, sx * 1.85, 0.012), profile.surface(-0.62, sx * 2.5, 0.012), RING,
       ];
-      leather.push(ribbon(pts, radial, 0.022, 0.005, { segs: 28 }));
+      leather.push(ribbon(pts, radial, 0.022, 0.005, { segs: 20 }));
       metal.push(buckle(profile.surface(-0.5, sx * 1.3, 0.025), 0.04, 0.05, 0.005, [0, 0, -sx * 1.3]));
     }
     leather.push(ribbon([RING, profile.surface(-0.45, Math.PI, 0.012), profile.surface(SADDLE_Z, Math.PI, 0.012)], radial, 0.018, 0.005, { segs: 14 }));
     leather.push(ribbon([RING, profile.surface(-0.76, Math.PI * 0.95, 0.012), profile.surface(-0.9, Math.PI * 0.75, 0.012), V(0, 0.02, -0.97)], radial, 0.018, 0.005, { segs: 16 }));
     // argola de metal da encomenda (plano YZ: a corda passa por ela) + placa
-    const ring = new THREE.TorusGeometry(0.06, 0.011, 8, 20);
+    const ring = new THREE.TorusGeometry(0.06, 0.011, 6, 16);
     ring.rotateY(Math.PI / 2);
     ring.translate(RING.x, RING.y - 0.04, RING.z);
     metal.push(ring);
-    metal.push(roundedBox(0.07, 0.035, 0.035, 0.008, V(RING.x, RING.y + 0.005, RING.z)));
+    metal.push(roundedBox(0.07, 0.035, 0.035, 0.008, V(RING.x, RING.y + 0.005, RING.z), [0, 0, 0], 2));
 
     addMesh(root, mergeAll(leather), leatherMat, 'tack');
     addMesh(root, mergeAll(metal), metalMat, 'tackMetal');
@@ -1136,11 +1156,11 @@ export function createDove(opts = {}) {
       for (let k = 0; k < n; k++) { const a = (k / n) * Math.PI * 2; pts.push(V(Math.sin(a) * r * 0.9, Math.cos(a) * r, z + Math.cos(a) * tilt)); }
       return pts;
     };
-    hl.push(ribbon(ringPts(-0.1, HEAD_R * 0.86), headOut, 0.014, 0.004, { closed: true, segs: 40 }));          // focinheira
-    hl.push(ribbon(ringPts(0.05, HEAD_R * 0.98, 0.07), headOut, 0.014, 0.004, { closed: true, segs: 40 }));    // testeira/coroa
+    hl.push(ribbon(ringPts(-0.1, HEAD_R * 0.86), headOut, 0.014, 0.004, { closed: true, segs: 26, M: 6 }));          // focinheira
+    hl.push(ribbon(ringPts(0.05, HEAD_R * 0.98, 0.07), headOut, 0.014, 0.004, { closed: true, segs: 26, M: 6 }));    // testeira/coroa
     for (const sx of [-1, 1]) {
-      hl.push(ribbon([V(sx * 0.17, 0.0, 0.06), V(sx * 0.172, -0.03, -0.03), V(sx * 0.158, -0.05, -0.1)], headOut, 0.011, 0.004, { segs: 8 }));
-      const r = new THREE.TorusGeometry(0.03, 0.007, 6, 14);
+      hl.push(ribbon([V(sx * 0.17, 0.0, 0.06), V(sx * 0.172, -0.03, -0.03), V(sx * 0.158, -0.05, -0.1)], headOut, 0.011, 0.004, { segs: 8, M: 6 }));
+      const r = new THREE.TorusGeometry(0.03, 0.007, 5, 12);
       r.rotateY(Math.PI / 2); r.translate(sx * 0.178, -0.048, -0.1);
       hm.push(r);
       hm.push(buckle(V(sx * 0.172, -0.005, 0.02), 0.022, 0.03, 0.004, [0, sx * Math.PI / 2, 0]));
@@ -1161,15 +1181,15 @@ export function createDove(opts = {}) {
   {
     // --- pernas (fixas na sela) ---
     const cl = [], lt = [];
-    cl.push(paint(sphere(1, V(0, 0.05, 0.0), [0.17, 0.1, 0.13], 14, 10), C.trousers));                      // quadril/nádegas
+    cl.push(paint(sphere(1, V(0, 0.05, 0.0), [0.17, 0.1, 0.13], 14, 8, 2), C.trousers));                      // quadril/nádegas
     for (const sx of [-1, 1]) {
       const hip = R.hip(sx), knee = R.knee(sx), ankle = R.ankle(sx), toe = R.toe(sx);
-      cl.push(paint(limb(hip, knee, 0.078, 10), C.trousers));
+      cl.push(paint(limb(hip, knee, 0.078, 8, 2), C.trousers));
       cl.push(paint(sphere(0.07, knee, [1, 1, 1], 10, 8), C.trousers));
-      cl.push(paint(limb(knee, knee.clone().lerp(ankle, 0.55), 0.06, 10), C.trousers));
+      cl.push(paint(limb(knee, knee.clone().lerp(ankle, 0.55), 0.06, 8, 2), C.trousers));
       const shinDir = ankle.clone().sub(knee).normalize();
-      lt.push(paint(limb(knee.clone().lerp(ankle, 0.45), ankle, 0.062, 10), C.boots));                     // cano da bota
-      lt.push(paint(limb(ankle.clone().addScaledVector(shinDir, -0.02), toe, 0.05, 10), C.boots));           // pé
+      lt.push(paint(limb(knee.clone().lerp(ankle, 0.45), ankle, 0.062, 8, 2), C.boots));                     // cano da bota
+      lt.push(paint(limb(ankle.clone().addScaledVector(shinDir, -0.02), toe, 0.05, 8, 2), C.boots));           // pé
       lt.push(paint(sphere(0.045, toe, [1.1, 0.7, 1.2], 8, 6), C.boots));                                   // biqueira
       lt.push(paint(sphere(0.052, ankle, [1, 0.9, 1.1], 8, 6), C.boots, 0.85));                             // calcanhar
     }
@@ -1178,10 +1198,23 @@ export function createDove(opts = {}) {
 
     // --- tronco inclinado à frente, braços, mochila (inclinam juntos) ---
     const ug = [], ul = [];
-    ug.push(paint(sphere(1, V(0, 0.18, -0.01), [0.155, 0.15, 0.115], 14, 10), C.jacket));                    // barriga
-    const chest = sphere(1, V(0, 0, 0), [0.17, 0.21, 0.12], 18, 12); chest.rotateX(-0.16); chest.translate(0, 0.33, -0.05);
-    ug.push(paint(chest, C.jacket));
-    ug.push(paint(limb(V(-0.19, 0.49, -0.1), V(0.19, 0.49, -0.1), 0.07, 10), C.jacket));                    // ombros
+    // tronco: perfil revolvido (quadril -> cintura -> peito -> ombros), achatado
+    // na profundidade, inclinado à frente e com a barra da jaqueta aberta sobre o quadril
+    {
+      const prof = [[0.0, -0.03], [0.15, -0.025], [0.168, 0.03], [0.158, 0.09], [0.148, 0.16], [0.16, 0.25], [0.175, 0.34],
+        [0.172, 0.42], [0.15, 0.48], [0.1, 0.53], [0.06, 0.56], [0.0, 0.565]].map(([r, y]) => new THREE.Vector2(r, y));
+      const torso = new THREE.LatheGeometry(new THREE.SplineCurve(prof).getPoints(16), 16);
+      const p = torso.attributes.position;
+      for (let i = 0; i < p.count; i++) {
+        const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+        const sh = THREE.MathUtils.smoothstep(y, 0.3, 0.47);                      // ombros mais largos que o peito
+        const belly = z < 0 ? 1 + 0.12 * Math.exp(-Math.pow((y - 0.14) / 0.08, 2)) : 1;
+        const blade = z > 0 ? 1 + 0.1 * sh : 1;                                   // omoplatas
+        p.setXYZ(i, x * (1 + 0.2 * sh), y, z * 0.68 * belly * blade - 0.19 * y + 0.03 * Math.sin(Math.min(1, y / 0.5) * Math.PI));
+      }
+      torso.computeVertexNormals();
+      ug.push(paint(torso, C.jacket));
+    }
     const collar = new THREE.TorusGeometry(0.068, 0.022, 8, 16); collar.rotateX(Math.PI / 2 - 0.25); collar.translate(0, 0.585, -0.1);
     ug.push(paint(collar, C.jacket, 0.85));
     const scarf = new THREE.TorusGeometry(0.08, 0.03, 8, 16); scarf.rotateX(Math.PI / 2 - 0.3); scarf.translate(0, 0.55, -0.105);
@@ -1189,9 +1222,9 @@ export function createDove(opts = {}) {
     ug.push(paint(limb(V(0.04, 0.52, -0.17), V(0.1, 0.36, -0.17), 0.028, 8, 2), C.scarf));                    // ponta do cachecol caída
     for (const sx of [-1, 1]) {
       const sh = R.shoulder(sx), el = R.elbow(sx), hd = R.hand(sx);
-      ug.push(paint(limb(sh, el, 0.052, 10), C.jacket));
+      ug.push(paint(limb(sh, el, 0.052, 8, 2), C.jacket));
       ug.push(paint(sphere(0.05, el, [1, 1, 1], 8, 6), C.jacket));
-      ug.push(paint(limb(el, hd.clone().lerp(el, 0.18), 0.044, 10), C.jacket));
+      ug.push(paint(limb(el, hd.clone().lerp(el, 0.18), 0.044, 8, 2), C.jacket));
       ul.push(paint(sphere(0.049, hd.clone().lerp(el, 0.2), [1, 1, 1], 8, 6), C.glove));                      // punho da luva
       const fist = sphere(1, V(0, 0, 0), [0.042, 0.038, 0.058], 10, 8);
       fist.rotateX(0.5); fist.translate(hd.x, hd.y, hd.z);
@@ -1199,23 +1232,24 @@ export function createDove(opts = {}) {
       ul.push(paint(limb(hd.clone().add(V(-sx * 0.02, 0.02, -0.01)), hd.clone().add(V(-sx * 0.045, 0.035, 0.015)), 0.012, 6, 2), C.glove)); // polegar
       hands.push(hd.clone());
       // alças da mochila
-      ul.push(paint(limb(V(sx * 0.12, 0.5, 0.08), V(sx * 0.13, 0.33, -0.15), 0.014, 6, 2), C.belt));
+      ul.push(paint(limb(V(sx * 0.11, 0.46, 0.07), V(sx * 0.115, 0.53, -0.07), 0.013, 5, 1), C.belt));
+      ul.push(paint(limb(V(sx * 0.115, 0.53, -0.07), V(sx * 0.125, 0.33, -0.2), 0.013, 5, 1), C.belt));
     }
-    const belt = new THREE.TorusGeometry(0.175, 0.018, 6, 20); belt.rotateX(Math.PI / 2); belt.scale(1, 1, 0.8); belt.translate(0, 0.1, -0.01);
+    const belt = new THREE.TorusGeometry(0.162, 0.016, 5, 16); belt.rotateX(Math.PI / 2); belt.scale(1, 1, 0.7); belt.translate(0, 0.1, -0.019);
     ul.push(paint(belt, C.belt));
-    ul.push(paint(roundedBox(0.05, 0.035, 0.012, 0.004, V(0, 0.1, -0.15)), C.belt, 1.6));                     // fivela do cinto (couro claro)
-    ug.push(paint(roundedBox(0.3, 0.3, 0.14, 0.04, V(0, 0.35, 0.15), [0.12, 0, 0]), C.pack));                   // mochila
-    ug.push(paint(limb(V(-0.13, 0.52, 0.16), V(0.13, 0.52, 0.16), 0.042, 10), C.pack, 0.9));                  // rolo em cima
+    ul.push(paint(roundedBox(0.05, 0.035, 0.012, 0.004, V(0, 0.1, -0.14), [0, 0, 0], 2), C.belt, 1.6));                     // fivela do cinto (couro claro)
+    ug.push(paint(roundedBox(0.28, 0.3, 0.13, 0.04, V(0, 0.34, 0.1), [0.18, 0, 0], 3), C.pack));                   // mochila
+    ug.push(paint(limb(V(-0.13, 0.51, 0.09), V(0.13, 0.51, 0.09), 0.042, 8, 2), C.pack, 0.9));                  // rolo em cima
     addMesh(riderUpper, mergeAll(ug), clothMat, 'riderUpper');
     addMesh(riderUpper, mergeAll(ul), darkLeatherMat, 'riderGloves');
 
     // --- cabeça (grupo próprio: compensa a inclinação, olha para a curva) ---
     const hg = [];
-    hg.push(paint(limb(V(0, -0.05, 0.0), V(0, 0.05, -0.02), 0.045, 10), C.skin));                            // pescoço
-    hg.push(paint(sphere(1, V(0, 0.17, -0.03), [0.086, 0.116, 0.1], 18, 14), C.skin));                        // crânio/rosto
+    hg.push(paint(limb(V(0, -0.05, 0.0), V(0, 0.05, -0.02), 0.045, 8, 2), C.skin));                            // pescoço
+    hg.push(paint(sphere(1, V(0, 0.17, -0.03), [0.086, 0.116, 0.1], 16, 12), C.skin));                        // crânio/rosto
     for (const sx of [-1, 1]) hg.push(paint(sphere(0.02, V(sx * 0.086, 0.16, -0.02), [0.6, 1, 1], 6, 5), C.skin));   // orelhas
     hg.push(paint(sphere(0.016, V(0, 0.14, -0.13), [0.8, 1, 1], 6, 5), C.skin));                              // nariz
-    const hair = new THREE.SphereGeometry(0.1, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.64);
+    const hair = new THREE.SphereGeometry(0.1, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.64);
     hair.rotateX(0.3); hair.scale(0.95, 1.1, 1.05); hair.translate(0, 0.19, -0.02);
     hg.push(paint(hair, C.hair));
     hg.push(paint(sphere(0.075, V(0, 0.15, 0.03), [1, 1.05, 1], 10, 8), C.hair));                            // volume da nuca
