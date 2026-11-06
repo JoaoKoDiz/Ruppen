@@ -69,11 +69,11 @@ export const ELEPHANT = {
   BODY: { rx: 560, ry: 430, rz: 470, cy: 1070 }, // elipsoide do corpo (semi-eixos) e y do centro
   LEG: { radius: 140, topY: 780, bottomY: -90, offsetX: 330, offsetZ: 290 }, // 4 patas (±offsetX, ±offsetZ)
   HEAD: { radius: 340, cx: 800, cy: 1060 },
-  EAR: { width: 540, height: 640, thickness: 50 },
+  EAR: { width: 500, height: 660, thickness: 50 },
   TRUNK: { length: 1050, baseRadius: 125, tipRadius: 45 },
   TUSK: { length: 860, baseRadius: 64, tipRadius: 22 },
   STRIDE: 2200,              // comprimento do passo (m): cadência das pernas = SPEED / STRIDE
-  CITY_MAX_HEIGHT: 500,     // altura máxima das construções acima da pele (topo da cúpula do palácio)
+  CITY_MAX_HEIGHT: 560,     // altura máxima das construções acima da pele (topo da cúpula/minaretes do palácio)
   DELIVERY_ABOVE_MAX: 900,  // o drop só conta se o jogador estiver até esta altura acima do topo da cidade
   FOOT_CLOUD_RADIUS: 2100,   // raio das nuvens/espuma ao redor das patas
 };
@@ -305,29 +305,47 @@ export const ELEPHANT_MODEL = {
   HEAD_SCALE: 1.15,         // fator sobre ELEPHANT.HEAD.radius (cabeça maior e mais pesada, como nas referências)
   EAR_SCALE: 1.6,           // fator sobre ELEPHANT.EAR (orelhas tão altas quanto a cabeça, pendendo abaixo dela)
   EAR_YAW: 0.5,             // rad — abertura das orelhas para fora (0 = coladas ao corpo)
-  EAR_HOUSE_H: { min: 12, max: 30 },    // m — profundidade dos blocos de casas que saem do manto da orelha
-  EAR_HOUSE_GRID: { rows: 18, cols: 14 },   // bloco retangular de casinhas em terraços no manto da orelha
+  EAR_HOUSE_H: { min: 6, max: 14 },     // m — profundidade das casinhas que saem do manto da orelha
+  EAR_HOUSE_GRID: { rows: 22, cols: 16 },   // bloco de casinhas em terraços no manto (muitas fileiras pequenas)
+  EAR_HOUSE_RECT: { x0: -0.95, x1: -0.26, y0: -0.6, y1: -0.05 },   // região do bloco (frações da largura/altura da orelha; x<0 = para trás, y<0 = para baixo): parte SUPERIOR-EXTERNA (ref. 1)
   TRUNK_ROOT_RADIUS: 235,   // m — raio da tromba na raiz (afunila até TRUNK.baseRadius a ~25% do comprimento)
-  CITY_SPACING_HIGH: 10.5,  // m — passo da malha de casas do dorso (quality=high): tapete fino
-  CITY_SPACING_LOW: 20,
-  CITY_FLANK_ANGLE: 1.95,    // rad — até que ângulo (a partir do zênite) as casas descem pelos flancos
-  HOUSE_H: { min: 6, max: 20 },         // m — alturas das casas do dorso
-  HOUSE_FOOT: { min: 5, max: 10 },      // m — lado das casas do dorso
+  CITY_SPACING_HIGH: 6.5,   // m — passo da malha de casas do dorso no alto (quality=high); cresce para ~1,5× nos flancos
+  CITY_SPACING_LOW: 11,
+  CITY_FLANK_ANGLE: 1.25,   // rad — até que ângulo (a partir do zênite) as casas INSTANCIADAS descem pelos flancos
+  CRUST_FLANK_ANGLE: 1.7,   // rad — até onde desce a casca-crosta (textura de casinhas) pelos flancos
+  CRUST_OFFSET: 3,          // m — a casca-crosta fica a esta distância acima da pele
+  CRUST_REPEAT: 12,         // repetições da textura da crosta ao longo do dorso
+  HOUSE_H: { min: 3, max: 10 },         // m — alturas das casas do dorso (→ 9–30 m no mundo)
+  HOUSE_FOOT: { min: 2.8, max: 5.2 },   // m — lado das casas do dorso (→ 8–16 m no mundo)
   TALL_BLOCK_CHANCE: 0.05,  // fração de prédios mais altos (até ~1,6× HOUSE_H.max)
-  ROOF_TILE_CHANCE: 0.35,   // fração de casas do dorso com telhado rosa/terracota (o resto é laje pálida)
+  ROOF_TILE_CHANCE: 0.4,    // fração de casas do dorso com telhado rosa/terracota (o resto é laje pálida)
+  CARPET_MAX: 30000,        // limite de instâncias do tapete de casas do dorso
+  LOD_DISTANCE: 10000,      // m (mundo) — além desta distância da câmera o tapete instanciado some (fica a crosta)
   PALACE_X: -262,           // x local do centro do palácio (atrás do centro)
-  PALACE_SIZE: { hx: 250, hz: 190 },    // meio-lados do bloco arcado principal do palácio
+  PALACE_SIZE: { hx: 250, hz: 190 },    // meio-lados do bloco arcado principal do palácio (≈ 1/3 do corpo)
   PLAZA: { x0: -60, x1: 120, hz: 75 },  // praça de mercado (no centro do dorso: ponto da entrega)
-  TUSK_HOUSE_STEP: 0.0105,  // passo (fração da presa) entre fileiras de casas
-  TUSK_HOUSE_SPAN: 1.5,     // rad — meio-ângulo coberto pelas casas (±: toda a metade de cima da presa)
+  TUSK_HOUSE_DIV: 30,       // lado da casinha da presa = diâmetro local / TUSK_HOUSE_DIV
+  TUSK_HOUSE_GAP: 2.0,      // passo entre casinhas da presa (× lado)
+  TUSK_HOUSE_SPAN: 1.35,    // rad — meio-ângulo coberto pelas casas (±: quase toda a metade de cima da presa)
+  TUSK_HOUSE_MAX: 6000,     // limite de casinhas por par de presas
+  TUSK_TOWERS: 9,           // torres brancas por presa
+  FOLD_BODY: 20,            // m — amplitude das dobras esculpidas do corpo (geometria)
+  FOLD_HEAD: 8,             // m — idem cabeça
+  FOLD_LEG: 9,              // m — idem patas (anéis)
+  FOLD_EAR: 12,             // m — idem orelhas
+  SPRAY_PERIOD: { min: 70, max: 110 },  // s — intervalo entre jatos d'água da tromba (semente por elefante)
+  SPRAY_DURATION: 12,       // s — duração de cada jato
+  SPRAY_LIFE: 4.2,          // s — vida de cada gota (arco de ≈ 1,2 corpos de comprimento)
+  SPRAY_POINTS: 1500,
+  SPRAY_POINT_SIZE: 70,     // m (modelo-base) — tamanho dos sprites do jato
 };
 export const ELEPHANT_POLISH = {
   EYE_RADIUS: 34,           // raio do globo ocular
   EYE_SINK: 5,              // quanto o globo afunda na pele (pequeno: olho pouco "furado")
   LEG_HIP_RADIUS: 210,      // raio de referência do perfil da pata (quadril = 1.0; joelho ≈ 0.88; pé ≈ 1.12)
   LEG_HIP_LEAN: 40,         // m — a coxa inclina para dentro no topo (entra na barriga, não sai pelo flanco)
-  SKIN_BUMP: 9,             // bumpScale da pele (dobras grandes e esculpidas)
-  STUD_SIZES: { big: 34, mid: 21, small: 12 },   // raios das tachas da placa (coluna central, médias, pequenas)
+  SKIN_BUMP: 4,             // bumpScale da pele (vincos finos; as dobras grandes são geometria)
+  STUD_SIZES: { big: 40, mid: 21, small: 12 },   // raios das tachas da placa (coluna central, médias, pequenas)
   POMPOM_RADIUS: 44,        // raio dos pompons da guirlanda
   POMPOM_SPACING: 114,       // passo entre pompons ao longo da borda da placa
 };
