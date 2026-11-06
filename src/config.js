@@ -57,6 +57,12 @@ export const COLORS = {
   shallows: 0x4fb3c8,    // água rasa turquesa ao redor das ilhas (luz espalhada sobre a plataforma de areia)
   seabedRock: 0x55604f,  // fundo rochoso com algas (costas sem praia)
   lichen: 0xb9b47a,      // líquen nas rochas
+  scree: 0x9d9282,       // tálus/cascalho nas encostas erodidas
+  gravel: 0xa39a84,      // leques aluviais (deposição na saída dos vales)
+  meadowLush: 0x5f9c43,  // fundos de vale úmidos
+  wetRock: 0x4a463e,     // leito molhado dos talvegues
+  riverWater: 0x193c45,  // lâmina d'água dos rios (fundo)
+  riverShallow: 0x3a6461, // rios rasos/corredeiras (bordas)
 };
 
 // -------------------------- ELEFANTES --------------------------------
@@ -177,14 +183,52 @@ export const LAYERS = { DEFAULT: 0, NO_FOG: 1 };
 export const ISLANDS = {
   // --- malha de terreno adaptativa (quadtree restrita: densa na costa, cristas e picos) ---
   TERRAIN_LEVELS: 11,      // níveis do quadtree (folha mínima = 2·boundRadius / 2^níveis ≈ 3–5 m)
-  TERRAIN_LEAVES_HIGH: 16500, // folhas por ilha antes da restrição 2:1 (→ ~62k tris) em quality=high
+  TERRAIN_LEAVES_HIGH: 15000, // folhas por ilha antes da restrição 2:1 (fora as forçadas na costa/rios) em quality=high
   TERRAIN_LEAVES_LOW: 8000,
+  TERRAIN_TRIS_HIGH: 60000, // teto de triângulos do terreno por ilha (o resto do orçamento de 160k: árvores, pedras, rios)
+  TERRAIN_TRIS_LOW: 40000,
   LAND_LEAF_MAX: 90,       // m — folha máxima em terra (triângulos grandes viram vincos na AO de tela)
   COAST_LEAF: 11,          // m — folhas da malha na linha d'água/falésias (refinadas antes do resto)
+  RIVER_LEAF: 22,          // m — folha máx. sobre o leito dos rios
+  RIVER_LEAF_MIN_HW: 2.4,  // m — só rios com meia-largura ≥ isto forçam folhas pequenas
+  RIVER_PLAIN: 5,          // m — várzea plana (cascalho) de cada lado da lâmina d'água
   DEEP_CULL_Y: -45,        // m — folhas inteiras abaixo disto não são desenhadas (o mar é opaco ali)
   RASTER: 256,             // células da grade regular de cobertura (posicionar árvores/pedras, relevo local)
+  // --- relevo assado (src/world/terrainGen.js → tools/bake-terrain.js → src/world/terrainData.js) ---
+  TERRAIN: {
+    GRID: 512,              // células por lado (cobre ±boundRadius: 13–21 m por célula)
+    LOWLAND: 55,            // m — planície costeira média (antes do maciço)
+    PEAK_SPREAD: 1.25,      // raio do perfil de cada pico ∝ altura (encosta máx. ≈ 0,81·h/r)
+    SUMMIT: 0.22,           // fração do raio de cada pico que fica como cimo largo (maciço arredondado, não cone)
+    SPUR: 0.4,              // amplitude relativa dos esporões (ridged) sobre o maciço
+    CAP_SLOPE: 0.74,        // teto de segurança do declive pela distância à costa (×1,25)
+    PEAK_DC: 0.7,           // altura máx. de um pico = PEAK_DC × (distância à costa − COAST_FLAT)
+    COAST_FLAT: 70,         // m — faixa costeira antes de o maciço começar a subir
+    COAST_FALL: 800,        // m — distância à costa em que o maciço chega a ~63% da altura
+    SPL_ITERS: 60,          // incisão fluvial (lei de potência do fluxo): iterações
+    SPL_K: 0.04,            // K·dt (m^(1-2m)) — força da incisão
+    SPL_M: 0.5,             // expoente da área drenada
+    DIFFUSION: 0.12,        // difusão de encosta por iteração (células²): cristas arredondadas
+    LEVELS: [[1, 2, 3, 200]], // erosão: [fator da célula (níveis grossos primeiro), gotas por célula de terra, raio, vida, ×erosão]
+    INERTIA: 0.08,
+    CAPACITY: 2,
+    MIN_CAPACITY: 0.004,  
+    ERODE: 0.15,
+    DEPOSIT: 0.02,
+    EVAPORATE: 0.005,
+    GRAVITY: 4,
+    MAX_ERODE: 0.0015,      // por passo (fração de maxH)
+    TALUS_DEG: 36,          // ângulo de repouso da erosão térmica
+    THERMAL_ITERS: 60, 
+    THERMAL_RATE: 0.4,
+    RIVER_AREA: 150000,      // m² — área de drenagem a partir da qual há rio visível
+    RIVER_MOUTH_AREA: 700000,  // m² — sistemas com foz deste tamanho sempre viram rio
+    RIVER_SYSTEMS: 7,       // … e pelo menos os N maiores (× R/2500) de cada ilha
+    RIVER_W: [3.5, 26],     // m — largura mín./máx. da lâmina d'água
+    RIVER_W_K: 7,           // m por √km² de bacia
+  },
   // --- detalhe de renderização (só visual: a jogabilidade continua em island.heightAt) ---
-  EROSION_M: 24,           // m — profundidade máx. das ravinas (só cava: nunca acima de heightAt + ~3 m)
+  DETAIL_M: 3.5,           // m — rugosidade fina sobre a grade erodida (renderHeight ≤ heightAt + 4,5 m)
   CLIFF_TOP: [4, 11],      // m — heightAt onde fica a borda das falésias costeiras (costa sem praia → rocha)
   CLIFF_RAISE: 5,          // m — a borda é erguida até isto (< DOVE.ALT_MIN): faces de ~10–18 m sobre o mar
   DETAIL_FADE: [160, 750, 1100, 5200], // m — detalhe fino some de [0]→[1], o grosso de [2]→[3]
@@ -214,7 +258,7 @@ export const ISLANDS = {
   BEACH_NOISE_M: 900,      // m — escala das costas com/sem praia (sem praia → costa rochosa com falésia)
   SAND_MAX_Y: 8,           // m — areia até esta altura (onde a encosta é suave)
   SAND_WET_Y: 1.5,         // m — faixa de areia molhada/escura junto à água
-  TREELINE: 0.45,          // fração de maxH acima da qual não há floresta
+  TREELINE: 0.55,          // fração de maxH acima da qual não há floresta
   // --- campo da costa (textura polar por ilha lida pelo oceano: fundo, distância à costa) ---
   SHORE_TEX_W: 2048,       // amostras angulares por ilha
   SHORE_TEX_ROWS: 48,      // amostras radiais por ilha (u = r / contorno de SHORE_U0 a SHORE_U1)
@@ -416,10 +460,10 @@ export const ELEPHANT_MODEL = {
   TUSK_HOUSE_SPAN: 1.35,    // rad — meio-ângulo coberto pelas casas (±: quase toda a metade de cima da presa)
   TUSK_HOUSE_MAX: 1150,     // limite de casinhas por par de presas (orçamento de triângulos)
   TUSK_TOWERS: 9,           // torres brancas por presa
-  FOLD_BODY: 20,            // m — amplitude das dobras esculpidas do corpo (geometria)
-  FOLD_HEAD: 8,             // m — idem cabeça
-  FOLD_LEG: 9,              // m — idem patas (anéis)
-  FOLD_EAR: 12,             // m — idem orelhas
+  FOLD_BODY: 28,            // m — amplitude das dobras esculpidas do corpo (geometria; legíveis a 5–10 km)
+  FOLD_HEAD: 9,             // m — idem cabeça
+  FOLD_LEG: 10,             // m — idem patas (anéis)
+  FOLD_EAR: 8,              // m — idem orelhas (+ caimento do manto: ELEPHANT_MATERIALS.EAR_DRAPE)
   SPRAY_PERIOD: { min: 70, max: 110 },  // s — intervalo entre jatos d'água da tromba (semente por elefante)
   SPRAY_DURATION: 12,       // s — duração de cada jato
   SPRAY_LIFE: 5.2,          // s — vida de cada gota (arco alto de ≈ 1,5 corpo de comprimento)
@@ -442,11 +486,20 @@ export const ELEPHANT_MATERIALS = {
   SKIN_NORMAL_SCALE: 0.55,  // intensidade das micro-rugas/poros
   SKIN_ROUGHNESS: 0.86,     // pele fosca e empoeirada (o roughnessMap baixa nos vincos)
   SKIN_ENV: 0.4,            // envMapIntensity da pele
-  SKIN_COLOR: 0x675e5a,     // base do albedo (após manchas/vincos a média fica ≈ #5d5552: cinza quente médio-escuro)
+  SKIN_COLOR: 0x685c52,     // base do albedo (após manchas/vincos a média fica ≈ #5d5552: cinza quente médio-escuro)
   SKIN_CAVITY_AO: 0.32,     // escurecimento máximo (cor do vértice) nos vincos esculpidos da geometria
   SKIN_RIDGE_LIFT: 0.08,    // clareamento leve das cristas das dobras
   SKIN_FINE_WRINKLES: 150,  // segmentos de rugas finas onduladas pintados no mapa de cor da pele (1024²)
-  EAR_CLOTH_COLOR: 0x5a4c46, // miolo do manto da orelha: tecido taupe escuro quente (não azulado sob o céu)
+  // manto da orelha (rodada 6): cobertor tecido escuro quente + borda grossa listrada tecida
+  EAR_CLOTH: { color: 0x502d25, alt: 0x3a2d30, worn: 0x6e5a52, wear: 0.38, borderWear: 0.55 },   // vinho-castanho, índigo-castanho, desbotado
+  EAR_BORDER_STRIPES: [      // [cor, largura relativa], de FORA para DENTRO
+    [0x4a2a1c, 9], [0xc8792f, 40], [0xeedcb8, 9], [0x6b3a24, 6], [0xc58a86, 16], [0xeedcb8, 7], [0xd0823a, 44], [0xd9a640, 4],
+    [0xeedcb8, 11], [0x7a4228, 7], [0xb87a7a, 13], [0xc8792f, 28], [0xd9a640, 4], [0x3a2220, 6]],
+  CLOTH_TILE: 22,           // m (modelo-base) por ladrilho da trama real (uv1 métrico dos panos: manto, faixas, barriga)
+  CLOTH_BIG_TILE: 160,      // m — couro gasto (brown_leather) como amassado/desgaste largo na normal dos panos
+  CLOTH_BIG_NORMAL: 0.45,
+  CLOTH_WEAVE_COLOR: 0.45,  // quanto a luminância da trama real modula a cor dos panos
+  EAR_DRAPE: { amp: 30, wave: 170, grow: 0.3, shade: 0.42, fringe: { step: 9, len: [20, 42], r: 2.6 } },   // dobras do caimento (geometria) e franja desfiada da barra
   GOLD_COLOR: 0xb8862c,     // ouro-bronze quente
   GOLD_ROUGHNESS: 0.34,     // metal escovado (roughnessMap com riscos 0.28–0.42)
   GOLD_ENV: 1.2,
@@ -500,7 +553,7 @@ export const ELEPHANT_CITY = {
 // compartilhado pelos 7 elefantes; dobras deslocadas na normal, AO de cavidade nos vértices,
 // pesos de skinning pela região dominante do campo.
 export const ELEPHANT_SCULPT = {
-  CELL_HIGH: 14.2,          // lado da célula da grade (m, modelo-base) em quality=high (≈ 140 k triângulos)
+  CELL_HIGH: 14.6,          // lado da célula da grade (m, modelo-base) em quality=high (≈ 142 k triângulos)
   CELL_LOW: 19,             // idem quality=low (≈ 80 k)
   K_BODY: 120,              // suavidade (k do smin) entre os volumes do tronco (barriga, cernelha, ombros, quadris)
   K_NECK: 150,              // pescoço ↔ corpo/cabeça
@@ -524,10 +577,34 @@ export const ELEPHANT_SCULPT = {
   MUD_NORMAL: 0.38,         // intensidade das rachaduras na normal
   DETAIL_FADE: { leather: [450, 3200], mud: [900, 6500] },   // m (MUNDO) — o detalhe fino da pele (couro / rachaduras) esmaece entre estas distâncias da câmera
   MUD_TONE: 0.35,           // quanto a luminância da lama modula o cinza quente da pele
-  SKIN_TINT: [1.12, 1.04, 0.97], // tinta (linear) sobre o albedo da pele: compensa o azul do céu no lado da sombra (cinza quente)
+  SKIN_TINT: [1.16, 1.03, 0.85], // tinta (linear) sobre o albedo da pele: compensa o azul do céu no lado da sombra (cinza quente)
   NOD: 0.012,               // rad — aceno leve da cabeça
   KNEE_FLEX: 0.2,           // rad — flexão do joelho na fase de balanço
   HIP_SWING: 0.12,          // rad — balanço das patas a partir do quadril
+  // --- rodada 6 (look-dev da pele/patas) ---
+  FOLD_SHARP: 0.25,         // expoente do perfil do lençol (menor = parede mais íngreme logo após o vinco)
+  FOLD_WARP: [0.55, 0.16, 4.2], // ondulação das curvas de nível dos lençóis (baixa freq., alta freq., período ×espaçamento): linhas longas e fluidas
+  LEG_WARP: 0.45,           // ondulação relativa dos anéis das patas (menor: anéis longos, não bolhas)
+  FOLD_MIN: 0.45,           // amplitude mínima relativa dos lençóis (não somem: leitura de longe)
+  FOLD_SPACING: { body: 76, head: 54, leg: 50 },   // m — espaçamento dos lençóis
+  ANKLE_RINGS: { y0: 52, y1: 128, spacing: 15, amp: 7 },   // anéis de rugas do tornozelo (entre o pé e a faixa)
+  // perfil da pata [y, raio relativo a LEG_HIP_RADIUS]: pé alargado, tornozelo fino, canela, joelho, coxa
+  LEG_PROFILE: [[-60, 1.2], [-10, 1.17], [40, 1.07], [100, 0.94], [170, 0.91], [300, 0.9], [410, 1.0], [530, 0.91], [650, 0.95], [800, 1.0], [960, 1.06]],
+  KNEE_BULGE: { fwd: 0.66, rx: 92, ry: 128, rz: 165 },   // bossa do joelho à frente (patas da frente; atrás: joelho alto + jarrete)
+  TOE: { y: 16, r: 205, angles: [-1.0, -0.5, 0, 0.5, 1.0], size: [56, 40] },   // lóbulos dos dedos na borda do pé
+  NAIL: { y: 30, size: [84, 58, 26], sink: -7 },   // unhas de marfim (meio enterradas nos dedos)
+  ANKLE_BAND: { y0: 132, y1: 272 },   // faixa listrada do tornozelo (re-assentada acima dos anéis de rugas)
+  CAVITY_DARK: 0.42,        // escurecimento (cor do vértice) nos vincos pela curvatura da malha
+  CREST_LIFT: 0.1,          // clareamento das cristas
+  // material (shader da pele): albedo quente, poeira nas cristas, lama seca nas patas/barriga, faixa molhada
+  DUST_COLOR: [0.25, 0.215, 0.18],   // poeira clara (albedo linear) nas cristas das dobras
+  DUST_CREST: 0.35,         // quanto a poeira cobre as cristas
+  CREASE_DARK: 0.28,        // escurecimento extra no fundo dos vincos (shader)
+  ROUGH_CREST: 0.97, ROUGH_CREASE: 0.6, ROUGH_WET: 0.32,
+  MUD: { top: 560, bottom: 40, amount: 0.6, belly: 0.4, bellyTop: 860, color: [0.3, 0.262, 0.205], texColor: 0.12 },   // lama seca clara (brown_mud_dry tingida) subindo das patas/barriga
+  WET: { top: 46, soft: 26, dark: 0.52 },   // faixa molhada escura na linha d'água (y local)
+  SSS: { wrap: 0.45, color: [0.5, 0.24, 0.14], amount: 0.22 },   // terminador suave e quente (subsuperfície)
+  FAR_FLATTEN: [2500, 9000], // m (mundo) — as manchas finas de cor (lama/blots) esmaecem para um tom médio: de longe ficam as dobras
 };
 
 // ----------------------------- RENDER --------------------------------
@@ -609,4 +686,113 @@ export const RENDER = {
     BLUR_SHARP: 0.06,        // tolerância relativa de profundidade do blur bilateral
   },
   MSAA: 4,                   // amostras do render target da cena (high/ultra)
+  // Realismo de câmera (post.js, só high/ultra; low intocado). Flags de URL: #godrays=0 #flare=0 #mblur=0 #grain=0
+  // #ca=0 #autoexp=0 (#cine=0 desliga tudo). Ordem: cena → AO → nuvens → [CINE: raios de sol + motion blur + exposição]
+  // → bloom → grade (+ glare/fantasmas/véu, aberração cromática, vinheta, grão) → SMAA.
+  CINE: {
+    // Raios de luz volumétricos ("god rays") em espaço de tela: máscara em meia resolução (céu e horizonte distante =
+    // ar aceso, geometria = sombra, × (1 − alfa) das nuvens volumétricas quando o passe delas existe), borrada
+    // radialmente em direção ao sol.
+    GODRAYS: {
+      samples: { high: 32, ultra: 48 },
+      scale: 0.5,              // resolução da máscara/borrão em relação ao drawing buffer
+      density: 0.85,           // fração do caminho pixel→sol percorrida pelas amostras
+      decay: 0.972,            // peso de cada amostra seguinte (mais perto do sol pesa menos)
+      intensity: 0.16,         // brilho somado (sRGB de tela, × cor do sol × fração acesa^contrast × queda)
+      occlusion: 0.42,         // escurecimento máximo do ar no volume de sombra (feixes escuros a partir das silhuetas)
+      occNear: [120, 250],     // m — oclusores mais próximos não contam (a pomba não projeta feixe na tela inteira)
+      seaY: 4,                 // m — superfície abaixo disto é mar: não bloqueia o sol (o ar acima dele está aceso)
+      falloff: 1.0,            // × exp(−dist·falloff): enfraquecem longe do sol (dist em alturas de tela)
+      airLength: 2500,         // m — espalhamento ∝ 1 − exp(−dist/airLength): objetos próximos (a pomba) quase não recebem raios
+      far: [9000, 30000],      // m — geometria além disto conta como "ar aceso" (horizonte enevoado entre as patas)
+      maxNdc: [1.6, 3.5],      // |ndc| do sol: força total até [0], some em [1] (sol bem acima do quadro ainda projeta raios); além disso custo zero
+      contrast: 1.5,           // potência sobre a fração acesa: realça os feixes em relação ao brilho uniforme
+    },
+    // Efeitos de lente com o sol na/perto da tela, ocluídos pela profundidade (+ alfa das nuvens): halo suave, fantasmas
+    // ao longo do eixo sol→centro (tinta cromática, raio por canal), véu (perda de contraste).
+    FLARE: {
+      halo: [0.10, 0.035, 0.035, 0.22], // [intensidade, raio] do núcleo e do halo largo (raios em alturas de tela)
+      sunRadius: 0.012,        // raio (alturas de tela) do disco de amostras de visibilidade do sol
+      // [posição no eixo (0 = sol, 1 = centro, 2 = espelho), raio, intensidade, r, g, b]
+      ghosts: [
+        [0.55, 0.030, 0.060, 0.75, 1.0, 0.65],
+        [1.25, 0.055, 0.035, 0.55, 0.75, 1.0],
+        [1.55, 0.020, 0.070, 1.0, 0.70, 0.45],
+        [1.85, 0.090, 0.022, 0.65, 0.85, 1.0],
+        [2.30, 0.140, 0.014, 1.0, 0.85, 0.60],
+      ],
+      chroma: 0.08,            // diferença relativa de raio R/G/B dos fantasmas (franjas)
+      veil: 0.07,              // véu máximo (fração da imagem trocada pela cor do brilho) com o sol no centro
+      veilFalloff: 1.1,        // × exp(−dist(sol, centro)·k)
+      fadeNdc: 1.25,           // halo/fantasmas somem com o sol além desta |ndc|
+      veilNdc: 2.0,            // véu some com o sol além desta |ndc|
+    },
+    // Motion blur da câmera: reprojeção com a view-projection anterior + depth, amostras centradas no pixel.
+    MBLUR: {
+      samples: { high: 8, ultra: 12 },
+      shutter: 1 / 40,         // s — obturador equivalente com ganho 1; × ganho pela velocidade da câmera
+      gain: [60, 140, 0.35, 1.0], // velocidade (m/s) de/até → ganho de/até (cruzeiro quase invisível, boost/mergulho visível)
+      maxLen: 0.035,           // comprimento máximo do rastro (alturas de tela)
+      near: [20, 30],          // m — pixels mais próximos (pomba, cavaleiro, corda) não borram nem são amostrados
+      teleport: 400,           // m — salto da câmera entre quadros acima disto não borra
+    },
+    GRAIN: 0.014,              // amplitude do grão (sRGB de tela; maior nos meios-tons, menor no preto/branco)
+    CA_PX: 0.9,                // separação R–B nos cantos a 1080p (px) — aberração cromática lateral
+    // Exposição automática (adaptação do olho): média geométrica da luminância (128×64 + mipmaps, centro pesa mais,
+    // pomba excluída) → EV alvo = (log2(KEY) − log2(média))·STRENGTH, limitado, adaptado com constante de tempo TAU.
+    AUTOEXP: {
+      key: 0.30,               // luminância "de cena" (proxy L/(1−L) do sRGB de tela) que fica com EV 0
+      strength: 0.6,           // adaptação parcial (o olho não normaliza tudo)
+      minEv: -0.35, maxEv: 0.9,
+      tauUp: 1.8, tauDown: 1.2, // s — clarear (entrar na sombra) é mais lento que escurecer
+    },
+  },
+};
+
+// ------------------------------ VIDA ----------------------------------
+// Navios, pássaros e multidões (src/world/life.js): escala humana para a sensação de ser minúsculo.
+// Distâncias em metros do MUNDO, exceto onde indicado "local" (unidades do modelo-base do elefante).
+export const LIFE = {
+  SEED_OFF: 7171,
+  // --- navios: 3 tipos (InstancedMesh por tipo), geometria procedural com cores por vértice ---
+  SHIPS: {
+    // escort = orbita um elefante (passa perto das patas: elipse local a × b, m); island = laço ao redor de uma ilha
+    CARGO: { count: 4, low: 3, length: [92, 128], speed: [9, 11.5], escort: 1.0, orbitA: [2300, 2900], orbitB: [1950, 2450], wake: 1100 },
+    DHOW: { count: 5, low: 4, length: [26, 44], speed: [4.5, 6.5], escort: 0.6, orbitA: [2700, 3800], orbitB: [2400, 3400], coast: [700, 1400], wake: 420 },
+    FISHING: { count: 5, low: 3, length: [8, 15], speed: [3, 5.5], escort: 0.2, orbitA: [2400, 3200], orbitB: [2200, 2900], coast: [260, 750], wake: 170 },
+    MIN_COAST_DEPTH: -30,   // m — o casco nunca passa onde islandHeightAt > isto (encolhe/afasta a órbita)
+    DRAW_DIST: 26000,       // m — além disto o navio some (a perspectiva aérea já o apagou)
+    WAKE_POINTS: 30,        // pontos ao longo da esteira (×9 através); low: 18
+    WAKE_LIFT: 0.45,        // m acima da superfície das ondas
+    KELVIN: 0.3,            // meia-largura dos braços da esteira de Kelvin por metro atrás da proa (≈ tan 19,5° × 0,85)
+    BOB: { CARGO: 0.55, DHOW: 0.85, FISHING: 1.0 },   // resposta do arfagem/balanço às ondas
+  },
+  // --- pássaros: um InstancedMesh (bater de asas no vertex shader) ---
+  BIRDS: {
+    // bandos (high). low: metade.
+    HEAD_GULLS: 70,          // ao redor da cabeça do elefante mais próximo
+    CITY_DOVES: 60,          // sobre a cidade do mais próximo
+    MARKET_PIGEONS: 60,      // pombos rodando baixo sobre a praça do mercado
+    HEAD_GULLS_2: 50,        // cabeça do 2º elefante mais próximo
+    ISLAND_GULLS: 60,        // costa da ilha mais próxima
+    SHIP_GULLS: 30,          // seguindo o navio mais próximo (≤ 8 km)
+    SOARERS: 8,              // aves grandes planando em térmicas perto da altitude da pomba
+    SIZE: [0.7, 1.0],        // envergadura (m) das gaivotas/pombas
+    SOAR_SIZE: [1.9, 2.4],   // envergadura das planadoras
+    SOAR_CELL: 2600,         // m — grade das térmicas (metade das células tem térmica)
+  },
+  // --- multidões: pessoas instanciadas no mercado e na avenida central de cada cidade (presas a elephant.body) ---
+  CROWD: {
+    COUNT_HIGH: 1500,        // por elefante (low: sem multidões)
+    DIST: 3000,              // m — só elefantes com a praça a menos disto da câmera
+    FULL_DIST: 1200,         // m — até aqui todas as pessoas; depois a contagem cai até 35% em DIST
+    HEIGHT: 1.7,             // m (mundo)
+    PLAZA_TOP: 1518,         // local — piso da praça (fallback se getSurfaceHeight falhar; ver elephant.js)
+    FOUNTAIN_R: 19,          // local — chafariz no centro da praça (tanque r 17 + margem)
+    STALL_MARGIN: 0.3,       // local — folga ao redor das bancas
+    AVENUE_HALF: 7,          // local — meia-largura útil da avenida central (|z| < 9 sem casas)
+    AVENUE_MAX_X: 520,       // local — fim da avenida (frente do dorso)
+    WALK_SPEED: [0.9, 1.5],  // m/s
+    STRIDE: 1.45,            // m por ciclo de passos
+  },
 };

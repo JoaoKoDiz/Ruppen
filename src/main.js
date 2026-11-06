@@ -9,6 +9,7 @@ import { WORLD_DATA } from './world/worldData.js';
 import { createSky } from './world/sky.js';
 import { createOcean } from './world/ocean.js';
 import { createClouds } from './world/clouds.js';
+import { createLife } from './world/life.js';
 import { createPost } from './world/post.js';
 import { createIslands } from './world/islands.js';
 import { createInput } from './input.js';
@@ -54,7 +55,10 @@ const ocean = createOcean(scene, { quality: worldQuality });
 const islands = createIslands(scene, WORLD_DATA, { quality: worldQuality });
 const clouds = createClouds(scene, WORLD_DATA, { quality: worldQuality });
 // composer: cena (MSAA + depth) → SSAO → bloom → grade → SMAA; low = render direto. #ao=0 desliga a AO, #postdebug=1|2 mostra o buffer de AO, #msaa=N
-const post = createPost(renderer, scene, camera, { quality, ao: params.ao !== '0', debug: num('postdebug', 0), msaa: params.msaa !== undefined ? num('msaa', 4) : undefined }); // #msaa=0: captura headless rápida
+// realismo de câmera (high/ultra): #godrays=0 #flare=0 #mblur=0 #grain=0 #ca=0 #autoexp=0 desligam cada efeito; #cine=0 desliga todos
+const cineFlag = (k) => params[k] !== undefined ? params[k] !== '0' : params.cine !== '0';
+const cine = Object.fromEntries(['godrays', 'flare', 'mblur', 'grain', 'ca', 'autoexp'].map((k) => [k, cineFlag(k)]));
+const post = createPost(renderer, scene, camera, { quality, ao: params.ao !== '0', debug: num('postdebug', 0), msaa: params.msaa !== undefined ? num('msaa', 4) : undefined, cine }); // #msaa=0: captura headless rápida
 clouds.attachPost?.(post); // nuvens volumétricas como passe 'beforeGrade' do pós (oclusão pela depth da cena); no-op em low
 const elephants = WORLD_DATA.routes.map((route, i) => createElephant(route, i, { quality: worldQuality }));
 for (const e of elephants) scene.add(e.group);
@@ -71,6 +75,8 @@ const delivery = createDelivery({ elephants, flight, pkg, input, audio });
 const hud = createHUD({ root: document.getElementById('ui'), delivery, flight, elephants, input, camera });
 const map = createMapUI({ root: document.getElementById('ui'), worldData: WORLD_DATA, elephants, flight, delivery, input, camera });
 clouds.attachTo?.(elephants);
+// vida e escala: navios com esteira, bandos de pássaros e multidões nas cidades
+const life = createLife(scene, { worldData: WORLD_DATA, elephants, camera, quality: worldQuality });
 lighting.enableShadows(scene); // castShadow/receiveShadow (céu/oceano/nuvens/véus ficam de fora) + envMap explícito nos materiais PBR
 
 // posição inicial: centro do mundo, olhando para o alvo da primeira entrega
@@ -115,7 +121,8 @@ function tick(dt) {
   sky.update(camera, time);
   ocean.update(camera, time);
   clouds.update(camera, time, dt);
-  post.update?.(camera, time);
+  life.update(dt, time, camera);
+  post.update?.(camera, time, dt); // acumula o dt simulado até o próximo render (motion blur / adaptação da exposição)
   islands.update?.(camera, time);
   hud.update(dt);
   map.update(dt);
@@ -145,4 +152,4 @@ await Promise.race([lighting.envReady, new Promise((r) => setTimeout(r, 8000))])
 window.__ready = true;
 window.__step = async (n = 1, dt = 1 / 60) => { for (let i = 0; i < n; i++) { tick(dt); } post.render(); };
 window.__stats = () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures, player: flight.state.position.toArray().map((v) => Math.round(v)), target: delivery.target?.name, deliveries: delivery.count });
-window.__ruppen = { THREE, scene, camera, renderer, lighting, post, quality, flight, dove, elephants, delivery, pkg, map, hud, ocean, sky, clouds, islands, input, audio, worldData: WORLD_DATA, setPaused: (p) => { paused = p; }, get time() { return time; } };
+window.__ruppen = { THREE, scene, camera, renderer, lighting, post, quality, flight, dove, elephants, delivery, pkg, map, hud, ocean, sky, clouds, islands, life, input, audio, worldData: WORLD_DATA, setPaused: (p) => { paused = p; }, get time() { return time; } };
